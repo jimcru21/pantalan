@@ -1,0 +1,600 @@
+<!doctype html>
+<!--
+  PROTOTYPE — throwaway. Answers wayfinder ticket "Login and Dashboard look" (#7).
+  Three login variants and three Dashboard variants on one page, switchable via
+  ?screen=login|dash&login=A|B|C&dash=A|B|C&theme=light|dark and the floating bar
+  (← / → cycle the variant for the current screen).
+
+  Lives outside web/dist on purpose, so it is never embedded in the binary.
+  Plain HTML + CSS + a little vanilla JS: the CSS tokens and markup port straight
+  into html/template + htmx (the chosen stack). All data is mock.
+
+  Login demo states: any username/password signs in;
+  password "wrong" shows the bad-credentials error, "locked" shows the throttle error.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE · Pantalan login + Dashboard</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #e2e5ea;
+    --text: #171a1f; --muted: #636b78; --accent: #2f6fed; --accent-text: #ffffff;
+    --accent-soft: #e6eefd; --ok: #1a8a4a; --ok-soft: #e3f4ea; --warn: #b26a00; --warn-soft: #fdf1dc;
+    --danger: #c2333a; --danger-soft: #fbe6e7; --rail: #11151b; --rail-text: #aab2bf; --rail-active: #ffffff;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --radius: 8px; --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1015; --surface: #151a21; --surface-2: #1c222b; --border: #2a313c;
+    --text: #e6e9ee; --muted: #8b94a3; --accent: #5b8ff9; --accent-text: #0b1020;
+    --accent-soft: #1b2a47; --ok: #3ccf7a; --ok-soft: #133222; --warn: #f0a93b; --warn-soft: #3a2a10;
+    --danger: #f06a70; --danger-soft: #3c1a1d; --rail: #0a0d11; --rail-text: #7d8796; --rail-active: #ffffff;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  #app > * { min-height: 100vh; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
+  button, input { font: inherit; color: inherit; }
+  a { color: var(--accent); }
+  .mono { font-family: var(--mono); font-size: .92em; }
+  .muted { color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .dot.off { background: var(--muted); } .dot.warn { background: var(--warn); }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+  .badge.running { background: var(--ok-soft); color: var(--ok); }
+  .badge.exited { background: var(--surface-2); color: var(--muted); }
+  .badge.restarting { background: var(--warn-soft); color: var(--warn); }
+  .bar { height: 6px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+  .bar.hot > i { background: var(--warn); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { font-weight: 500; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  tr:last-child td { border-bottom: 0; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .scroll-x { overflow-x: auto; }
+  .field { display: grid; gap: 6px; }
+  .field label { font-weight: 500; font-size: 13px; }
+  .input { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); outline: none; }
+  .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .btn { display: inline-flex; justify-content: center; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 6px; border: 1px solid transparent; background: var(--accent); color: var(--accent-text); font-weight: 600; cursor: pointer; }
+  .btn.ghost { background: transparent; color: var(--text); border-color: var(--border); font-weight: 500; }
+  .alert { padding: 10px 12px; border-radius: 6px; background: var(--danger-soft); color: var(--danger); font-size: 13px; }
+  .icon { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ---------- Login A: centred card ---------- */
+  .la { min-height: 100%; display: grid; place-items: center; padding: 24px 16px 96px; }
+  .la-card { width: 100%; max-width: 380px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 28px; display: grid; gap: 18px; }
+  .la-brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; }
+  .la-foot { font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 14px; display: grid; gap: 4px; }
+
+  /* ---------- Login B: split screen with Node facts ---------- */
+  .lb { min-height: 100%; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+  .lb-side { background: var(--rail); color: #dfe4ea; padding: 48px; display: flex; flex-direction: column; justify-content: space-between; gap: 32px; }
+  .lb-side h2 { font-size: 28px; line-height: 1.2; margin: 0 0 8px; color: #fff; }
+  .lb-facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 20px; font-size: 13px; }
+  .lb-facts dt { color: #8792a2; } .lb-facts dd { margin: 0; font-family: var(--mono); color: #fff; word-break: break-all; }
+  .lb-main { display: grid; place-items: center; padding: 32px 16px 96px; }
+  .lb-form { width: 100%; max-width: 340px; display: grid; gap: 18px; }
+  .lb-form h1 { margin: 0; font-size: 22px; }
+  @media (max-width: 760px) { .lb { grid-template-columns: 1fr; } .lb-side { padding: 28px 16px; } }
+
+  /* ---------- Login C: terminal-minimal ---------- */
+  .lc { min-height: 100%; font-family: var(--mono); padding: 12vh 16px 96px; display: flex; justify-content: center; }
+  .lc-wrap { width: 100%; max-width: 560px; display: grid; gap: 22px; }
+  .lc-head { font-size: 13px; color: var(--muted); }
+  .lc-head b { color: var(--text); font-weight: 600; }
+  .lc-row { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 12px; }
+  .lc-row label { color: var(--muted); }
+  .lc .input { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; padding: 8px 2px; font-family: var(--mono); }
+  .lc .input:focus { box-shadow: none; border-color: var(--accent); }
+  .lc .btn { justify-self: start; font-family: var(--mono); border-radius: 4px; }
+  .lc-note { font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .lc-note code { color: var(--text); }
+
+  /* ---------- Dashboard shared ---------- */
+  .page { padding: 24px 24px 88px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-content: start; min-width: 0; }
+  .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .page-head h1 { margin: 0; font-size: 20px; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); min-width: 0; }
+  .panel-h { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-weight: 600; }
+  .panel-b { padding: 16px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .events { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  .events li { display: grid; grid-template-columns: 56px 1fr; gap: 10px; padding: 7px 16px; border-bottom: 1px solid var(--border); }
+  .events li:last-child { border-bottom: 0; }
+
+  /* ---------- Dashboard A: icon rail + metric cards ---------- */
+  .da { display: grid; grid-template-columns: 56px minmax(0, 1fr); min-height: 100%; }
+  .da-rail { background: var(--rail); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 0; position: sticky; top: 0; height: 100vh; }
+  .da-rail .logo { width: 32px; height: 32px; border-radius: 8px; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 800; margin-bottom: 12px; }
+  .da-rail button { position: relative; width: 40px; height: 40px; border-radius: 8px; border: 0; background: transparent; color: var(--rail-text); display: grid; place-items: center; cursor: pointer; }
+  .da-rail button:hover, .da-rail button.on { background: rgba(255,255,255,.08); color: var(--rail-active); }
+  .da-rail button[data-tip]:hover::after { content: attr(data-tip); position: absolute; left: 48px; top: 50%; transform: translateY(-50%); background: #000; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; white-space: nowrap; z-index: 5; }
+  .da-rail .spacer { flex: 1; }
+  .da-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .da-top .who { display: flex; gap: 10px; align-items: center; font-weight: 600; }
+  .da-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+  .da-card { padding: 16px; display: flex; gap: 14px; align-items: center; }
+  .ring { --p: 0; width: 64px; height: 64px; border-radius: 50%; flex: none; display: grid; place-items: center;
+          background: conic-gradient(var(--accent) calc(var(--p) * 1%), var(--surface-2) 0); }
+  .ring.hot { background: conic-gradient(var(--warn) calc(var(--p) * 1%), var(--surface-2) 0); }
+  .ring > span { width: 50px; height: 50px; border-radius: 50%; background: var(--surface); display: grid; place-items: center; font-weight: 700; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .da-card h3 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 500; }
+  .da-card .big { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .da-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .da-side { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 1100px) { .da-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .da-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 560px) { .da-cards { grid-template-columns: 1fr; } .page { padding: 16px 16px 88px; } }
+
+  /* ---------- Dashboard B: full labelled sidebar + spec sheet ---------- */
+  .db { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100%; }
+  .db-side { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
+  .db-brand { padding: 16px 18px; font-weight: 800; font-size: 16px; display: flex; gap: 10px; align-items: center; }
+  .db-brand .logo { width: 26px; height: 26px; border-radius: 6px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; }
+  .db-node { margin: 0 12px 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); font-size: 12px; display: grid; gap: 2px; }
+  .db-node b { font-size: 13px; display: flex; gap: 8px; align-items: center; }
+  .db-nav { padding: 8px; display: grid; gap: 2px; flex: 1; align-content: start; overflow-y: auto; }
+  .db-nav .sec { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 14px 10px 4px; }
+  .db-nav a { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 6px; color: var(--text); text-decoration: none; }
+  .db-nav a:hover { background: var(--surface-2); }
+  .db-nav a.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .db-nav a .count { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .db-nav a.soon { color: var(--muted); }
+  .db-nav a.soon .count { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+  .db-user { border-top: 1px solid var(--border); padding: 12px 14px; display: flex; align-items: center; gap: 10px; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 700; font-size: 12px; }
+  .db-user .btn { margin-left: auto; padding: 5px 8px; }
+  .db-crumb { font-size: 12px; color: var(--muted); }
+  .db-res { display: grid; gap: 14px; }
+  .db-res-row { display: grid; grid-template-columns: 120px minmax(0, 1fr) 180px; gap: 16px; align-items: center; }
+  .db-res-row .lbl { font-weight: 500; }
+  .db-res-row .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .db-res-row .val b { color: var(--text); }
+  .db-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  .db-list { list-style: none; margin: 0; padding: 0; }
+  .db-list li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--border); }
+  .db-list li:last-child { border-bottom: 0; }
+  .db-list .sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .db-group { padding: 8px 16px; background: var(--surface-2); font-size: 12px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+  @media (max-width: 900px) { .db { grid-template-columns: 1fr; } .db-side { position: static; height: auto; } .db-nav { grid-auto-flow: row; } .db-two { grid-template-columns: 1fr; } .db-res-row { grid-template-columns: 90px minmax(0, 1fr); } .db-res-row .val { grid-column: 1 / -1; text-align: left; } }
+
+  /* ---------- Dashboard C: collapsible sidebar + hero band + tabs ---------- */
+  .dc { display: grid; grid-template-columns: var(--sw, 220px) minmax(0, 1fr); min-height: 100%; transition: grid-template-columns .18s ease; }
+  .dc.collapsed { --sw: 64px; }
+  .dc-side { background: var(--rail); color: var(--rail-text); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow: hidden; }
+  .dc-brand { height: 56px; display: flex; align-items: center; gap: 10px; padding: 0 16px; color: #fff; font-weight: 800; white-space: nowrap; }
+  .dc-brand .logo { width: 32px; height: 32px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; flex: none; }
+  .dc-nav { display: grid; gap: 2px; padding: 8px; }
+  .dc-nav a { display: flex; align-items: center; gap: 12px; padding: 9px 13px; border-radius: 6px; color: var(--rail-text); text-decoration: none; white-space: nowrap; }
+  .dc-nav a:hover, .dc-nav a.on { background: rgba(255,255,255,.08); color: var(--rail-active); }
+  .dc .label { transition: opacity .12s; }
+  .dc.collapsed .label { opacity: 0; pointer-events: none; }
+  .dc-collapse { margin-top: auto; border: 0; border-top: 1px solid rgba(255,255,255,.08); background: transparent; color: var(--rail-text); display: flex; align-items: center; gap: 12px; padding: 14px 21px; cursor: pointer; white-space: nowrap; }
+  .dc-collapse:hover { color: #fff; }
+  .dc.collapsed .dc-collapse .icon { transform: rotate(180deg); }
+  .dc-top { height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--surface); gap: 12px; }
+  .dc-top .node { display: flex; gap: 10px; align-items: center; min-width: 0; }
+  .dc-top .node b { white-space: nowrap; }
+  .dc-band { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .dc-stat { padding: 16px 18px; border-right: 1px solid var(--border); display: grid; gap: 4px; min-width: 0; }
+  .dc-stat:last-child { border-right: 0; }
+  .dc-stat .k { font-size: 12px; color: var(--muted); }
+  .dc-stat .v { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .dc-stat .v small { font-size: 13px; color: var(--muted); font-weight: 500; }
+  .dc-stat svg { width: 100%; height: 28px; }
+  .spark { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+  .spark-fill { fill: var(--accent-soft); stroke: none; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); padding: 0 8px; overflow-x: auto; }
+  .tabs button { white-space: nowrap; }
+  .tabs button { border: 0; background: none; padding: 12px 12px 10px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; }
+  .tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+  .tabs .count { font-size: 11px; background: var(--surface-2); padding: 0 6px; border-radius: 999px; margin-left: 4px; }
+  @media (max-width: 1100px) { .dc-band { grid-template-columns: repeat(3, minmax(0, 1fr)); } .dc-stat:nth-child(3) { border-right: 0; } .dc-stat:nth-child(n+4) { border-top: 1px solid var(--border); } }
+  @media (max-width: 640px) { .dc, .dc.collapsed { --sw: 56px; } .dc .label { opacity: 0; } .dc-band { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dc-stat { border-right: 0; border-top: 1px solid var(--border); } .dc-stat:first-child { border-top: 0; } .dc-top { padding: 0 16px; } }
+
+  /* ---------- Prototype switcher (not part of the design) ---------- */
+  #proto-bar { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 100; display: flex; align-items: center; gap: 4px;
+    background: #111; color: #fff; border-radius: 999px; padding: 5px; box-shadow: 0 8px 24px rgba(0,0,0,.35), 0 0 0 1px rgba(255,255,255,.15);
+    font: 12px/1 var(--sans); max-width: calc(100vw - 32px); }
+  #proto-bar button { border: 0; background: transparent; color: #fff; border-radius: 999px; padding: 8px 10px; cursor: pointer; white-space: nowrap; }
+  #proto-bar button:hover { background: #2a2a2a; }
+  #proto-bar .seg { display: flex; background: #222; border-radius: 999px; }
+  #proto-bar .seg button.on { background: #fff; color: #111; }
+  #proto-bar .label { min-width: 150px; text-align: center; font-weight: 600; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #proto-bar .tag { background: #ffd43b; color: #111; border-radius: 999px; padding: 6px 8px; font-weight: 800; letter-spacing: .05em; }
+  @media (max-width: 520px) { #proto-bar { flex-wrap: wrap; justify-content: center; border-radius: 18px; } #proto-bar .tag { display: none; } #proto-bar .label { min-width: 0; max-width: 150px; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="proto-bar" aria-label="Prototype variant switcher"></div>
+
+<script>
+// ---------- Mock Node data (shapes follow "Where Node information comes from", #6) ----------
+const node = {
+  hostname: "pantalan-01", ip: "203.0.113.24", port: 8443, pantalan: "v0.1.0",
+  os: "Ubuntu 24.04.1 LTS", kernel: "6.8.0-49-generic", arch: "amd64", uptime: "12d 4h 17m",
+  certFingerprint: "4F:9A:1C:7E:22:B0:5D:E3:91:0A:6C:F4:8B:37:D2:19:AE:55:03:C8:7F:6B:E0:14:9D:A2:3B:58:C1:0F:66:EA",
+  cpu: { model: "AMD EPYC 7B13", cores: 4, used: 23, load: [0.42, 0.38, 0.31], history: [18,22,19,25,31,27,22,20,24,29,26,23,21,23] },
+  mem: { totalGiB: 7.8, usedGiB: 3.1, history: [2.8,2.9,2.9,3.0,3.0,3.1,3.2,3.1,3.0,3.1,3.1,3.2,3.1,3.1] },
+  disk: { mount: "/", totalGB: 80, usedGB: 31.4 },
+  docker: {
+    version: "28.5.1", api: "1.51", storage: "overlay2", cgroup: "systemd (v2)", liveRestore: false,
+    images: 14, imagesSize: "3.2 GB", reclaimable: "1.1 GB", volumes: 5, buildCache: "812 MB",
+  },
+};
+const containers = [
+  { name: "pantalan-blog-web-7f3a", app: "blog", image: "ghcr.io/acme/blog:3f9c2e1", state: "running", status: "Up 3 days (healthy)", cpu: 1.2, mem: "142 MiB", port: "127.0.0.1:49153→3000" },
+  { name: "pantalan-shop-api-a91c", app: "shop", image: "shop-api:build-118", state: "running", status: "Up 26 hours (healthy)", cpu: 6.8, mem: "388 MiB", port: "127.0.0.1:49160→8080" },
+  { name: "pantalan-shop-worker-a91c", app: "shop", image: "shop-api:build-118", state: "running", status: "Up 26 hours", cpu: 3.4, mem: "211 MiB", port: "—" },
+  { name: "shop-postgres", app: "shop", image: "postgres:17.2-bookworm", state: "running", status: "Up 12 days", cpu: 0.9, mem: "96 MiB", port: "—" },
+  { name: "pantalan-status-page-02be", app: "status-page", image: "status-page:main-e0d4b77", state: "running", status: "Up 5 days (healthy)", cpu: 0.2, mem: "38 MiB", port: "127.0.0.1:49171→80" },
+  { name: "umami-analytics", app: "umami", image: "ghcr.io/umami-software/umami:postgresql-v2.15.1", state: "running", status: "Up 12 days", cpu: 0.6, mem: "174 MiB", port: "127.0.0.1:49102→3000" },
+  { name: "redis-cache", app: "shop", image: "redis:7.4-alpine", state: "restarting", status: "Restarting (1) 8 seconds ago", cpu: 0.0, mem: "0 B", port: "—" },
+  { name: "pantalan-docs-site-5c11", app: "docs", image: "docs-site:build-41", state: "exited", status: "Exited (0) 2 days ago", cpu: 0, mem: "0 B", port: "—" },
+  { name: "pantalan-blog-web-6d02", app: "blog", image: "ghcr.io/acme/blog:a71b0c9", state: "exited", status: "Exited (137) 3 days ago", cpu: 0, mem: "0 B", port: "—" },
+];
+const images = [
+  { repo: "ghcr.io/umami-software/umami", tag: "postgresql-v2.15.1", size: "612 MB", created: "3 weeks ago", used: 1 },
+  { repo: "shop-api", tag: "build-118", size: "486 MB", created: "26 hours ago", used: 2 },
+  { repo: "postgres", tag: "17.2-bookworm", size: "435 MB", created: "4 weeks ago", used: 1 },
+  { repo: "ghcr.io/acme/blog", tag: "3f9c2e1", size: "214 MB", created: "3 days ago", used: 1 },
+  { repo: "ghcr.io/acme/blog", tag: "a71b0c9", size: "213 MB", created: "5 days ago", used: 0 },
+  { repo: "docs-site", tag: "build-41", size: "48 MB", created: "2 days ago", used: 0 },
+  { repo: "redis", tag: "7.4-alpine", size: "41 MB", created: "5 weeks ago", used: 1 },
+  { repo: "status-page", tag: "main-e0d4b77", size: "27 MB", created: "5 days ago", used: 1 },
+];
+const events = [
+  ["14:02", "container restart · redis-cache (exit 1)"],
+  ["13:47", "image pull · postgres:17.2-bookworm"],
+  ["11:20", "container start · pantalan-shop-api-a91c"],
+  ["11:20", "container start · pantalan-shop-worker-a91c"],
+  ["11:19", "image build · shop-api:build-118"],
+  ["09:03", "container die · pantalan-docs-site-5c11 (exit 0)"],
+];
+
+// Docker counts restarting containers as running; keep the overview consistent with the list.
+node.docker.running = containers.filter(c => c.state !== "exited").length;
+node.docker.stopped = containers.filter(c => c.state === "exited").length;
+
+// ---------- Helpers ----------
+const pct = (a, b) => Math.round((a / b) * 100);
+const memPct = () => pct(node.mem.usedGiB, node.mem.totalGiB);
+const diskPct = () => pct(node.disk.usedGB, node.disk.totalGB);
+const hot = p => p >= 80 ? "hot" : "";
+const bar = p => `<div class="bar ${hot(p)}"><i style="width:${p}%"></i></div>`;
+const badge = s => `<span class="badge ${s}">${s}</span>`;
+const stateDot = s => `<span class="dot ${s === "running" ? "" : s === "restarting" ? "warn" : "off"}"></span>`;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const shortFp = node.certFingerprint.split(":").slice(0, 8).join(":") + "…";
+
+const ICON = {
+  overview: '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+  containers: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
+  images: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  apps: '<path d="M12 15l-3-3a12 12 0 0 1 9-9 12 12 0 0 1-6 12z"/><path d="M9 12H5l2-4h5M12 15v4l4-2v-5"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3.3 14H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  chevron: '<path d="m15 18-6-6 6-6"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+};
+const icon = n => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${ICON[n]}</svg>`;
+
+// Navigation: which entries exist in v1 is still open ("Node overview contents and refresh", #13).
+const NAV = [
+  { id: "overview", label: "Node overview" },
+  { id: "containers", label: "Containers", count: containers.length },
+  { id: "images", label: "Images", count: node.docker.images },
+  { id: "apps", label: "Apps", soon: true },
+  { id: "settings", label: "Settings" },
+];
+
+function spark(values, max) {
+  const w = 120, h = 28, top = max ?? Math.max(...values) * 1.15;
+  const pts = values.map((v, i) => [(i / (values.length - 1)) * w, h - (v / top) * h]);
+  const line = pts.map(p => p.map(n => n.toFixed(1)).join(",")).join(" ");
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+    <polygon class="spark-fill" points="0,${h} ${line} ${w},${h}"/><polyline class="spark" points="${line}"/></svg>`;
+}
+
+// ---------- State (in memory + URL; nothing persisted) ----------
+const params = new URLSearchParams(location.search);
+const state = {
+  screen: params.get("screen") === "dash" ? "dash" : "login",
+  login: ["A", "B", "C"].includes(params.get("login")) ? params.get("login") : "A",
+  dash: ["A", "B", "C"].includes(params.get("dash")) ? params.get("dash") : "A",
+  theme: params.get("theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
+  loginError: null, username: "admin", collapsed: false, tab: "containers",
+};
+
+// ---------- Login variants ----------
+function loginErrorHtml() {
+  if (state.loginError === "wrong") return `<div class="alert" role="alert">Incorrect username or password.</div>`;
+  if (state.loginError === "locked") return `<div class="alert" role="alert">Too many failed attempts. Try again in 14 minutes, or run <span class="mono">sudo pantalan admin reset-password</span> on the server.</div>`;
+  if (state.loginError === "empty") return `<div class="alert" role="alert">Enter your username and password.</div>`;
+  return "";
+}
+const fields = (cls = "") => `
+  <div class="field ${cls}"><label for="u">Username</label><input class="input" id="u" name="username" autocomplete="username" value="${esc(state.username)}"></div>
+  <div class="field ${cls}"><label for="p">Password</label><input class="input" id="p" name="password" type="password" autocomplete="current-password" autofocus></div>`;
+
+const LOGIN = {
+  A: { name: "Centred card", render: () => `
+    <main class="la"><form class="la-card" data-login>
+      <div class="la-brand"><span class="logo" style="width:30px;height:30px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center">P</span>Pantalan</div>
+      <div><div style="font-weight:600;font-size:16px">Sign in to the Dashboard</div><div class="muted" style="font-size:13px">${node.hostname} · ${node.ip}:${node.port}</div></div>
+      ${loginErrorHtml()}${fields()}
+      <button class="btn" type="submit">Sign in</button>
+      <div class="la-foot">
+        <span>${icon("lock").replace('class="icon"', 'class="icon" style="width:13px;height:13px;vertical-align:-2px"')} Self-signed certificate · SHA-256 <span class="mono">${shortFp}</span></span>
+        <span>Forgot the password? Run <span class="mono">sudo pantalan admin reset-password</span> on the server.</span>
+      </div>
+    </form></main>` },
+
+  B: { name: "Split · Node facts", render: () => `
+    <main class="lb">
+      <section class="lb-side">
+        <div style="display:flex;gap:10px;align-items:center;font-weight:800;font-size:18px;color:#fff"><span style="width:30px;height:30px;border-radius:8px;background:var(--accent);display:grid;place-items:center">P</span>Pantalan</div>
+        <div><h2>${node.hostname}</h2><div style="color:#8792a2">Self-hosted apps, deployed from git.</div></div>
+        <div>
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#8792a2;margin-bottom:10px">Check before you sign in</div>
+          <dl class="lb-facts">
+            <dt>Address</dt><dd>https://${node.ip}:${node.port}</dd>
+            <dt>Certificate</dt><dd>self-signed, ECDSA P-256</dd>
+            <dt>SHA-256</dt><dd>${node.certFingerprint}</dd>
+            <dt>Version</dt><dd>pantalan ${node.pantalan}</dd>
+          </dl>
+          <p style="font-size:12px;color:#8792a2;margin:14px 0 0">The fingerprint should match the one the installer printed.</p>
+        </div>
+      </section>
+      <section class="lb-main"><form class="lb-form" data-login>
+        <h1>Sign in</h1>
+        ${loginErrorHtml()}${fields()}
+        <button class="btn" type="submit">Sign in</button>
+        <div class="muted" style="font-size:12px">Lost the password? <span class="mono">sudo pantalan admin reset-password</span></div>
+      </form></section>
+    </main>` },
+
+  C: { name: "Terminal minimal", render: () => `
+    <main class="lc"><form class="lc-wrap" data-login>
+      <div class="lc-head"><b>pantalan</b> ${node.pantalan} · ${node.hostname} · ${node.ip}:${node.port}</div>
+      <div style="font-size:22px;font-weight:600">$ pantalan login<span style="animation:blink 1s steps(1) infinite">_</span></div>
+      ${loginErrorHtml()}
+      <div class="lc-row"><label for="u">username</label><input class="input" id="u" name="username" autocomplete="username" value="${esc(state.username)}"></div>
+      <div class="lc-row"><label for="p">password</label><input class="input" id="p" name="password" type="password" autocomplete="current-password" autofocus></div>
+      <button class="btn" type="submit">sign in ↵</button>
+      <div class="lc-note">
+        # tls: self-signed · sha256 <code>${shortFp}</code><br>
+        # lost the password? <code>sudo pantalan admin reset-password</code>
+      </div>
+    </form></main>
+    <style>@keyframes blink { 50% { opacity: 0 } }</style>` },
+};
+
+// ---------- Dashboard variants ----------
+const containerTable = (cols = "full") => `
+  <div class="scroll-x"><table>
+    <thead><tr><th>Name</th><th>State</th><th>Image</th><th class="num">CPU</th><th class="num">Memory</th>${cols !== "noport" ? "<th>Port</th>" : ""}</tr></thead>
+    <tbody>${containers.map(c => `<tr>
+      <td><div style="font-weight:500">${c.name}</div><div class="muted" style="font-size:12px">${c.status}</div></td>
+      <td>${badge(c.state)}</td>
+      <td class="mono muted">${c.image}</td>
+      <td class="num">${c.cpu.toFixed(1)}%</td><td class="num">${c.mem}</td>${cols !== "noport" ? `<td class="mono muted">${c.port}</td>` : ""}
+    </tr>`).join("")}</tbody>
+  </table></div>`;
+
+const dockerKv = () => `<dl class="kv">
+  <dt>Engine</dt><dd>Docker ${node.docker.version} <span class="muted">(API ${node.docker.api})</span></dd>
+  <dt>Storage</dt><dd>${node.docker.storage}</dd>
+  <dt>Cgroup</dt><dd>${node.docker.cgroup}</dd>
+  <dt>Images</dt><dd>${node.docker.images} · ${node.docker.imagesSize} <span class="muted">(${node.docker.reclaimable} reclaimable)</span></dd>
+  <dt>Volumes</dt><dd>${node.docker.volumes}</dd>
+  <dt>Build cache</dt><dd>${node.docker.buildCache}</dd>
+  <dt>live-restore</dt><dd>${node.docker.liveRestore ? "on" : `<span style="color:var(--warn)">off</span> <span class="muted">— Docker upgrades restart apps</span>`}</dd>
+</dl>`;
+const eventsList = () => `<ul class="events">${events.map(([t, e]) => `<li><span class="muted mono">${t}</span><span>${e}</span></li>`).join("")}</ul>`;
+
+const DASH = {
+  A: { name: "Icon rail · cards", render: () => {
+    const cpu = node.cpu.used, mem = memPct(), disk = diskPct();
+    const ring = (p, label) => `<div class="ring ${hot(p)}" style="--p:${p}"><span>${label}</span></div>`;
+    return `<div class="da">
+      <nav class="da-rail">
+        <div class="logo">P</div>
+        ${NAV.map(n => `<button class="${n.id === "overview" ? "on" : ""}" data-tip="${n.label}${n.soon ? " (later)" : ""}" aria-label="${n.label}">${icon(n.id)}</button>`).join("")}
+        <div class="spacer"></div>
+        <button data-tip="Sign out" data-logout aria-label="Sign out">${icon("logout")}</button>
+      </nav>
+      <div>
+        <header class="da-top">
+          <div class="who"><span class="dot"></span>${node.hostname} <span class="muted" style="font-weight:400">${node.ip}</span></div>
+          <div class="muted" style="font-size:13px">${node.os} · ${node.arch} · up ${node.uptime}</div>
+        </header>
+        <main class="page">
+          <div class="page-head"><h1>Node overview</h1><span class="muted" style="font-size:12px">updated just now</span></div>
+          <section class="da-cards">
+            <div class="panel da-card">${ring(cpu, cpu + "%")}<div><h3>CPU</h3><div class="big">${node.cpu.cores} cores</div><div class="muted" style="font-size:12px">load ${node.cpu.load.join(" · ")}</div></div></div>
+            <div class="panel da-card">${ring(mem, mem + "%")}<div><h3>Memory</h3><div class="big">${node.mem.usedGiB} / ${node.mem.totalGiB} GiB</div><div class="muted" style="font-size:12px">${(node.mem.totalGiB - node.mem.usedGiB).toFixed(1)} GiB free</div></div></div>
+            <div class="panel da-card">${ring(disk, disk + "%")}<div><h3>Disk ${node.disk.mount}</h3><div class="big">${node.disk.usedGB} / ${node.disk.totalGB} GB</div><div class="muted" style="font-size:12px">Docker uses ${node.docker.imagesSize}</div></div></div>
+            <div class="panel da-card"><div class="ring" style="--p:${pct(node.docker.running, node.docker.running + node.docker.stopped)}"><span>${node.docker.running}/${node.docker.running + node.docker.stopped}</span></div><div><h3>Containers</h3><div class="big">${node.docker.running} running</div><div class="muted" style="font-size:12px">Docker ${node.docker.version}</div></div></div>
+          </section>
+          <section class="da-grid">
+            <div class="panel"><div class="panel-h">Containers <span class="muted" style="font-weight:400;font-size:12px">${containers.length} total</span></div>${containerTable("noport")}</div>
+            <div class="da-side">
+              <div class="panel"><div class="panel-h">Docker</div><div class="panel-b">${dockerKv()}</div></div>
+              <div class="panel"><div class="panel-h">Recent events</div>${eventsList()}</div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>`;
+  } },
+
+  B: { name: "Labelled sidebar · spec sheet", render: () => {
+    const groups = ["running", "restarting", "exited"].map(s => [s, containers.filter(c => c.state === s)]).filter(([, l]) => l.length);
+    return `<div class="db">
+      <aside class="db-side">
+        <div class="db-brand"><span class="logo">P</span>Pantalan</div>
+        <div class="db-node"><b><span class="dot"></span>${node.hostname}</b><span class="muted mono">${node.ip}:${node.port}</span><span class="muted">up ${node.uptime}</span></div>
+        <nav class="db-nav">
+          <div class="sec">Node</div>
+          ${NAV.slice(0, 3).map(n => `<a href="#" class="${n.id === "overview" ? "on" : ""}">${icon(n.id)}${n.label}${n.count ? `<span class="count">${n.count}</span>` : ""}</a>`).join("")}
+          <div class="sec">Deploy</div>
+          <a href="#" class="soon">${icon("apps")}Apps<span class="count">later</span></a>
+          <div class="sec">System</div>
+          <a href="#">${icon("settings")}Settings</a>
+        </nav>
+        <div class="db-user"><span class="avatar">${esc(state.username.slice(0, 2).toUpperCase())}</span><div><div style="font-weight:600">${esc(state.username)}</div><div class="muted" style="font-size:12px">Admin</div></div><button class="btn ghost" data-logout title="Sign out">${icon("logout")}</button></div>
+      </aside>
+      <main class="page">
+        <div><div class="db-crumb">Node / ${node.hostname}</div><div class="page-head"><h1>Node overview</h1><span class="muted" style="font-size:12px">${node.os} · kernel ${node.kernel} · ${node.arch}</span></div></div>
+        <section class="panel"><div class="panel-h">Resources</div><div class="panel-b db-res">
+          <div class="db-res-row"><span class="lbl">CPU</span>${bar(node.cpu.used)}<span class="val"><b>${node.cpu.used}%</b> of ${node.cpu.cores} cores · load ${node.cpu.load[0]}</span></div>
+          <div class="db-res-row"><span class="lbl">Memory</span>${bar(memPct())}<span class="val"><b>${node.mem.usedGiB}</b> / ${node.mem.totalGiB} GiB</span></div>
+          <div class="db-res-row"><span class="lbl">Disk ${node.disk.mount}</span>${bar(diskPct())}<span class="val"><b>${node.disk.usedGB}</b> / ${node.disk.totalGB} GB</span></div>
+          <div class="db-res-row"><span class="lbl">Containers</span>${bar(pct(node.docker.running, node.docker.running + node.docker.stopped))}<span class="val"><b>${node.docker.running}</b> running · ${node.docker.stopped} stopped</span></div>
+        </div></section>
+        <section class="db-two">
+          <div class="panel"><div class="panel-h">System</div><div class="panel-b"><dl class="kv">
+            <dt>Hostname</dt><dd>${node.hostname}</dd><dt>Address</dt><dd class="mono">${node.ip}:${node.port}</dd>
+            <dt>OS</dt><dd>${node.os}</dd><dt>Kernel</dt><dd>${node.kernel}</dd><dt>CPU</dt><dd>${node.cpu.model} · ${node.cpu.cores} vCPU</dd>
+            <dt>Uptime</dt><dd>${node.uptime}</dd><dt>Pantalan</dt><dd>${node.pantalan}</dd>
+            <dt>TLS</dt><dd>self-signed · <span class="mono">${shortFp}</span></dd>
+          </dl></div></div>
+          <div class="panel"><div class="panel-h">Docker</div><div class="panel-b">${dockerKv()}</div></div>
+        </section>
+        <section class="panel"><div class="panel-h">Containers <a href="#" style="font-weight:400;font-size:13px">View all →</a></div>
+          ${groups.map(([s, list]) => `<div class="db-group">${s[0].toUpperCase() + s.slice(1)} · ${list.length}</div><ul class="db-list">${list.map(c => `
+            <li>${stateDot(c.state)}<div style="min-width:0"><div style="font-weight:500">${c.name}</div><div class="sub mono">${c.image}</div></div><div class="muted num" style="font-size:12px">${c.state === "running" ? `${c.cpu.toFixed(1)}% · ${c.mem}` : c.status}</div></li>`).join("")}</ul>`).join("")}
+        </section>
+      </main>
+    </div>`;
+  } },
+
+  C: { name: "Collapsible sidebar · tabs", render: () => {
+    const total = node.docker.running + node.docker.stopped;
+    const tabBody = {
+      containers: () => containerTable("full"),
+      images: () => `<div class="scroll-x"><table><thead><tr><th>Repository</th><th>Tag</th><th class="num">Size</th><th>Created</th><th class="num">In use</th></tr></thead><tbody>
+        ${images.map(i => `<tr><td>${i.repo}</td><td class="mono">${i.tag}</td><td class="num">${i.size}</td><td class="muted">${i.created}</td><td class="num">${i.used ? i.used : '<span class="muted">unused</span>'}</td></tr>`).join("")}
+      </tbody></table></div>`,
+      events: () => eventsList(),
+      docker: () => `<div class="panel-b">${dockerKv()}</div>`,
+    };
+    return `<div class="dc ${state.collapsed ? "collapsed" : ""}">
+      <aside class="dc-side">
+        <div class="dc-brand"><span class="logo">P</span><span class="label">Pantalan</span></div>
+        <nav class="dc-nav">${NAV.map(n => `<a href="#" class="${n.id === "overview" ? "on" : ""}" title="${n.label}">${icon(n.id)}<span class="label">${n.label}${n.soon ? ' <span style="font-size:10px;opacity:.6">LATER</span>' : ""}</span></a>`).join("")}
+          <a href="#" data-logout title="Sign out">${icon("logout")}<span class="label">Sign out</span></a></nav>
+        <button class="dc-collapse" data-collapse aria-label="Collapse sidebar">${icon("chevron")}<span class="label">Collapse</span></button>
+      </aside>
+      <div style="min-width:0">
+        <header class="dc-top">
+          <div class="node"><span class="dot"></span><b>${node.hostname}</b><span class="muted mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${node.ip} · ${node.os} · ${node.arch}</span></div>
+          <span class="muted" style="font-size:12px;white-space:nowrap">up ${node.uptime}</span>
+        </header>
+        <main class="page">
+          <section class="dc-band">
+            <div class="dc-stat"><span class="k">CPU · ${node.cpu.cores} cores</span><span class="v">${node.cpu.used}<small>%</small></span>${spark(node.cpu.history, 100)}</div>
+            <div class="dc-stat"><span class="k">Memory</span><span class="v">${node.mem.usedGiB}<small> / ${node.mem.totalGiB} GiB</small></span>${spark(node.mem.history, node.mem.totalGiB)}</div>
+            <div class="dc-stat"><span class="k">Disk ${node.disk.mount}</span><span class="v">${diskPct()}<small>% · ${node.disk.usedGB} GB</small></span>${bar(diskPct())}</div>
+            <div class="dc-stat"><span class="k">Containers</span><span class="v">${node.docker.running}<small> / ${total} running</small></span><span class="muted" style="font-size:12px">${containers.filter(c => c.state === "restarting").length} restarting</span></div>
+            <div class="dc-stat"><span class="k">Docker ${node.docker.version}</span><span class="v">${node.docker.images}<small> images · ${node.docker.imagesSize}</small></span><span class="muted" style="font-size:12px">${node.docker.reclaimable} reclaimable</span></div>
+          </section>
+          <section class="panel">
+            <div class="tabs" role="tablist">
+              ${[["containers", "Containers", containers.length], ["images", "Images", images.length], ["events", "Events"], ["docker", "Docker"]].map(([id, label, n]) =>
+                `<button role="tab" data-tab="${id}" class="${state.tab === id ? "on" : ""}">${label}${n ? `<span class="count">${n}</span>` : ""}</button>`).join("")}
+            </div>
+            ${tabBody[state.tab]()}
+          </section>
+        </main>
+      </div>
+    </div>`;
+  } },
+};
+
+// ---------- Render + switcher ----------
+const app = document.getElementById("app");
+const barEl = document.getElementById("proto-bar");
+
+function syncUrl() {
+  const p = new URLSearchParams({ screen: state.screen, login: state.login, dash: state.dash, theme: state.theme });
+  history.replaceState(null, "", "?" + p);
+}
+
+function render() {
+  document.documentElement.dataset.theme = state.theme;
+  const set = state.screen === "login" ? LOGIN : DASH;
+  const key = state[state.screen];
+  app.innerHTML = set[key].render();
+  barEl.innerHTML = `
+    <span class="tag">PROTO</span>
+    <div class="seg"><button data-screen="login" class="${state.screen === "login" ? "on" : ""}">Login</button><button data-screen="dash" class="${state.screen === "dash" ? "on" : ""}">Dashboard</button></div>
+    <button data-step="-1" aria-label="Previous variant">←</button>
+    <span class="label">${key} · ${set[key].name}</span>
+    <button data-step="1" aria-label="Next variant">→</button>
+    <button data-theme-toggle aria-label="Toggle theme">${state.theme === "dark" ? "☀ Light" : "☾ Dark"}</button>`;
+  syncUrl();
+  console.log("[prototype]", JSON.stringify({ screen: state.screen, login: state.login, dash: state.dash, theme: state.theme, collapsed: state.collapsed, tab: state.tab }));
+}
+
+function step(dir) {
+  const keys = ["A", "B", "C"];
+  const i = keys.indexOf(state[state.screen]);
+  state[state.screen] = keys[(i + dir + keys.length) % keys.length];
+  render();
+}
+
+document.addEventListener("click", e => {
+  const t = e.target.closest("button, a");
+  if (!t) return;
+  if (t.matches("a[href='#']")) e.preventDefault();
+  if (t.dataset.screen) { state.screen = t.dataset.screen; state.loginError = null; render(); }
+  else if (t.dataset.step) step(Number(t.dataset.step));
+  else if ("themeToggle" in t.dataset) { state.theme = state.theme === "dark" ? "light" : "dark"; render(); }
+  else if ("logout" in t.dataset) { state.screen = "login"; state.loginError = null; render(); }
+  else if ("collapse" in t.dataset) { state.collapsed = !state.collapsed; render(); }
+  else if (t.dataset.tab) { state.tab = t.dataset.tab; render(); }
+});
+
+document.addEventListener("submit", e => {
+  if (!e.target.matches("[data-login]")) return;
+  e.preventDefault();
+  const f = new FormData(e.target);
+  state.username = f.get("username") || "";
+  const pw = f.get("password") || "";
+  if (!state.username || !pw) state.loginError = "empty";
+  else if (pw === "wrong" || pw === "locked") state.loginError = pw;
+  else { state.loginError = null; state.screen = "dash"; }
+  render();
+});
+
+document.addEventListener("keydown", e => {
+  if (e.target.closest("input, textarea, [contenteditable]")) return;
+  if (e.key === "ArrowLeft") step(-1);
+  if (e.key === "ArrowRight") step(1);
+});
+
+// Mock "live" numbers so layouts are judged with values that move. How the real page
+// refreshes (polling vs SSE) is decided in "Node overview contents and refresh" (#13).
+setInterval(() => {
+  if (state.screen !== "dash") return;
+  node.cpu.used = Math.max(4, Math.min(96, node.cpu.used + Math.round((Math.random() - 0.5) * 10)));
+  node.cpu.history = [...node.cpu.history.slice(1), node.cpu.used];
+  containers.forEach(c => { if (c.state === "running") c.cpu = Math.max(0, c.cpu + (Math.random() - 0.5) * 1.5); });
+  render();
+}, 5000);
+
+render();
+</script>
+</body>
+</html>
