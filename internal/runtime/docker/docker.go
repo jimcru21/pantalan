@@ -1,0 +1,70 @@
+// Package docker runs app containers through the docker CLI.
+//
+// The CLI keeps the binary dependency-free and matches what an operator would
+// type when debugging. Switch to the Docker Engine SDK when you need event
+// streams or stats.
+package docker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"os"
+	"os/exec"
+	"slices"
+	"strings"
+
+	"github.com/pantalan/pantalan/internal/execx"
+	"github.com/pantalan/pantalan/internal/service"
+)
+
+type Runtime struct{ bin string }
+
+func New() *Runtime { return &Runtime{bin: "docker"} }
+
+// Start runs the container with its port published on an ephemeral loopback
+// port, which becomes the proxy's upstream.
+func (r *Runtime) Start(ctx context.Context, spec service.ContainerSpec) (service.Container, error) {
+	args := []string{
+		"run", "--detach",
+		"--name", spec.Name,
+		"--restart", "unless-stopped",
+		"--publish", fmt.Sprintf("127.0.0.1::%d", spec.Port),
+	}
+	for _, k := range slices.Sorted(maps.Keys(spec.Labels)) {
+		args = append(args, "--label", k+"="+spec.Labels[k])
+	}
+	// Only variable names go on the command line; docker copies the values
+	// from its own environment, so secrets never appear in `ps` output.
+	env := os.Environ()
+	for _, k := range slices.Sorted(maps.Keys(spec.Env)) {
+		args = append(args, "--env", k)
+		env = append(env, k+"="+spec.Env[k])
+	}
+	args = append(args, spec.Image)
+
+	cmd := exec.CommandContext(ctx, r.bin, args...)
+	cmd.Env = env
+	id, err := execx.Output(cmd)
+	if err != nil {
+		return service.Container{}, err
+	}
+
+	out, err := execx.Output(exec.CommandContext(ctx, r.bin, "port", id, fmt.Sprintf("%d/tcp", spec.Port)))
+	if err != nil {
+		err = fmt.Errorf("look up published port: %w", err)
+		if rmErr := r.Remove(context.WithoutCancel(ctx), id); rmErr != nil {
+			err = errors.Join(err, rmErr)
+		}
+		return service.Container{}, err
+	}
+	// `docker port` prints one line per address family; the first is IPv4.
+	upstream, _, _ := strings.Cut(out, "\n")
+	return service.Container{ID: id, Upstream: strings.TrimSpace(upstream)}, nil
+}
+
+func (r *Runtime) Remove(ctx context.Context, containerID string) error {
+	_, err := execx.Output(exec.CommandContext(ctx, r.bin, "rm", "--force", containerID))
+	return err
+}

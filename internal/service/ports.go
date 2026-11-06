@@ -1,0 +1,75 @@
+// Package service holds Pantalan's use cases. It defines the interfaces
+// (ports) it needs; packages under internal/ provide them (adapters). The
+// service package never imports an adapter.
+package service
+
+import (
+	"context"
+	"io"
+
+	"github.com/pantalan/pantalan/internal/domain"
+)
+
+type AppRepository interface {
+	CreateApp(ctx context.Context, app domain.App) error
+	GetApp(ctx context.Context, id string) (domain.App, error)
+	ListApps(ctx context.Context) ([]domain.App, error)
+	FindAppsByRepo(ctx context.Context, repoURL, branch string) ([]domain.App, error)
+}
+
+type DeploymentRepository interface {
+	// SaveDeployment inserts or replaces a deployment by ID.
+	SaveDeployment(ctx context.Context, dep domain.Deployment) error
+	GetDeployment(ctx context.Context, id string) (domain.Deployment, error)
+	ListDeployments(ctx context.Context, appID string) ([]domain.Deployment, error)
+	// LiveDeployment returns domain.ErrNotFound when the app has nothing live.
+	LiveDeployment(ctx context.Context, appID string) (domain.Deployment, error)
+}
+
+// SourceFetcher checks out ref of a repository into dir and returns the commit.
+type SourceFetcher interface {
+	Fetch(ctx context.Context, repoURL, ref, dir string) (commit string, err error)
+}
+
+type BuildRequest struct {
+	Dir   string
+	Image string
+	Logs  io.Writer
+}
+
+type Builder interface {
+	Build(ctx context.Context, req BuildRequest) error
+}
+
+type ContainerSpec struct {
+	Name   string
+	Image  string
+	Port   int
+	Env    map[string]string
+	Labels map[string]string
+}
+
+type Container struct {
+	ID       string
+	Upstream string // host:port reachable from the proxy
+}
+
+type Runtime interface {
+	Start(ctx context.Context, spec ContainerSpec) (Container, error)
+	Remove(ctx context.Context, containerID string) error
+}
+
+type HealthChecker interface {
+	// Wait blocks until upstream is serving or gives up with an error.
+	Wait(ctx context.Context, upstream string) error
+}
+
+type Router interface {
+	SetRoute(host, upstream string)
+	RemoveRoute(host string)
+}
+
+// Scheduler hands a queued deployment to whatever runs it.
+type Scheduler interface {
+	Enqueue(deploymentID string) error
+}
