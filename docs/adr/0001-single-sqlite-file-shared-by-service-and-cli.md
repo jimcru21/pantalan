@@ -14,3 +14,4 @@ All persistent state (the Admin, sessions, login-failure counts, apps, deploymen
 - Auth reads hit SQLite on every request; adding an in-process cache of the Admin or sessions breaks `reset-password` while the service runs.
 - No down migrations: rolling back a release means restoring a `pantalan.db.bak-<version>` snapshot (the two most recent are kept).
 - The in-memory store is gone; tests run against SQLite in a temp directory.
+- The service runs as the `pantalan` user, but the CLI is run as `sudo pantalan …`. A subcommand running as root switches to the data directory owner's uid/gid before opening the file, so it never leaves root-owned `-wal`, `-shm` or `.bak-*` files the service can't write.
