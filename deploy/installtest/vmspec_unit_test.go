@@ -124,7 +124,11 @@ func TestVirtInstallBootsTheOverlayWithTheSeedOnTheDefaultNetwork(t *testing.T) 
 		"--network":  "network=default,model=virtio,mac=52:54:00:ab:12:cd",
 		"--osinfo":   "detect=on,require=off",
 		"--graphics": "none",
-		"--serial":   "file,path=/var/lib/libvirt/images/pantalan-installtest/ab12cd34/console.log",
+		// A video device even without a display: trixie's GRUB
+		// (terminal_output gfxterm serial) can't boot a kernel without
+		// one and loops on "Booting `Debian GNU/Linux'" (Debian #1111240).
+		"--video":  "vga",
+		"--serial": "file,path=/var/lib/libvirt/images/pantalan-installtest/ab12cd34/console.log",
 	} {
 		if got := flagValues(args, flag); !slices.Equal(got, []string{want}) {
 			t.Errorf("virt-install %s = %q, want %q", flag, got, want)
