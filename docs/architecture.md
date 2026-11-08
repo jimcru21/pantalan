@@ -56,6 +56,10 @@ the queue starts, so a restart never leaves a deployment stuck:
   (`Runtime.Upstream`, i.e. `docker port`), saved if it changed, and its
   route restored. If Docker can't say, the stored upstream is kept.
 
+Only then does `serve` ensure the TLS certificate, prune expired sessions
+and start the daily maintenance tick, and last start the Node sampler, the
+queue and the listeners.
+
 ## Dashboard listener
 
 One HTTPS listener on `PANTALAN_DASHBOARD_ADDR` (default `:8443`) serves the

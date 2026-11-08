@@ -68,6 +68,33 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 	}
 	defer store.Close()
 
+	// Wiring: this is the only place that knows which adapter backs which port.
+	router := proxy.New(log)
+	jobs := queue.New(100)
+	deployer := service.NewDeployer(service.DeployerDeps{
+		Apps:        store,
+		Deployments: store,
+		Source:      source.Git{},
+		Builders: map[domain.BuildType]service.Builder{
+			domain.BuildDockerfile: build.Dockerfile{},
+			domain.BuildNixpacks:   build.Nixpacks{},
+		},
+		Runtime:   docker.New(),
+		Health:    health.NewHTTP(),
+		Router:    router,
+		Scheduler: jobs,
+		DataDir:   cfg.DataDir,
+		Log:       log,
+	})
+	// Startup order (spec #35): re-queue, refresh upstreams and restore
+	// routes first, before the queue runs, so re-queued deployments keep
+	// their order and nothing new starts while interrupted ones are
+	// cleaned up. Then the certificate, session pruning and the daily
+	// maintenance tick; last the sampler, the queue and the listeners.
+	if err := deployer.Recover(ctx); err != nil {
+		return fmt.Errorf("startup recovery: %w", err)
+	}
+
 	certs, generated, err := dashtls.Open(tlsDir(cfg.DataDir), time.Now())
 	if err != nil {
 		return err
@@ -108,30 +135,6 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 			}
 		}
 	}()
-
-	// Wiring: this is the only place that knows which adapter backs which port.
-	router := proxy.New(log)
-	jobs := queue.New(100)
-	deployer := service.NewDeployer(service.DeployerDeps{
-		Apps:        store,
-		Deployments: store,
-		Source:      source.Git{},
-		Builders: map[domain.BuildType]service.Builder{
-			domain.BuildDockerfile: build.Dockerfile{},
-			domain.BuildNixpacks:   build.Nixpacks{},
-		},
-		Runtime:   docker.New(),
-		Health:    health.NewHTTP(),
-		Router:    router,
-		Scheduler: jobs,
-		DataDir:   cfg.DataDir,
-		Log:       log,
-	})
-	// Before the queue runs, so re-queued deployments keep their order and
-	// nothing new starts while interrupted ones are cleaned up.
-	if err := deployer.Recover(ctx); err != nil {
-		return fmt.Errorf("startup recovery: %w", err)
-	}
 
 	hostname, err := os.Hostname()
 	if err != nil {
