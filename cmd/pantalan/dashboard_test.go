@@ -100,10 +100,7 @@ func (b *browser) login(username, password string) page {
 }
 
 // createServedAdmin runs `admin create` against a running serve's data dir
-// once serve has opened (and migrated) the database, and returns the
-// password. Two processes migrating a brand-new database at the same
-// moment can fail with SQLITE_BUSY, which installs never do: the installer
-// creates the Admin before it starts the service.
+// once serve is listening, and returns the password.
 func createServedAdmin(t *testing.T, s *running, username string) string {
 	t.Helper()
 	s.addr(t, "dashboard")

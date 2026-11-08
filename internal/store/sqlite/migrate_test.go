@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -113,6 +114,36 @@ func TestAFailingMigrationLeavesTheDatabaseAsItWas(t *testing.T) {
 	openWith(t, dir, 2)
 	if v := schemaVersion(t, path); v != 2 {
 		t.Errorf("user_version after the fixed release = %d, want 2", v)
+	}
+}
+
+// The CLI (admin create) and serve may open a brand-new database at the
+// same moment: each must wait out the other's migration, not fail with
+// SQLITE_BUSY.
+func TestOpeningsRacingOnABrandNewDatabaseAllSucceed(t *testing.T) {
+	for range 20 {
+		dir := t.TempDir()
+		const racers = 4
+		errs := make(chan error, racers)
+		start := make(chan struct{})
+		for range racers {
+			go func() {
+				<-start
+				s, err := Open(t.Context(), dir)
+				if err == nil {
+					// Writing too, as admin create does right after.
+					_, err = s.db.ExecContext(t.Context(), `DELETE FROM sessions`)
+					err = errors.Join(err, s.Close())
+				}
+				errs <- err
+			}()
+		}
+		close(start)
+		for range racers {
+			if err := <-errs; err != nil {
+				t.Fatalf("open racing others on a new database: %v", err)
+			}
+		}
 	}
 }
 
