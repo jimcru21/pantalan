@@ -217,8 +217,11 @@ resumes, repairs or upgrades. Preflight's `compare_installed_version` puts
 the target against the installed `pantalan version` with `sort -V`: newer
 is an upgrade (the summary opens with `Upgraded vA → vB`), the same a
 repair, and older is refused with how to restore a `pantalan.db.bak-*`
-snapshot. Output goes through `tee` into `/var/log/pantalan-install.log`
-except the Admin password, which is printed after the log is closed.
+snapshot. What's missing is asked for on `/dev/tty` (the Admin username,
+and the Dashboard port when the default can't be used); with no tty the
+run stops and names the flag, so nothing is ever picked silently. Output
+goes through `tee` into `/var/log/pantalan-install.log` except the Admin
+password, which is printed after the log is closed.
 `PANTALAN_RELEASE_BASE_URL` (test-only) points downloads at a fake release.
 
 `--uninstall` and `--purge` take a separate, shorter path through `main`

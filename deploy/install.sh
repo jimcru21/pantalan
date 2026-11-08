@@ -281,11 +281,13 @@ preflight() {
 	check_tools
 	resolve_version
 	compare_installed_version
-	resolve_dashboard_port
 	classify_docker
 	check_port 80 "the app proxy needs it"
 	check_port 443 "Pantalan keeps it for app HTTPS"
-	check_port "$DASHBOARD_PORT" "the Dashboard needs it; choose another with --dashboard-port"
+	detect_ssh_ports
+	# After the refusals, so a host that can't be used at all is refused
+	# before anything is asked.
+	resolve_dashboard_port
 	classify_firewall
 }
 
@@ -379,6 +381,11 @@ refuse_downgrade() {
 	exit 1
 }
 
+# resolve_dashboard_port: --dashboard-port, which must be usable, else the
+# port the env file says, else the default. A default that can't be used
+# is never swapped for another port silently: at a terminal the operator is
+# asked, with the next usable port suggested; with no terminal the run
+# stops and names the flag.
 resolve_dashboard_port() {
 	# An installed Node's port is the one its env file says; a flag that
 	# disagrees stops the run instead of silently losing to it.
@@ -388,12 +395,66 @@ resolve_dashboard_port() {
 		die "--dashboard-port $OPT_DASHBOARD_PORT disagrees with PANTALAN_DASHBOARD_ADDR=$rd_stored in $ENV_FILE, and a re-run never overwrites your settings. Nothing was changed. To change it, edit $ENV_FILE, then systemctl restart pantalan (or run this again without --dashboard-port, which restarts it and moves the firewall rule too)."
 	fi
 	DASHBOARD_PORT=${OPT_DASHBOARD_PORT:-${rd_stored_port:-$DEFAULT_DASHBOARD_PORT}}
-	case $DASHBOARD_PORT in
-	'' | *[!0-9]*) die "--dashboard-port must be a port number, not $DASHBOARD_PORT" ;;
-	esac
-	if [ "$DASHBOARD_PORT" -lt 1 ] || [ "$DASHBOARD_PORT" -gt 65535 ]; then
-		die "--dashboard-port must be between 1 and 65535, not $DASHBOARD_PORT"
+	rd_problem=$(dashboard_port_problem "$DASHBOARD_PORT")
+	[ -n "$rd_problem" ] || return 0
+	[ -z "$OPT_DASHBOARD_PORT" ] || die "--dashboard-port $DASHBOARD_PORT: $rd_problem. Choose another port."
+	if [ -n "$rd_stored" ]; then
+		die "PANTALAN_DASHBOARD_ADDR=$rd_stored in $ENV_FILE: $rd_problem. Free the port, or edit $ENV_FILE, then run this again."
 	fi
+	rd_free=$(next_dashboard_port "$DASHBOARD_PORT")
+	if ! have_tty; then
+		die "$rd_problem, and it's the Dashboard's default port. Choose another with --dashboard-port N, e.g. --dashboard-port $rd_free"
+	fi
+	say "The Dashboard's default port can't be used: $rd_problem." >/dev/tty
+	while :; do
+		rd_answer=$(ask "Dashboard port [$rd_free]: ")
+		DASHBOARD_PORT=${rd_answer:-$rd_free}
+		rd_answer_problem=$(dashboard_port_problem "$DASHBOARD_PORT")
+		[ -n "$rd_answer_problem" ] || break
+		say "$rd_answer_problem." >/dev/tty
+	done
+	say "Dashboard: port $DASHBOARD_PORT, chosen at the terminal ($rd_problem)."
+}
+
+# dashboard_port_problem PORT: why PORT can't be the Dashboard's port, or
+# nothing when it can. A port Pantalan already holds is its own, from an
+# earlier run.
+dashboard_port_problem() {
+	case $1 in
+	'' | 0* | *[!0-9]* | ??????*)
+		say "$1 isn't a port number"
+		return 0
+		;;
+	esac
+	if [ "$1" -gt 65535 ]; then
+		say "$1 isn't a port number: they go up to 65535"
+	elif [ "$1" -eq 80 ]; then
+		say "port 80 is the app proxy's"
+	elif [ "$1" -eq 443 ]; then
+		say "port 443 is kept for app HTTPS"
+	elif in_list "$1" "$SSH_PORTS"; then
+		say "SSH listens on port $1, and the Dashboard can't share it"
+	elif [ "$1" -lt 1024 ]; then
+		say "port $1 is below 1024, where system services live"
+	else
+		dp_holder=$(port_holder "$1")
+		case $dp_holder in
+		'' | pantalan) ;;
+		*) say "port $1 is in use by $dp_holder" ;;
+		esac
+	fi
+}
+
+# next_dashboard_port PORT: the first port after PORT the Dashboard can use.
+next_dashboard_port() {
+	nd_port=$(($1 + 1))
+	while [ "$nd_port" -le 65535 ]; do
+		if [ -z "$(dashboard_port_problem "$nd_port")" ]; then
+			say "$nd_port"
+			return 0
+		fi
+		nd_port=$((nd_port + 1))
+	done
 }
 
 # classify_docker: no Docker at all is installed later; Docker CE 28 or
@@ -707,7 +768,8 @@ wait_for_dashboard() {
 # Its read-only half (classify_firewall) runs in preflight.
 
 # classify_firewall works out the mode and what to do with this host's
-# firewall (FW_ACTION), and finds the SSH ports.
+# firewall (FW_ACTION). The SSH ports are already found: the Dashboard port
+# check needs them too.
 classify_firewall() {
 	resolve_firewall_mode
 	if [ "$FIREWALL_MODE" = off ]; then
@@ -722,7 +784,6 @@ classify_firewall() {
 		warn "$FW_REASON, so Pantalan leaves ufw alone: open $(comma_list "80 443 $DASHBOARD_PORT") in it"
 		return 0
 	fi
-	detect_ssh_ports
 	check_published_containers
 	if ufw_active; then
 		# The operator's firewall: rules are added to it, and nothing of

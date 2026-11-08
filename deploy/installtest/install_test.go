@@ -64,7 +64,12 @@ func TestFreshInstallKeepsAnAcceptableDocker(t *testing.T) {
 	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d Distro) {
 		n := substrate.Boot(t, d, DockerOK)
-		dockerBefore := sh(t, n, "dpkg-query -W docker-ce; ls /etc/docker 2>&1")
+		// The operator's own daemon.json, formatted their way.
+		sh(t, n, `mkdir -p /etc/docker && printf '{ "log-driver":"local",\n\t"max-concurrent-downloads": 4 }\n' >/etc/docker/daemon.json && systemctl restart docker`)
+		const dockerState = `dpkg-query -W docker-ce docker-ce-cli containerd.io
+			docker version --format '{{.Server.Version}}'
+			sha256sum /etc/docker/daemon.json; ls -l --time-style=full-iso /etc/docker`
+		dockerBefore := sh(t, n, dockerState)
 		// Someone else's container, published on every address the way
 		// Docker does by default: it bypasses ufw, so the summary warns.
 		// Its image is just sleep and the libraries it needs.
@@ -86,7 +91,7 @@ func TestFreshInstallKeepsAnAcceptableDocker(t *testing.T) {
 			AdminUser:     "alice",
 			AdminPassword: s.AdminPassword,
 		})
-		if after := sh(t, n, "dpkg-query -W docker-ce; ls /etc/docker 2>&1"); after != dockerBefore {
+		if after := sh(t, n, dockerState); after != dockerBefore {
 			t.Errorf("the installer changed the existing Docker:\nbefore: %s\nafter:  %s", dockerBefore, after)
 		}
 	})
