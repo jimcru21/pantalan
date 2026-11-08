@@ -1,121 +1,108 @@
 // Command pantalan is the control plane: dashboard, REST API, deploy workers
-// and the reverse proxy, all in one process.
+// and the reverse proxy, all in one process, plus the CLI that operates it.
 package main
 
 import (
 	"context"
-	"errors"
-	"log/slog"
-	"net/http"
+	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
-	"time"
 
-	"github.com/pantalan/pantalan/internal/build"
 	"github.com/pantalan/pantalan/internal/config"
-	"github.com/pantalan/pantalan/internal/domain"
-	"github.com/pantalan/pantalan/internal/health"
-	"github.com/pantalan/pantalan/internal/httpapi"
-	"github.com/pantalan/pantalan/internal/proxy"
-	"github.com/pantalan/pantalan/internal/queue"
-	"github.com/pantalan/pantalan/internal/runtime/docker"
-	"github.com/pantalan/pantalan/internal/service"
-	"github.com/pantalan/pantalan/internal/source"
-	"github.com/pantalan/pantalan/internal/store/memory"
-	"github.com/pantalan/pantalan/web"
 )
 
-func main() {
-	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(log); err != nil {
-		log.Error("pantalan exited", "err", err)
-		os.Exit(1)
-	}
+// Stdio is the standard streams a command reads from and writes to.
+type Stdio struct {
+	In       io.Reader
+	Out, Err io.Writer
 }
 
-func run(log *slog.Logger) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(cfg.DataDir, 0o750); err != nil {
-		return err
-	}
+// Node is where pantalan finds the Node's outside world. main passes the
+// host's real paths; tests point them at fixtures in a temp dir.
+type Node struct {
+	ProcRoot     string // usually /proc
+	DockerSocket string // the Docker Engine API unix socket
+}
 
+func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	// Wiring: this is the only place that knows which adapter backs which port.
-	store := memory.New()
-	router := proxy.New(log)
-	jobs := queue.New(100)
-	deployer := service.NewDeployer(service.DeployerDeps{
-		Apps:        store,
-		Deployments: store,
-		Source:      source.Git{},
-		Builders: map[domain.BuildType]service.Builder{
-			domain.BuildDockerfile: build.Dockerfile{},
-			domain.BuildNixpacks:   build.Nixpacks{},
-		},
-		Runtime:   docker.New(),
-		Health:    health.NewHTTP(),
-		Router:    router,
-		Scheduler: jobs,
-		DataDir:   cfg.DataDir,
-		Log:       log,
+	code := run(ctx, os.Args[1:], os.Environ(), Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}, Node{
+		ProcRoot:     "/proc",
+		DockerSocket: "/var/run/docker.sock",
 	})
-	if err := deployer.RestoreRoutes(ctx); err != nil {
-		return err
-	}
+	stop()
+	os.Exit(code)
+}
 
-	ui, err := web.Handler()
-	if err != nil {
-		return err
+// run is the whole pantalan command: it takes the arguments after the
+// program name, the environment as os.Environ formats it, the standard
+// streams and the Node's sources, and returns the process exit code.
+// Cancelling ctx stops a running service.
+func run(ctx context.Context, args, env []string, stdio Stdio, node Node) int {
+	if len(args) == 0 {
+		return usage(stdio.Err)
 	}
-	api := httpapi.NewHandler(httpapi.Deps{
-		Apps:          service.NewAppService(store),
-		Deployer:      deployer,
-		AdminToken:    cfg.AdminToken,
-		WebhookSecret: cfg.WebhookSecret,
-		Web:           ui,
-		Log:           log,
-	})
-
-	servers := []*http.Server{
-		{Addr: cfg.APIAddr, Handler: api, ReadHeaderTimeout: 10 * time.Second},
-		{Addr: cfg.ProxyAddr, Handler: router, ReadHeaderTimeout: 10 * time.Second},
+	cmd, ok := commands[args[0]]
+	if !ok {
+		return usage(stdio.Err)
 	}
-	serveErr := make(chan error, len(servers))
-	for _, srv := range servers {
-		go func() {
-			log.Info("listening", "addr", srv.Addr)
-			if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-				serveErr <- err
-			}
-		}()
-	}
-
-	workersDone := make(chan struct{})
-	go func() {
-		jobs.Run(ctx, cfg.Workers, deployer.Run, log)
-		close(workersDone)
-	}()
-
-	select {
-	case <-ctx.Done():
-		log.Info("shutting down")
-	case err = <-serveErr:
-		stop()
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	for _, srv := range servers {
-		if shutErr := srv.Shutdown(shutdownCtx); shutErr != nil {
-			err = errors.Join(err, shutErr)
+	inv := invocation{args: args[1:], getenv: lookupIn(env), stdio: stdio, node: node}
+	if cmd.opensDataDir {
+		if err := becomeDataDirOwner(config.DataDir(inv.getenv)); err != nil {
+			fmt.Fprintln(stdio.Err, "pantalan:", err)
+			return 1
 		}
 	}
-	<-workersDone
-	return err
+	return cmd.run(ctx, inv)
+}
+
+// commands are the subcommands, by name.
+var commands = map[string]command{
+	"serve":   {opensDataDir: true, run: serveCmd},
+	"version": {run: versionCmd},
+}
+
+type command struct {
+	// opensDataDir makes run switch to the data directory owner first when
+	// running as root (ADR 0001). Set it on every command that touches
+	// $PANTALAN_DATA_DIR.
+	opensDataDir bool
+	run          func(context.Context, invocation) int
+}
+
+// invocation is what a subcommand gets to work with.
+type invocation struct {
+	args   []string // after the subcommand's name
+	getenv func(string) string
+	stdio  Stdio
+	node   Node
+}
+
+// lookupIn turns an os.Environ-style list into an os.Getenv-style lookup.
+// A later entry for the same key wins, as it does for a process.
+func lookupIn(env []string) func(string) string {
+	vars := make(map[string]string, len(env))
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			vars[k] = v
+		}
+	}
+	return func(key string) string { return vars[key] }
+}
+
+const usageText = `Usage: pantalan <command>
+
+Commands:
+  serve     run the Pantalan service (what the systemd unit runs)
+  version   print the version
+`
+
+// usage refuses to guess: a bare or mistyped command must never start a
+// second control plane, least of all from a stray `sudo pantalan`.
+func usage(w io.Writer) int {
+	io.WriteString(w, usageText)
+	return 2
 }
