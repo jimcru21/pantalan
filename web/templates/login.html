@@ -15,6 +15,7 @@
     {{else}}
     <form class="login-form" method="post" action="/login">
       {{with .Error}}<div class="alert" role="alert">{{.}}</div>{{end}}
+      {{with .Throttled}}<div class="alert" role="alert">Too many attempts, try again in {{.}}, or run <code>sudo pantalan admin reset-password</code> on the server.</div>{{end}}
       <div class="field">
         <label for="username">Username</label>
         <input class="input" id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" value="{{.Username}}" required {{if not .Username}}autofocus{{end}}>

@@ -105,7 +105,20 @@ Auth surfaces on the one listener:
   no expiry: the server ends a session after 1 h idle or 24 h in all.
   `last_seen_at` is rewritten at most once a minute. Nothing is cached in
   memory, so `admin reset-password` (which deletes every session) signs the
-  browser out on its next request.
+  browser out on its next request. At most 20 sessions exist: a new login
+  evicts the oldest. Expired sessions are pruned at startup and on the
+  daily maintenance tick that also checks TLS renewal.
+- Login throttling: one failure counter on the `admin` row, whatever
+  username was submitted (unknown usernames verify against a dummy hash).
+  Five failures are free; then the next attempt waits 1 s after the last
+  failure, doubling to 15 min. An attempt inside the wait gets 429 with
+  `Retry-After` before its password is checked, and isn't counted. A
+  checked attempt is counted before its password is verified (a
+  compare-and-swap on the count), and a success resets it, so racing
+  attempts can't all be checked when a wait ends.
+- At most 2 Argon2id hashes run at once; a login that can't get a slot
+  within 5 s gets 503 and isn't counted. A hash whose PHC parameters differ
+  from the current ones is replaced at the next successful login.
 - Every Dashboard response carries
   `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
   so templates have no inline scripts or `style=` attributes and htmx runs
@@ -119,23 +132,72 @@ Auth surfaces on the one listener:
 ### Node overview
 
 The Dashboard's home page shows the Node's health, read by
-`internal/nodeinfo`: the host from `/proc` (`stat`, `meminfo`, `loadavg`,
-`uptime`, `sys/kernel/*`) and `statfs`, stdlib only. A background sampler
-reads it every 5 s into a 120-sample in-memory ring (10 minutes) that
-feeds the sparklines and the CPU delta; nothing is persisted.
+`internal/nodeinfo`, stdlib only and nothing persisted:
 
-- Each polled region (the top bar, the stat band) is a template block in
-  `web/templates/pages/overview.html` and its own route,
-  `GET /fragments/<block>`, which renders the same block. The region's
-  element carries `hx-get`, a plain `hx-trigger="every 5s"` and
+- **Host**: `/proc` (`stat`, `meminfo`, `loadavg`, `uptime`,
+  `sys/kernel/*`) and `statfs`. A background sampler reads it every 5 s
+  into a 120-sample in-memory ring (10 minutes) that feeds the sparklines
+  and the CPU delta.
+- **Docker**: the Engine API on the unix socket (`nodeinfo.Docker`,
+  `net/http` with a unix dialer, no SDK), read on demand per request. Each
+  read starts with `/_ping`, whose `Api-Version` is the version the
+  following calls use, capped at `nodeinfo.MaxAPIVersion`; a failed ping
+  is "Docker unreachable". It uses `info`, `containers/json`, one-shot
+  `containers/{id}/stats` (at most 8 in flight across all requests),
+  `images/json`, `version` and `system/df`. These are reads only:
+  container lifecycle for deployments stays on the docker CLI (see
+  Decisions).
+- **Docker events**: `nodeinfo.EventStream` holds one `/events` stream
+  open, filtered at the source to container `start`, `stop`, `die`,
+  `oom`, `kill`, `restart`, `health_status` and `destroy`, into a
+  100-event in-memory ring. A dropped stream reconnects after 1 s,
+  doubling to 30 s while attempts fail and back to 1 s once one connects,
+  and backfills with `since=<last event time>` (or the time it last
+  connected, before any event). dockerd replays its buffer from `since`
+  inclusive, so a replay that starts with the ring's last event proves
+  the gap was covered; one that doesn't (the buffer moved past it, or
+  dockerd restarted) puts a "stream reconnected" marker before the next
+  event.
+
+The page:
+
+- The top bar's status dot is red when Docker is unreachable, amber when
+  a shown disk or `MemAvailable` is under 10 % free, a container is
+  unhealthy or restarting, or Docker reports `Warnings`, and green
+  otherwise, with the reasons in its tooltip.
+- The stat band has CPU and memory with server-drawn SVG sparklines, disk
+  free/total as a `<meter>` for Docker's root dir (plus `/` when that is
+  another filesystem, by statfs filesystem ID), the containers'
+  running/total and unhealthy count, and the Docker version. It never
+  calls `system/df`.
+- Tabs: Containers (every container; `pantalan.app`-labelled ones badged
+  with the app's name; running ones with CPU %, a delta against that
+  container's previous one-shot sample, "–" the first time, and memory as
+  usage − inactive file over the limit), Images (repo:tag, size, created,
+  in use by any container), and Docker (version, API version, storage
+  driver, cgroup, root dir, `Warnings`, and `system/df`), and Events (the
+  ring newest first, in UTC, with `die`'s exit code and `kill`'s signal;
+  it keeps showing while Docker is down, with a note that the stream is
+  retrying). Each tab is a block and fragment that renders the tab bar
+  too, so a tab button swaps the whole section and only the open tab
+  polls: Containers and Events every 5 s, Images every 30 s, Docker not
+  at all (it has a Refresh button).
+  `system/df` is slow and grows with the Node's data, so its result is
+  shared between requests for 60 s, by the Node clock. Both response
+  shapes are read: the per-kind summaries of API 1.52+ and the item lists
+  of older daemons.
+- With Docker down the host tiles keep updating, the Docker tiles say
+  "Docker unreachable" and every tab but Events shows one error card with a
+  `systemctl status docker` hint; the open tab's next poll recovers.
+- Each polled region (the top bar, the stat band, the open tab) is a
+  template block in `web/templates/pages/overview.html` and its own
+  route, `GET /fragments/<block>`, which renders the same block. The
+  region's element carries `hx-get`, a plain `hx-trigger="every 5s"` and
   `hx-swap="outerHTML"`, so each fresh copy keeps polling.
 - `app.js` cancels `htmx:beforeRequest` while the tab is hidden and
   refreshes every polled region once when it is shown again.
 - A fragment request without a live session gets 401 with
   `HX-Redirect: /login`, which htmx turns into a full navigation.
-- The status dot is amber when `/` or `MemAvailable` is under 10 % free,
-  with the reasons in its tooltip. Sparklines are server-drawn SVG and the
-  disk bar is a `<meter>`.
 
 ## Installer
 
@@ -191,7 +253,7 @@ and Ubuntu 24.04/26.04, on amd64 and arm64.
 | `internal/queue` | In-process job queue |
 | `internal/execx` | Shared helpers for running external commands |
 | `internal/dashboard` | Dashboard handlers: login, logout, session middleware, pages and their fragments; security and cache headers |
-| `internal/nodeinfo` | Read-only Node information: host health from `/proc` and `statfs`, and the background sampler's ring |
+| `internal/nodeinfo` | Read-only Node information: host health from `/proc` and `statfs`, the background sampler's ring, Docker through the Engine API on its unix socket, and the container event ring fed by its `/events` stream |
 | `web` | Dashboard assets only (templates and static files), embedded into the binary |
 
 ## Decisions
@@ -200,9 +262,15 @@ and Ubuntu 24.04/26.04, on amd64 and arm64.
   `httputil.ReverseProxy` cover the scaffold. Add a dependency only when it
   replaces real code: `modernc.org/sqlite` and `golang.org/x/crypto` (Argon2id)
   so far.
-- **Docker CLI rather than the Engine SDK.** It has no dependencies and its
-  errors match what an operator sees. Move to the SDK when you need event
-  streams or container stats.
+- **Docker CLI for container lifecycle, the Engine API for reads.**
+  Deployments build, run, look up ports and remove containers through the
+  docker CLI (`internal/runtime/docker`): it has no dependencies and its
+  errors match what an operator sees. The Node overview's reads (container
+  list, one-shot stats, images, info, version, `system/df` and the event
+  stream) go through the Engine API on the unix socket with `net/http`
+  instead (`internal/nodeinfo`): raw numbers rather than display strings,
+  one-shot stats in milliseconds instead of a 2 s CLI call, and a real
+  event stream. No SDK: the API version is negotiated from `/_ping`.
 - **Built-in proxy rather than Traefik or Caddy.** There's no second process
   to configure and no label syncing; routes change atomically in memory.
   Coolify and Dokploy use Traefik, which is a valid alternative behind the

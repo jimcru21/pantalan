@@ -1,6 +1,7 @@
 // Package nodeinfo reads what the Dashboard shows about the Node. It is
 // read-only and stdlib-only: the host from /proc and statfs, sampled in the
-// background into an in-memory ring (Sampler). Nothing is persisted.
+// background into an in-memory ring (Sampler), and Docker through the
+// Engine API on its unix socket (Docker). Nothing is persisted.
 package nodeinfo
 
 import (
@@ -57,6 +58,21 @@ func (m Memory) SwapUsed() uint64 { return m.SwapTotal - min(m.SwapFree, m.SwapT
 type Disk struct {
 	Path        string
 	Total, Free uint64
+	fsid        syscall.Fsid
+}
+
+// SameFilesystem reports whether d and o are the same filesystem, by
+// their statfs filesystem IDs.
+func (d Disk) SameFilesystem(o Disk) bool { return d.fsid == o.fsid }
+
+// readDisk is statfs on path.
+func readDisk(statfs func(string, *syscall.Statfs_t) error, path string) (Disk, error) {
+	var st syscall.Statfs_t
+	if err := statfs(path, &st); err != nil {
+		return Disk{}, fmt.Errorf("statfs %s: %w", path, err)
+	}
+	bsize := uint64(st.Bsize)
+	return Disk{Path: path, Total: uint64(st.Blocks) * bsize, Free: uint64(st.Bavail) * bsize, fsid: st.Fsid}, nil
 }
 
 // diskPath is the filesystem the host tiles report on.
@@ -89,13 +105,11 @@ func (h Host) Read() (Reading, error) {
 	if statfs == nil {
 		statfs = syscall.Statfs
 	}
-	var st syscall.Statfs_t
-	if err := statfs(diskPath, &st); err != nil {
-		errs = append(errs, fmt.Errorf("statfs %s: %w", diskPath, err))
-	} else {
-		bsize := uint64(st.Bsize)
-		r.Disk = Disk{Path: diskPath, Total: uint64(st.Blocks) * bsize, Free: uint64(st.Bavail) * bsize}
+	disk, err := readDisk(statfs, diskPath)
+	if err != nil {
+		errs = append(errs, err)
 	}
+	r.Disk = disk
 	return r, errors.Join(errs...)
 }
 

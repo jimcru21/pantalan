@@ -63,3 +63,26 @@ func SameUsername(submitted, stored string) bool {
 	name, err := NormalizeUsername(submitted)
 	return err == nil && name == stored
 }
+
+// Login back-off: the first FreeFailures failed sign-ins cost nothing;
+// after that the next attempt waits FirstBackoff after the last failure,
+// doubling with every further failure up to MaxBackoff. There is no
+// lockout, so noise from the internet can only slow the Admin down.
+const (
+	FreeFailures = 5
+	FirstBackoff = time.Second
+	MaxBackoff   = 15 * time.Minute
+)
+
+// NextAttemptAt is the earliest time a sign-in may be checked, given the
+// failures so far; the zero time when there is no wait.
+func (a Admin) NextAttemptAt() time.Time {
+	if a.FailedLogins < FreeFailures {
+		return time.Time{}
+	}
+	wait := MaxBackoff
+	if doublings := a.FailedLogins - FreeFailures; doublings < 32 {
+		wait = min(FirstBackoff<<doublings, MaxBackoff)
+	}
+	return a.LastFailedAt.Add(wait)
+}

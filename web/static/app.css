@@ -107,6 +107,35 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .spark { width: 100%; height: 28px; margin-top: 4px; }
 .spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
 
+.bad { color: var(--danger); }
+.stat .sub.bad { color: var(--danger); }
+
+/* Tabs: the bar and the open tab's panels, swapped as one section. */
+.tabs { display: grid; gap: 12px; min-width: 0; }
+.tabbar { display: flex; gap: 4px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.tab { border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 8px 12px; margin-bottom: -1px; color: var(--muted); font-weight: 500; cursor: pointer; white-space: nowrap; }
+.tab:hover, .tab:focus-visible { color: var(--text); }
+.tab.on { color: var(--text); border-bottom-color: var(--accent); }
+.tabs [role="tabpanel"] { display: grid; gap: 12px; min-width: 0; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.panel-head h2 { margin: 0; font-size: 14px; }
+.panel.empty p + p { margin-top: 6px; }
+.btn.ghost { background: transparent; color: var(--text); border-color: var(--border); padding: 5px 10px; font-weight: 500; }
+.btn.ghost:hover { background: var(--surface-2); }
+.table-wrap { overflow-x: auto; }
+.table-wrap .alert { margin: 12px 16px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; vertical-align: top; }
+th { font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface-2); }
+tbody tr:last-child td { border-bottom: 0; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr.gap td { background: var(--warn-soft); color: var(--warn); font-size: 12px; font-weight: 600; text-align: center; }
+.badge { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600; vertical-align: 1px; }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 24px; margin: 0; padding: 16px; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.warnings { margin: 0; padding-left: 18px; color: var(--warn); }
+
 /* Narrow screens: the sidebar is a fixed icon rail. */
 @media (max-width: 640px) {
   .shell, .shell.collapsed { --sidebar: 56px; }

@@ -42,6 +42,17 @@ func serveCmd(ctx context.Context, inv invocation) int {
 	return 0
 }
 
+// pruneSessions deletes expired Dashboard sessions. A failure is logged
+// and left for the next run: an expired session is refused either way.
+func pruneSessions(ctx context.Context, log *slog.Logger, auth *service.AuthService) {
+	n, err := auth.PruneSessions(ctx)
+	if err != nil {
+		log.Error("pruning expired sessions failed", "err", err)
+		return
+	}
+	log.Info("pruned expired sessions", "deleted", n)
+}
+
 func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, node Node, bin binary) error {
 	cfg, err := config.Load(getenv)
 	if err != nil {
@@ -65,15 +76,33 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 	cert := certs.Current()
 	log.Info("tls certificate", "fingerprint", cert.Fingerprint(), "expires", cert.Leaf().NotAfter, "generated", generated)
 
+	var hasher service.PasswordHasher = password.Hasher{}
+	if node.Hasher != nil {
+		hasher = node.Hasher
+	}
+	auth := service.NewAuthService(service.AuthDeps{
+		Admins:   store,
+		Sessions: store,
+		Hasher:   hasher,
+		Now:      node.now,
+		After:    node.HashSlotWait,
+	})
+	pruneSessions(ctx, log, auth)
+
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
+	daily := node.MaintenanceTicks
+	if daily == nil {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		daily = ticker.C
+	}
 	go func() {
-		daily := time.NewTicker(24 * time.Hour)
-		defer daily.Stop()
 		for {
 			select {
-			case <-daily.C:
+			case <-daily:
 				renewCertificate(log, certs)
+				pruneSessions(ctx, log, auth)
 			case <-ctx.Done():
 				return
 			}
@@ -114,14 +143,26 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 		sampler.Run(ctx, node.SampleTicks)
 		close(samplerDone)
 	}()
+	dockerAPI := nodeinfo.NewDocker(node.DockerSocket, node.Statfs, node.now)
+	events := nodeinfo.NewEventStream(dockerAPI, log)
+	eventsDone := make(chan struct{})
+	go func() {
+		events.Run(ctx, node.EventsBackoff)
+		close(eventsDone)
+	}()
 	defer func() {
 		stop()
 		<-samplerDone
+		<-eventsDone
 	}()
 
+	apps := service.NewAppService(store)
 	dash, err := dashboard.New(dashboard.Deps{
-		Auth:         service.NewAuthService(store, store, password.Hasher{}, node.now),
+		Auth:         auth,
 		Host:         sampler,
+		Docker:       dockerAPI,
+		Events:       events,
+		Apps:         apps,
 		Templates:    web.Templates(),
 		Static:       web.Static(),
 		AssetVersion: assetVersion(bin, web.Static()),
@@ -132,7 +173,7 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 		return err
 	}
 	api := httpapi.NewHandler(httpapi.Deps{
-		Apps:          service.NewAppService(store),
+		Apps:          apps,
 		Deployer:      deployer,
 		AdminToken:    cfg.AdminToken,
 		WebhookSecret: cfg.WebhookSecret,

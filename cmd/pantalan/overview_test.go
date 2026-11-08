@@ -30,6 +30,11 @@ type hostState struct {
 	MemTotal, MemAvailable, SwapTotal, SwapFree uint64
 	// Disk is what statfs reports for /, in bytes.
 	DiskTotal, DiskFree uint64
+	// DockerDisk is what statfs reports for the fake Engine's
+	// DockerRootDir, /var/lib/docker: a filesystem of its own, unless
+	// DockerOnRoot puts it on the one holding /.
+	DockerDiskTotal, DockerDiskFree uint64
+	DockerOnRoot                    bool
 	// Missing is a file left out of the fixture, to break reads.
 	Missing string
 }
@@ -59,6 +64,9 @@ func newFakeProc(t *testing.T) *fakeProc {
 		MemAvailable: 4 << 20,
 		DiskTotal:    100 << 30,
 		DiskFree:     50 << 30,
+		// Docker's data on a filesystem of its own.
+		DockerDiskTotal: 200 << 30,
+		DockerDiskFree:  150 << 30,
 	}
 	fp.write()
 	return fp
@@ -82,13 +90,20 @@ func (fp *fakeProc) set(change func(*hostState)) {
 }
 
 func (fp *fakeProc) statfs(path string, buf *syscall.Statfs_t) error {
-	if path != "/" {
-		return fmt.Errorf("statfs %s: not in the fixture", path)
-	}
 	fp.mu.Lock()
 	defer fp.mu.Unlock()
 	const block = 4096
-	*buf = syscall.Statfs_t{Bsize: block, Blocks: fp.state.DiskTotal / block, Bavail: fp.state.DiskFree / block, Bfree: fp.state.DiskFree / block}
+	fs := func(id int32, total, free uint64) syscall.Statfs_t {
+		return syscall.Statfs_t{Bsize: block, Blocks: total / block, Bavail: free / block, Bfree: free / block, Fsid: syscall.Fsid{X__val: [2]int32{id, 0}}}
+	}
+	switch {
+	case path == "/", path == "/var/lib/docker" && fp.state.DockerOnRoot:
+		*buf = fs(1, fp.state.DiskTotal, fp.state.DiskFree)
+	case path == "/var/lib/docker":
+		*buf = fs(2, fp.state.DockerDiskTotal, fp.state.DockerDiskFree)
+	default:
+		return fmt.Errorf("statfs %s: not in the fixture", path)
+	}
 	return nil
 }
 
@@ -152,11 +167,20 @@ func (fp *fakeProc) sample(b *browser) {
 	}
 }
 
-// serveOverview runs serve on the fixture host and signs in, once the
-// sampler's first sample is on the Node overview.
+// serveOverview runs serve on the fixture host, with a healthy fake
+// Engine as its Docker, and signs in, once the sampler's first sample is
+// on the Node overview.
 func serveOverview(t *testing.T, fp *fakeProc) (*running, *browser) {
 	t.Helper()
-	s := startServeOn(t, serveEnv(t), fp.node(t))
+	s, b, _ := serveWithEngine(t, fp)
+	return s, b
+}
+
+// serveNodeOverview is serveOverview on a Node the test made, whose
+// Docker it set up (or left unreachable).
+func serveNodeOverview(t *testing.T, fp *fakeProc, node Node) (*running, *browser) {
+	t.Helper()
+	s := startServeOn(t, serveEnv(t), node)
 	b := signedIn(t, s)
 	deadline := time.Now().Add(5 * time.Second)
 	for !strings.Contains(b.get("/").body, html.EscapeString(fp.state.Hostname)) {
@@ -331,7 +355,8 @@ func TestEachPolledRegionIsItsOwnFragmentThatKeepsPolling(t *testing.T) {
 	for _, m := range regions {
 		paths = append(paths, m[2])
 	}
-	if want := []string{"/fragments/topbar", "/fragments/band"}; !slices.Equal(paths, want) {
+	// The open tab polls with the top bar and the band.
+	if want := []string{"/fragments/topbar", "/fragments/band", "/fragments/containers"}; !slices.Equal(paths, want) {
 		t.Fatalf("the Node overview polls %q, want %q", paths, want)
 	}
 	for _, m := range regions {
@@ -376,7 +401,7 @@ func TestAFragmentWithoutALiveSessionGets401AndHXRedirectToLogin(t *testing.T) {
 	clock.advance(2 * time.Hour) // past the idle hour
 
 	for name, b := range map[string]*browser{"no session": anon, "expired session": expired} {
-		for _, path := range []string{"/fragments/topbar", "/fragments/band"} {
+		for _, path := range []string{"/fragments/topbar", "/fragments/band", "/fragments/containers", "/fragments/images", "/fragments/docker", "/fragments/events"} {
 			got := b.fragment(path)
 			if got.StatusCode != http.StatusUnauthorized || got.Header.Get("HX-Redirect") != "/login" {
 				t.Errorf("%s: GET %s = %d HX-Redirect %q, want 401 to /login", name, path, got.StatusCode, got.Header.Get("HX-Redirect"))

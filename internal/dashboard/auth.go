@@ -2,8 +2,12 @@ package dashboard
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"net"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/pantalan/pantalan/internal/service"
 )
@@ -46,7 +50,19 @@ type loginData struct {
 	Address  string // ip:port the browser reached
 	NoAdmin  bool   // replace the form with the `admin create` hint
 	Error    string
-	Username string // kept in the form after a failed attempt
+	// Throttled is how long the back-off still runs, as the page says it
+	// ("8 s", "15 min"); empty when not throttled.
+	Throttled string
+	Username  string // kept in the form after a failed attempt
+}
+
+// formatWait rounds a back-off wait up, to seconds under a minute and to
+// minutes from there, so the page never promises less than the wait.
+func formatWait(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%d s", int(math.Ceil(d.Seconds())))
+	}
+	return fmt.Sprintf("%d min", int(math.Ceil(d.Minutes())))
 }
 
 func (d *Dashboard) loginData(r *http.Request) loginData {
@@ -90,6 +106,7 @@ func (d *Dashboard) login(w http.ResponseWriter, r *http.Request) {
 	username, password := r.PostForm.Get("username"), r.PostForm.Get("password")
 	token, err := d.deps.Auth.SignIn(r.Context(), username, password)
 	data := d.loginData(r)
+	var throttled *service.ThrottledError
 	switch {
 	case err == nil:
 		// A browser that signs in again leaves its old session behind.
@@ -111,6 +128,16 @@ func (d *Dashboard) login(w http.ResponseWriter, r *http.Request) {
 		data.Error = "Incorrect username or password."
 		data.Username = username
 		d.render(w, http.StatusUnauthorized, d.views.login, "base", data)
+	case errors.As(err, &throttled):
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(throttled.Wait.Seconds()))))
+		data.Throttled = formatWait(throttled.Wait)
+		data.Username = username
+		d.render(w, http.StatusTooManyRequests, d.views.login, "base", data)
+	case errors.Is(err, service.ErrBusy):
+		w.Header().Set("Retry-After", "5")
+		data.Error = "Too many sign-ins at once. Try again in a few seconds."
+		data.Username = username
+		d.render(w, http.StatusServiceUnavailable, d.views.login, "base", data)
 	case errors.Is(err, service.ErrNoAdmin):
 		data.NoAdmin = true
 		d.render(w, http.StatusForbidden, d.views.login, "base", data)

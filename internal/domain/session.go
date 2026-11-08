@@ -9,6 +9,10 @@ const (
 	SessionMaxAge = 24 * time.Hour
 )
 
+// MaxSessions is how many sessions may be signed in at once; a new
+// sign-in beyond it ends the oldest.
+const MaxSessions = 20
+
 // Session is a signed-in Dashboard browser. Only a hash of its token is
 // kept; the token itself lives in the browser's cookie.
 type Session struct {
