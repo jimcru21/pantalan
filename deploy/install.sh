@@ -429,8 +429,8 @@ dashboard_port_problem() {
 	esac
 	if [ "$1" -gt 65535 ]; then
 		say "$1 isn't a port number: they go up to 65535"
-	elif [ "$1" -eq 80 ]; then
-		say "port 80 is the app proxy's"
+	elif [ "$1" -eq "$(proxy_port)" ]; then
+		say "port $1 is the app proxy's"
 	elif [ "$1" -eq 443 ]; then
 		say "port 443 is kept for app HTTPS"
 	elif in_list "$1" "$SSH_PORTS"; then
@@ -444,6 +444,17 @@ dashboard_port_problem() {
 		*) say "port $1 is in use by $dp_holder" ;;
 		esac
 	fi
+}
+
+# proxy_port: the app proxy's port, from PANTALAN_PROXY_ADDR in the env
+# file when it's set there, else the service's default, 80.
+proxy_port() {
+	pp_addr=$(env_setting PANTALAN_PROXY_ADDR)
+	pp_port=${pp_addr##*:}
+	case $pp_port in
+	'' | *[!0-9]*) say 80 ;;
+	*) say "$pp_port" ;;
+	esac
 }
 
 # next_dashboard_port PORT: the first port after PORT the Dashboard can use.
