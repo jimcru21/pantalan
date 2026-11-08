@@ -316,6 +316,7 @@ install_go() {
 	step "Go"
 	if [ -n "$OPT_GO_VERSION" ]; then
 		ig_want="go$OPT_GO_VERSION"
+		# shellcheck disable=SC2016 # $want is jq's, bound by --arg
 		ig_filter='.version == $want'
 	else
 		ig_minor=$DEFAULT_GO_MINOR
@@ -325,6 +326,7 @@ install_go() {
 			[ -n "$ig_minor" ] || die "can't read the Go version from $ig_mod"
 		fi
 		ig_want="go$ig_minor"
+		# shellcheck disable=SC2016 # $want is jq's, bound by --arg
 		ig_filter='.stable and (.version | test("^" + ($want | gsub("\\."; "\\.")) + "(\\.[0-9]+)?$"))'
 	fi
 
@@ -484,12 +486,15 @@ install_skills() {
 		sed -n '1s#.*refs/tags/##p') || is_tag=
 	[ -n "$is_tag" ] || die "couldn't find a release tag in $SKILLS_URL"
 	if [ -d "$is_dir/.git" ]; then
+		# shellcheck disable=SC2016 # expands in the developer's shell
 		quietly dev_sh 'git -C "$1" fetch --quiet --tags --force origin && git -C "$1" checkout --quiet --force --detach "refs/tags/$2"' "$is_dir" "$is_tag"
 	else
+		# shellcheck disable=SC2016 # expands in the developer's shell
 		quietly dev_sh 'mkdir -p "$(dirname "$1")" && git -c advice.detachedHead=false clone --quiet --branch "$2" "$3.git" "$1"' "$is_dir" "$is_tag" "$SKILLS_URL"
 	fi
 	# Links into the checkout that this release no longer lists are
 	# dropped; a skill of the developer's own with the same name is kept.
+	# shellcheck disable=SC2016 # expands in the developer's shell
 	is_kept=$(dev_sh '
 		set -eu
 		dir=$1
@@ -512,6 +517,7 @@ install_skills() {
 	for is_path in $is_kept; do
 		warn "$is_path isn't a link to Matt Pocock's skills, so it's kept and that skill isn't linked"
 	done
+	# shellcheck disable=SC2016 # expands in the developer's shell
 	is_count=$(dev_sh 'find "$HOME/.claude/skills" -maxdepth 1 -type l -lname "$1/*" | wc -l' "$is_dir")
 	say "Matt Pocock's skills $is_tag: $is_count linked into $DEV_HOME/.claude/skills."
 	if dev_sh 'claude plugin list' 2>/dev/null | grep -q 'mattpocock-skills'; then
