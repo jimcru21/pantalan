@@ -24,12 +24,16 @@ func TestNoFirewallIsStoredAndKeptOnReRuns(t *testing.T) {
 		assertFirewallLine(t, r.Output(), "off (PANTALAN_FIREWALL=off)")
 		assertEnvFirewall(t, n, "off")
 
-		// A re-run without the flag keeps what's stored.
+		// A re-run without the flag keeps what's stored. The firewall is
+		// left alone, but a container published on every address still
+		// gets a warning: nothing on the Node filters it.
+		runPublishedContainer(t, n)
 		r = installer{}.run(t, n)
 		if r.Code != 0 {
 			t.Fatalf("re-run exited %d", r.Code)
 		}
 		assertFirewallLine(t, r.Output(), "off (PANTALAN_FIREWALL=off)")
+		assertPublishedWarning(t, r, "which Docker forwards ahead of any firewall on this Node")
 		assertInstalled(t, n, installed{
 			Version:       tag,
 			DashboardPort: 8443,
@@ -263,6 +267,9 @@ func TestAnotherFirewallManagerSkipsUfw(t *testing.T) {
 			t.Skip("this path runs on amd64 only")
 		}
 		n := substrate.Boot(t, d, DockerOK)
+		// Docker forwards it ahead of the other firewall too. Started
+		// first: a firewall coming up after it may flush Docker's rules.
+		runPublishedContainer(t, n)
 		var reason, open string
 		if strings.HasPrefix(d.Name, "debian") {
 			// The operator's own ruleset (the package's stock one, which
@@ -284,6 +291,7 @@ func TestAnotherFirewallManagerSkipsUfw(t *testing.T) {
 		}
 		s := parseSummary(t, r.Output())
 		assertFirewallLine(t, r.Output(), "skipped: "+reason+"; open 80, 443, 8443 in it")
+		assertPublishedWarning(t, r, "which Docker forwards ahead of any firewall on this Node")
 		if !strings.Contains(r.Output(), "warning: "+reason) {
 			t.Errorf("the installer didn't warn that %s", reason)
 		}

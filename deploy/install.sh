@@ -789,6 +789,7 @@ classify_firewall() {
 	if [ "$FIREWALL_MODE" = off ]; then
 		FW_ACTION=off
 		say "Firewall: off (PANTALAN_FIREWALL=off): left alone."
+		check_published_containers "which Docker forwards ahead of any firewall on this Node"
 		return 0
 	fi
 	FW_REASON=$(other_firewall_manager)
@@ -796,9 +797,10 @@ classify_firewall() {
 		# Two managers would fight over the same ruleset.
 		FW_ACTION=skip
 		warn "$FW_REASON, so Pantalan leaves ufw alone: open $(comma_list "80 443 $DASHBOARD_PORT") in it"
+		check_published_containers "which Docker forwards ahead of any firewall on this Node"
 		return 0
 	fi
-	check_published_containers
+	check_published_containers "which bypass ufw"
 	if ufw_active; then
 		# The operator's firewall: rules are added to it, and nothing of
 		# theirs (rules, policies) is touched.
@@ -869,16 +871,18 @@ ufw_active() {
 	command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active$'
 }
 
-# check_published_containers warns about running containers that publish
-# ports on every address: Docker forwards those itself, past ufw, so they
-# are reachable whatever ufw says. Pantalan's own apps publish on 127.0.0.1.
+# check_published_containers WHY warns about running containers that
+# publish ports on every address: Docker forwards those itself, ahead of
+# ufw or any other firewall, so they are reachable whatever it says. WHY
+# says so for the firewall at hand. Pantalan's own apps publish on
+# 127.0.0.1.
 check_published_containers() {
 	docker_responds || return 0
 	cp_published=$(docker ps --format '{{.Names}} ({{.Ports}})' | grep -E '(0\.0\.0\.0|\[::\]|:::):[0-9]' | paste -s -d ';' - | sed 's/;/; /g') || :
 	[ -n "$cp_published" ] || return 0
-	FW_WARNINGS="${FW_WARNINGS}these running containers publish ports on all addresses, which bypass ufw: $cp_published
+	FW_WARNINGS="${FW_WARNINGS}these running containers publish ports on all addresses, $1: $cp_published
 "
-	warn "these running containers publish ports on all addresses, which bypass ufw: $cp_published"
+	warn "these running containers publish ports on all addresses, $1: $cp_published"
 }
 
 # check_ufw_policy warns when an active ufw lets in what no rule allows.
