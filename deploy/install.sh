@@ -41,6 +41,7 @@ OPT_VERSION=
 OPT_UNINSTALL=
 OPT_PURGE=
 OPT_YES=
+OPT_NO_FIREWALL=
 
 # What the steps found out or decided.
 STEP=checks
@@ -58,6 +59,10 @@ ADMIN_USER=          # empty when an Admin already exists
 ADMIN_CREATED=
 ADMIN_PASSWORD=
 FINGERPRINT=
+FIREWALL_MODE=       # ufw or off, as stored in ENV_FILE (PANTALAN_FIREWALL)
+FW_ACTION=           # enable, add (ufw already active), stage, skip or off
+SSH_PORTS=           # the SSH ports found, space-separated
+FW_LINE=             # the summary's Firewall line
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -87,6 +92,7 @@ Options:
   --admin-user NAME     the Admin's username (asked for when there's a terminal)
   --dashboard-port N    the Dashboard's HTTPS port (default $DEFAULT_DASHBOARD_PORT)
   --version vX.Y.Z      install this release instead of $DEFAULT_VERSION
+  --no-firewall         leave the firewall alone, now and on every re-run
   --uninstall           remove the service and binary; keep data, config and apps
   --purge               remove everything --uninstall keeps too (asks you to type purge)
   --yes                 with --purge and no terminal: purge without asking
@@ -136,6 +142,13 @@ port_holder() {
 }
 
 docker_responds() { docker version --format '{{.Server.Version}}' >/dev/null 2>&1; }
+
+# env_setting KEY: KEY's value in ENV_FILE, empty when it or the file is
+# missing.
+env_setting() {
+	[ -r "$ENV_FILE" ] || return 0
+	sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1
+}
 
 # quietly CMD...: runs CMD with its (long) output going to the log only. When
 # it fails, its last lines are shown on the terminal too.
@@ -204,7 +217,7 @@ parse_args() {
 			[ -n "$pa_value" ] || die "$pa_flag needs a value"
 			shift
 			;;
-		--uninstall | --purge | --yes)
+		--uninstall | --purge | --yes | --no-firewall)
 			pa_flag=$1
 			shift
 			;;
@@ -221,6 +234,7 @@ parse_args() {
 		--uninstall) OPT_UNINSTALL=1 ;;
 		--purge) OPT_PURGE=1 ;;
 		--yes) OPT_YES=1 ;;
+		--no-firewall) OPT_NO_FIREWALL=1 ;;
 		esac
 	done
 	check_flag_combinations
@@ -233,7 +247,7 @@ check_flag_combinations() {
 		die "--yes is only valid with --purge (it confirms the purge when there's no terminal to type purge on)"
 	fi
 	[ -n "$OPT_UNINSTALL$OPT_PURGE" ] || return 0
-	for cf_pair in "--admin-user=$OPT_ADMIN_USER" "--dashboard-port=$OPT_DASHBOARD_PORT" "--version=$OPT_VERSION"; do
+	for cf_pair in "--admin-user=$OPT_ADMIN_USER" "--dashboard-port=$OPT_DASHBOARD_PORT" "--version=$OPT_VERSION" "--no-firewall=$OPT_NO_FIREWALL"; do
 		[ -z "${cf_pair#*=}" ] || die "${cf_pair%%=*} is for installing, and can't be used with --uninstall or --purge"
 	done
 }
@@ -267,6 +281,7 @@ preflight() {
 	check_port 80 "the app proxy needs it"
 	check_port 443 "Pantalan keeps it for app HTTPS"
 	check_port "$DASHBOARD_PORT" "the Dashboard needs it; choose another with --dashboard-port"
+	classify_firewall
 }
 
 check_os() {
@@ -430,7 +445,7 @@ admin_exists() {
 
 install_packages() {
 	ip_missing=
-	for ip_pkg in git ca-certificates; do
+	for ip_pkg in git ca-certificates $(firewall_package); do
 		pkg_installed "$ip_pkg" || ip_missing="$ip_missing $ip_pkg"
 	done
 	if [ -n "$ip_missing" ]; then
@@ -498,6 +513,7 @@ setup_files() {
 	install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR"
 	install -d -m 0750 -o root -g "$SERVICE_USER" "$CONFIG_DIR"
 	write_env_file
+	add_env_setting PANTALAN_FIREWALL "$FIREWALL_MODE"
 	chown "root:$SERVICE_USER" "$ENV_FILE"
 	chmod 0640 "$ENV_FILE"
 	# Replaced atomically: a rename within /usr/local/bin.
@@ -518,11 +534,22 @@ write_env_file() {
 #   sudo systemctl restart pantalan
 PANTALAN_ADMIN_TOKEN=$we_token
 PANTALAN_DASHBOARD_ADDR=:$DASHBOARD_PORT
+# Installer only (the service ignores it): ufw, or off to leave the firewall
+# alone. Every run of the installer converges to it.
+PANTALAN_FIREWALL=$FIREWALL_MODE
 EOF
 	)
 	chown "root:$SERVICE_USER" "$ENV_FILE.new"
 	mv -f "$ENV_FILE.new" "$ENV_FILE"
 	say "Wrote $ENV_FILE with a new Admin Token."
+}
+
+# add_env_setting KEY VALUE appends KEY to an env file written before KEY
+# existed (by an older installer); one that has it is left as it is.
+add_env_setting() {
+	grep -q "^$1=" "$ENV_FILE" && return 0
+	printf '%s=%s\n' "$1" "$2" >>"$ENV_FILE"
+	say "Added $1=$2 to $ENV_FILE."
 }
 
 # ---------------------------------------------------------------------------
@@ -608,6 +635,166 @@ wait_for_dashboard() {
 }
 
 # ---------------------------------------------------------------------------
+# Step 8: the firewall, last, once the service is up. Only SSH, 80, 443 and
+# the Dashboard port are let in, and enabling it must never lock the
+# operator out. Pantalan's rules carry the comment `pantalan` (80, 443, the
+# Dashboard port: made to match that set on every run) or `pantalan-ssh`
+# (only ever added, never removed). The installer never runs `ufw disable`
+# or `ufw reset`, never edits /etc/default/ufw and adds no DOCKER-USER rules.
+# Its read-only half (classify_firewall) runs in preflight.
+
+# classify_firewall works out the mode and what to do with this host's
+# firewall (FW_ACTION), and finds the SSH ports.
+classify_firewall() {
+	resolve_firewall_mode
+	if [ "$FIREWALL_MODE" = off ]; then
+		FW_ACTION=off
+		say "Firewall: off (PANTALAN_FIREWALL=off): left alone."
+		return 0
+	fi
+	detect_ssh_ports
+	FW_ACTION=enable
+}
+
+# resolve_firewall_mode: the stored PANTALAN_FIREWALL wins, and
+# --no-firewall sets it on the first install. A flag that disagrees with the
+# env file stops the install, as for the other settings.
+resolve_firewall_mode() {
+	rf_stored=$(env_setting PANTALAN_FIREWALL)
+	case $rf_stored in
+	'' | ufw | off) ;;
+	*) die "PANTALAN_FIREWALL=$rf_stored in $ENV_FILE must be ufw or off. Edit pantalan.env, then run this again." ;;
+	esac
+	if [ -n "$OPT_NO_FIREWALL" ] && [ "$rf_stored" = ufw ]; then
+		die "--no-firewall disagrees with PANTALAN_FIREWALL=ufw in $ENV_FILE. Nothing was changed. To leave the firewall alone from now on, edit pantalan.env: set PANTALAN_FIREWALL=off, then run this again without --no-firewall."
+	fi
+	FIREWALL_MODE=$rf_stored
+	if [ -z "$FIREWALL_MODE" ]; then
+		FIREWALL_MODE=ufw
+		[ -z "$OPT_NO_FIREWALL" ] || FIREWALL_MODE=off
+	fi
+}
+
+# firewall_package: the firewall package the install needs, if any.
+firewall_package() {
+	case $FW_ACTION in
+	enable | add | stage) printf 'ufw\n' ;;
+	esac
+}
+
+# detect_ssh_ports sets SSH_PORTS to the union of every source that knows
+# an SSH port, since any one of them can be wrong: what sshd and ssh.socket
+# listen on (an ssh.socket.d override can differ from sshd's config), the
+# port lines of `sshd -T`, and the port this session came in on (sudo drops
+# SSH_CONNECTION, so the session's sshd is found among the ancestors).
+detect_ssh_ports() {
+	ds_listening=$(port_set "$(sshd_listening_ports)")
+	ds_config=$(port_set "$(sshd_config_ports)")
+	ds_session=$(session_ssh_port)
+	SSH_PORTS=$(port_set "$ds_listening $ds_config $ds_session")
+	say "SSH: ports ${SSH_PORTS:-none found} (listening: ${ds_listening:-none}; sshd -T: ${ds_config:-none}; this session: ${ds_session:-not over SSH})."
+}
+
+# port_of ADDR: the port of ss's or systemd's ADDR:PORT (or a bare PORT).
+port_of() {
+	printf '%s\n' "${1##*:}"
+}
+
+# port_set PORTS...: the ports (separated by spaces or newlines), sorted,
+# each once, on one line.
+port_set() {
+	printf '%s\n' "$*" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -n -u | tr '\n' ' ' | sed 's/ $//'
+}
+
+sshd_listening_ports() {
+	{
+		ss -Hltnp 2>/dev/null | awk '/\("sshd",/ { print $4 }'
+		if systemctl is-active --quiet ssh.socket 2>/dev/null; then
+			systemctl show --property Listen --value ssh.socket | awk '$2 == "(Stream)" { print $1 }'
+		fi
+	} | while read -r sl_addr; do port_of "$sl_addr"; done
+}
+
+sshd_config_ports() {
+	sc_sshd=$(command -v sshd 2>/dev/null) || sc_sshd=/usr/sbin/sshd
+	[ -x "$sc_sshd" ] || return 0
+	"$sc_sshd" -T 2>/dev/null | awk '$1 == "port" { print $2 }'
+}
+
+# session_ssh_port: the local port of the SSH connection this script runs
+# under, if any.
+session_ssh_port() {
+	if [ -n "${SSH_CONNECTION:-}" ]; then
+		# shellcheck disable=SC2086 # client-ip client-port server-ip server-port
+		set -- $SSH_CONNECTION
+		[ $# -lt 4 ] || {
+			printf '%s\n' "$4"
+			return 0
+		}
+	fi
+	ss_pid=$$
+	while [ "${ss_pid:-0}" -gt 1 ]; do
+		case $(cat "/proc/$ss_pid/comm" 2>/dev/null) in
+		sshd | sshd-session)
+			ss_addr=$(ss -Htnp 2>/dev/null | awk -v p="pid=$ss_pid," '$1 == "ESTAB" && index($0, p) { print $4; exit }')
+			if [ -n "$ss_addr" ]; then
+				port_of "$ss_addr"
+				return 0
+			fi
+			;;
+		esac
+		ss_pid=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$ss_pid/status" 2>/dev/null)
+	done
+}
+
+# comma_list WORD...: "a, b, c".
+comma_list() {
+	printf '%s\n' "$*" | sed 's/ /, /g'
+}
+
+# ufw_rules COMMENT: the ports `ufw allow PORT/tcp comment COMMENT` rules
+# exist for, one per line.
+ufw_rules() {
+	ufw show added | sed -n "s|^ufw allow \([0-9]*\)/tcp comment '$1'\$|\1|p"
+}
+
+# ufw_has_rule PORT: is there a rule for exactly PORT/tcp, whatever its
+# comment? Adding ours on top of an operator's would only rewrite their
+# comment (ufw treats the comment as part of no rule's identity).
+ufw_has_rule() {
+	ufw show added | grep -Eq "^ufw allow $1/tcp( comment '.*')?\$"
+}
+
+configure_firewall() {
+	if [ "$FW_ACTION" = off ]; then
+		FW_LINE="off (PANTALAN_FIREWALL=off)"
+		say "Firewall: $FW_LINE"
+		return 0
+	fi
+	cf_targets="80 443 $DASHBOARD_PORT"
+	for cf_port in $cf_targets; do
+		ufw_has_rule "$cf_port" || quietly ufw allow "$cf_port/tcp" comment pantalan
+	done
+	for cf_port in $SSH_PORTS; do
+		ufw_has_rule "$cf_port" || quietly ufw allow "$cf_port/tcp" comment pantalan-ssh
+	done
+	quietly ufw --force enable
+	confirm_ufw_active "$cf_targets $SSH_PORTS"
+	FW_LINE="ufw enabled: allows SSH $(comma_list "$SSH_PORTS"), $(comma_list "$cf_targets")"
+	say "Firewall: $FW_LINE"
+}
+
+# confirm_ufw_active PORTS: ufw reports itself active, with each of PORTS
+# allowed.
+confirm_ufw_active() {
+	ca_status=$(ufw status)
+	printf '%s\n' "$ca_status" | grep -q '^Status: active$' || die "ufw didn't come up: \`ufw status\` says $(printf '%s\n' "$ca_status" | head -n 1)"
+	for ca_port in $1; do
+		printf '%s\n' "$ca_status" | grep -q "^$ca_port/tcp " || die "ufw is active but \`ufw status\` doesn't show $ca_port/tcp allowed"
+	done
+}
+
+# ---------------------------------------------------------------------------
 # Step 9: the summary.
 
 # default_ip: the IPv4 address of the interface the default route uses.
@@ -641,6 +828,7 @@ print_summary() {
 	fi
 	say "  Admin Token     in $ENV_FILE (PANTALAN_ADMIN_TOKEN)"
 	say "  Lost password   sudo pantalan admin reset-password"
+	say "  Firewall        $FW_LINE"
 	say ""
 	say "  Cloud security groups are outside this server's firewall: open 80, 443 and $DASHBOARD_PORT there too."
 	say "  Install log: $LOG_FILE"
@@ -804,7 +992,8 @@ main() {
 	ensure_admin
 	step "Starting the service"
 	start_service
-	# The firewall goes here: last, once the service is confirmed up.
+	step "Configuring the firewall"
+	configure_firewall
 
 	STEP="Printing the summary"
 	stop_log

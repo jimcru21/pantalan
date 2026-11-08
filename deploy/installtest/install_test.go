@@ -26,6 +26,7 @@ func TestFreshInstallFromBareWithNoTTY(t *testing.T) {
 		if s.Admin != "alice" {
 			t.Errorf("the summary's Admin is %q, want alice", s.Admin)
 		}
+		assertFirewallLine(t, r.Output(), "ufw enabled: allows SSH 22, 80, 443, 8443")
 		if !strings.Contains(r.Output(), "Behind NAT?") {
 			t.Errorf("the summary doesn't flag the private address %s with Behind NAT?", n.Addr())
 		}

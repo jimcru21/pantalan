@@ -142,6 +142,7 @@ var summaryLines = map[string]*regexp.Regexp{
 	"fingerprint":    regexp.MustCompile(`(?m)^  Fingerprint +(SHA256:[0-9A-F:]+)\b`),
 	"admin":          regexp.MustCompile(`(?m)^  Admin +([a-z][a-z0-9._-]*)$`),
 	"admin password": regexp.MustCompile(`(?m)^  Admin password +([A-Z2-7]{26})\b`),
+	"firewall":       regexp.MustCompile(`(?m)^  Firewall +(.+)$`),
 }
 
 // parseSummary reads the summary out of the installer's output, failing the
@@ -171,6 +172,14 @@ func parseKeptAdminSummary(t *testing.T, out string) summary {
 		Version:      summaryField(t, out, "version"),
 		DashboardURL: summaryField(t, out, "dashboard"),
 		Fingerprint:  summaryField(t, out, "fingerprint"),
+	}
+}
+
+// assertFirewallLine fails unless the summary's Firewall line is want.
+func assertFirewallLine(t *testing.T, out, want string) {
+	t.Helper()
+	if got := summaryField(t, out, "firewall"); got != want {
+		t.Errorf("the summary's Firewall line is\n  %s\nwant\n  %s", got, want)
 	}
 }
 
