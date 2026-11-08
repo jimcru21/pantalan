@@ -467,7 +467,7 @@ func TestAFailingHostReadTurnsTheDotAmberRatherThanShowStaleData(t *testing.T) {
 	fp.sample(b)
 
 	m := statusDot.FindStringSubmatch(b.fragment("/fragments/topbar").body)
-	if m == nil || m[1] != "warn" || !strings.Contains(html.UnescapeString(m[2]), "Can't read the host") {
+	if m == nil || m[1] != "warn" || !strings.Contains(html.UnescapeString(m[2]), "Can't read the Node") {
 		t.Errorf("status dot after a failed read = %q, want amber with a can't-read reason", m)
 	}
 }

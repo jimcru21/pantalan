@@ -70,7 +70,7 @@ func (s *status) warn(reason string) {
 func hostStatus(s nodeinfo.Sample, readErr error, disks []nodeinfo.Disk) status {
 	st := status{Level: "ok"}
 	if readErr != nil {
-		st.warn("Can't read the host, so this is older data: " + readErr.Error())
+		st.warn("Can't read the Node, so this is older data: " + readErr.Error())
 	}
 	for _, disk := range disks {
 		if underTenth(disk.Free, disk.Total) {
@@ -234,7 +234,7 @@ func (d *Dashboard) overviewData(r *http.Request) (any, error) {
 
 func (d *Dashboard) overview(r *http.Request, n node) overviewData {
 	data := overviewData{Top: topBar{
-		Status: status{Level: "off", Reasons: []string{"No host information yet"}},
+		Status: status{Level: "off", Reasons: []string{"No Node information yet"}},
 		IP:     localIP(r),
 		Arch:   runtime.GOARCH,
 	}}

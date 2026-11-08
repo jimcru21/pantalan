@@ -37,11 +37,11 @@ the Dashboard port, run the installer again (without the flag) instead of
 restarting, so its firewall rule moves too.
 
 Running the command is the consent: there's no "continue?" prompt. The
-installer first checks the host without changing anything (root, the
+installer first checks this Node without changing anything (root, the
 distro and architecture, systemd, Docker, and that ports 80, 443 and the
 Dashboard port are free), then downloads the release binary and verifies it
 against the release's `SHA256SUMS`, and checks the Admin username with it.
-Only then does it change the host:
+Only then does it change the Node:
 
 - installs `git` and `ca-certificates`, and Docker CE from Docker's apt
   repository when no Docker is installed (with `"live-restore": true`, so
@@ -94,9 +94,9 @@ throttled). SSH ports are everything sshd and `ssh.socket` listen on,
 every `Port` in `sshd -T` and the port your session came in on, all
 allowed before ufw is enabled, so enabling it doesn't lock you out. It
 never runs `ufw disable` or `ufw reset`, never edits `/etc/default/ufw` and
-adds no `DOCKER-USER` rules. What it does depends on the host:
+adds no `DOCKER-USER` rules. What it does depends on the Node:
 
-| Host | What happens |
+| Node | What happens |
 |---|---|
 | ufw inactive | Rules added, ufw enabled. A re-run enables it again if you disabled it by hand. |
 | ufw already active | Rules added only. Your rules and default policies are left as they are (a rule of yours for the same port stands in for Pantalan's); a default incoming policy other than deny or reject gets a warning. |

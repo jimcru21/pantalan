@@ -525,7 +525,7 @@ download_release() {
 		die "checksum mismatch for $dr_asset: the download is corrupt or was tampered with. Nothing was installed."
 	chmod 0755 "$TMP_DIR/$dr_asset"
 	NEW_BIN=$TMP_DIR/$dr_asset
-	dr_reports=$("$NEW_BIN" version) || die "the downloaded $dr_asset doesn't run on this host"
+	dr_reports=$("$NEW_BIN" version) || die "the downloaded $dr_asset doesn't run on this Node"
 	[ "$dr_reports" = "$VERSION" ] || die "the downloaded $dr_asset says it is $dr_reports, not $VERSION"
 	say "Verified $dr_asset against SHA256SUMS."
 }
@@ -825,7 +825,7 @@ stage_reason() {
 		printf '%s\n' "MANAGE_BUILTINS=yes in /etc/default/ufw"
 	elif [ "$(ufw_default IPV6)" = no ] && [ -n "$(ip -6 addr show scope global 2>/dev/null)" ]; then
 		# An SSH session over IPv6 would drop as soon as ufw came up.
-		printf '%s\n' "IPV6=no in /etc/default/ufw on a host with a global IPv6 address"
+		printf '%s\n' "IPV6=no in /etc/default/ufw on a Node with a global IPv6 address"
 	elif docker_nftables; then
 		printf '%s\n' "Docker uses its nftables firewall backend"
 	elif [ -z "$SSH_PORTS" ]; then
@@ -1170,7 +1170,7 @@ print_summary() {
 # and git are never removed: other things on the server may use them.
 
 remove_pantalan() {
-	step "Checking this host"
+	step "Checking this Node"
 	check_systemd
 	[ -z "$OPT_PURGE" ] || purge_preflight
 	step "Removing the service"
@@ -1336,7 +1336,7 @@ main() {
 		return 0
 	fi
 
-	step "Checking this host"
+	step "Checking this Node"
 	preflight
 	step "Downloading Pantalan $VERSION"
 	download_release
