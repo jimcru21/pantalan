@@ -220,7 +220,10 @@ host (`classify_firewall`: mode from `PANTALAN_FIREWALL`, other firewall
 managers, an active ufw, risks that make it stage rather than enable, and
 the SSH ports as a union of sources) and `configure_firewall` reconciles
 the `pantalan`-commented rules and adds `pantalan-ssh` ones. Nothing on the
-host changes before the packages step; each step converges, so a re-run
+host changes before the packages step: collecting inputs asks the
+downloaded binary's `admin show` whether an Admin exists, and `show` opens
+the database read-only (`sqlite.OpenReadOnly`: no migration, no snapshot).
+Each step converges, so a re-run
 resumes, repairs or upgrades. Preflight's `compare_installed_version` puts
 the target against the installed `pantalan version` with `sort -V`: newer
 is an upgrade (the summary opens with `Upgraded vA → vB`), the same a

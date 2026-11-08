@@ -24,8 +24,8 @@ curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install
 
 | Flag | |
 |---|---|
-| `--admin-user NAME` | The Admin's username. Asked for on the terminal when missing; with no terminal, the install stops and names the flag. |
-| `--dashboard-port N` | The Dashboard's HTTPS port, default `8443`. Ports below 1024 (80 and 443 among them) and the ports SSH listens on are refused. When the default is taken and the flag wasn't given, the installer names what holds it and asks on the terminal, suggesting the next free port; with no terminal, it stops and names the flag. It never picks a port by itself. |
+| `--admin-user NAME` | The Admin's username. Asked for on the terminal when missing; with no terminal, the install stops and names the flag. When an Admin already exists it is kept, and a differing `--admin-user` is ignored with a warning saying so. |
+| `--dashboard-port N` | The Dashboard's HTTPS port, default `8443`. Ports below 1024 (80 and 443 among them), the ports SSH listens on and the app proxy's port (`PANTALAN_PROXY_ADDR` in the env file, `80` when unset) are refused. When the default is taken and the flag wasn't given, the installer names what holds it and asks on the terminal, suggesting the next free port; with no terminal, it stops and names the flag. It never picks a port by itself. |
 | `--version vX.Y.Z` | Install that release instead of the one the script came with. |
 | `--no-firewall` | Leave the firewall entirely alone, on this run and every re-run (stored as `PANTALAN_FIREWALL=off`). |
 
@@ -114,7 +114,9 @@ Two things are outside ufw's reach:
   of ufw, so a container published on `0.0.0.0` (Docker's default) is
   reachable from anywhere whatever ufw says. Pantalan's own app containers
   publish on `127.0.0.1` only; the summary warns about any running
-  container that doesn't.
+  container that doesn't, whatever the firewall mode (Docker forwards those
+  ports ahead of firewalld or an nftables ruleset too, and with
+  `--no-firewall` nothing filters them).
 - **Cloud security groups are separate.** A provider's firewall in front of
   the server knows nothing of ufw: open 80, 443 and the Dashboard port
   there too.
@@ -376,7 +378,7 @@ one. Run these on the server:
 
 ```sh
 sudo pantalan admin create --username alice   # prints the password; refuses if an Admin exists
-sudo pantalan admin show                      # prints the username; exits 3 when there is no Admin
+sudo pantalan admin show                      # prints the username; exits 3 when there is no Admin; only reads
 sudo pantalan admin reset-password            # prints a new password
 ```
 
