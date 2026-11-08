@@ -5,7 +5,104 @@ Dokploy and Tugport. It ships as one Go binary that runs next to Docker.
 
 See [docs/architecture.md](docs/architecture.md) for the design.
 
-## Requirements
+## Install
+
+On a fresh Debian 12, Debian 13, Ubuntu 24.04 LTS or Ubuntu 26.04 LTS
+server (amd64 or arm64), as a user who can `sudo`:
+
+```sh
+curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh
+```
+
+Flags go after `sh -s --`, for example for cloud-init or CI, where there's no
+terminal to ask on:
+
+```sh
+curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh \
+  | sudo sh -s -- --admin-user alice --dashboard-port 8443
+```
+
+| Flag | |
+|---|---|
+| `--admin-user NAME` | The Admin's username. Asked for on the terminal when missing; with no terminal, the install stops and names the flag. |
+| `--dashboard-port N` | The Dashboard's HTTPS port, default `8443`. |
+| `--version vX.Y.Z` | Install that release instead of the one the script came with. |
+
+Running the command is the consent: there's no "continue?" prompt. The
+installer first checks the host without changing anything (root, the
+distro and architecture, systemd, Docker, and that ports 80, 443 and the
+Dashboard port are free), then downloads the release binary and verifies it
+against the release's `SHA256SUMS`, and checks the Admin username with it.
+Only then does it change the host:
+
+- installs `git` and `ca-certificates`, and Docker CE from Docker's apt
+  repository when no Docker is installed (with `"live-restore": true`, so
+  app containers survive Docker upgrades). An existing Docker CE 28 or newer
+  is used as it is and never upgraded; any other Docker (`docker.io`,
+  `podman-docker`, snap, Docker CE older than 28) stops the install, and
+  nothing is removed.
+- creates the `pantalan` system user (no login shell, in the `docker`
+  group) and these files:
+
+  | Path | Owner, mode | |
+  |---|---|---|
+  | `/usr/local/bin/pantalan` | root, `0755` | the binary, replaced atomically |
+  | `/etc/pantalan/pantalan.env` | root:pantalan, `0640` | settings, including a generated Admin Token |
+  | `/var/lib/pantalan/` | pantalan, `0750` | the database, `tls/`, `builds/` |
+  | `/etc/systemd/system/pantalan.service` | root, `0644` | owned by the installer and rewritten on every run: put your changes in `pantalan.service.d/` |
+  | `/var/log/pantalan-install.log` | root, `0600` | the install's full output, minus the Admin password |
+
+- creates the Admin with a generated password, starts the service and waits
+  for it to answer on HTTPS (printing the service's last 50 log lines if it
+  doesn't).
+
+It ends with a summary: the version, the Dashboard URL, the certificate
+fingerprint to compare with your browser's warning, the Admin and the
+one-time Admin password, where the Admin Token is, and how to recover a lost
+password. The Admin Token is never printed. The password is shown only on
+the terminal and kept out of the install log, but an install with no
+terminal (cloud-init, CI) leaves it in that tool's own log: run
+`sudo pantalan admin reset-password` afterwards if that matters. Cloud
+security groups are outside the server: open 80, 443 and the Dashboard port
+there too.
+
+If a step fails, the installer names it and the log; fix the cause and run
+the same command again.
+
+**The `docker` group is effectively root.** The service runs as `pantalan`
+in a hardened unit (`ProtectSystem=strict`, `NoNewPrivileges`, only
+`CAP_NET_BIND_SERVICE`), but anything that can talk to Docker can get root
+on the host, so that hardening is defence in depth, not a boundary.
+
+### Uninstall and purge
+
+```sh
+curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh -s -- --uninstall
+```
+
+`--uninstall` stops and disables the service and removes its unit and
+`/usr/local/bin/pantalan`. It keeps everything else and lists what it kept:
+`/etc/pantalan/` (settings and the Admin Token), `/var/lib/pantalan/` (the
+database, TLS certificate and builds), your `pantalan.service.d/` drop-ins,
+the app containers (`label=pantalan.app`, which listen only on loopback),
+the `pantalan/*` images and the `pantalan` user. Running the install command
+again brings it all back as it was: the same Admin and password, Admin
+Token, certificate and apps, with no `--admin-user` needed.
+
+```sh
+curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh -s -- --purge
+```
+
+`--purge` does what `--uninstall` does and also deletes what it keeps: the
+drop-ins, `/etc/pantalan/`, `/var/lib/pantalan/`, the app containers, the
+`pantalan/*` images and the `pantalan` user. There's no undo, so it asks you
+to type `purge` on the terminal. With no terminal it refuses unless you add
+`--yes` (`--purge --yes`); `--yes` is accepted only with `--purge`.
+
+Neither ever removes Docker, ufw or git, which other things on the server may
+use. The install log, `/var/log/pantalan-install.log`, stays too.
+
+## Requirements for building from source
 
 - Go 1.26+
 - Docker
@@ -16,6 +113,19 @@ See [docs/architecture.md](docs/architecture.md) for the design.
 ```sh
 make run      # Dashboard + API on https://localhost:8443, app proxy on :8080
 make check    # vet + race tests + gofmt
+```
+
+### Test the installer
+
+`deploy/installtest` runs `deploy/install.sh` end to end in privileged
+systemd containers, one fresh container per path, against a fake release
+built from your working tree. It needs Docker and network access to the
+distro and Docker apt repositories, and takes a minute or two per distro.
+
+```sh
+make shellcheck                                 # lint the script (needs shellcheck)
+make installtest                                # all four distros, on this machine's arch
+INSTALLTEST_DISTROS=debian-12 make installtest  # one distro
 ```
 
 ## Try it
@@ -123,6 +233,10 @@ renamed.
 
 ## Configuration
 
+The service reads `PANTALAN_*` environment variables. An installed Node
+keeps them in `/etc/pantalan/pantalan.env`; after editing it, run
+`sudo systemctl restart pantalan`.
+
 | Variable | Default | |
 |---|---|---|
 | `PANTALAN_ADMIN_TOKEN` | *(required)* | Bearer token for `/api` |
@@ -136,6 +250,8 @@ renamed.
 
 ```
 cmd/pantalan/            entrypoint + wiring
+deploy/install.sh       the installer (a release asset)
+deploy/installtest/     installer harness (build tag installtest)
 internal/domain/        entities and rules
 internal/service/       use cases + port interfaces
 internal/httpapi/       REST API, webhooks, middleware

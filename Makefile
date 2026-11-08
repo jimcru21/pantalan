@@ -1,6 +1,6 @@
 BIN := bin/pantalan
 
-.PHONY: build run test vet fmt check
+.PHONY: build run test vet fmt check shellcheck installtest
 
 build:
 	go build -o $(BIN) ./cmd/pantalan
@@ -20,9 +20,19 @@ test:
 
 vet:
 	go vet ./...
+	go vet -tags installtest ./deploy/installtest/
 
 fmt:
 	gofmt -w .
 
 check: vet test
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:"; gofmt -l .; exit 1)
+
+shellcheck:
+	shellcheck deploy/install.sh
+
+# The installer harness: boots privileged systemd containers (needs Docker)
+# and runs deploy/install.sh in them. INSTALLTEST_DISTROS=debian-12 picks
+# one distro; see deploy/installtest/doc.go.
+installtest:
+	go test -tags installtest -count=1 -v -timeout 30m ./deploy/installtest/

@@ -1,0 +1,135 @@
+//go:build installtest
+
+package installtest
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestFreshInstallFromBareWithNoTTY(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, Bare)
+
+		r := installer{}.run(t, n, "--admin-user", "alice")
+		if r.Code != 0 {
+			t.Fatalf("install exited %d", r.Code)
+		}
+		s := parseSummary(t, r.Output())
+		if s.Version != tag {
+			t.Errorf("the summary says %s, want %s", s.Version, tag)
+		}
+		if want := "https://" + n.Addr() + ":8443"; s.DashboardURL != want {
+			t.Errorf("the summary's Dashboard is %s, want the default-route address %s", s.DashboardURL, want)
+		}
+		if s.Admin != "alice" {
+			t.Errorf("the summary's Admin is %q, want alice", s.Admin)
+		}
+		if !strings.Contains(r.Output(), "Behind NAT?") {
+			t.Errorf("the summary doesn't flag the private address %s with Behind NAT?", n.Addr())
+		}
+		assertInstalled(t, n, installed{
+			Version:       tag,
+			DashboardPort: 8443,
+			Fingerprint:   s.Fingerprint,
+			AdminUser:     "alice",
+			AdminPassword: s.AdminPassword,
+		})
+
+		log := sh(t, n, "cat /var/log/pantalan-install.log")
+		if strings.Contains(log, s.AdminPassword) {
+			t.Errorf("the install log contains the Admin password")
+		}
+		if !strings.Contains(log, "Admin password: shown on screen only") {
+			t.Errorf("the install log doesn't say the Admin password was shown on screen only")
+		}
+		token := adminTokenLine.FindStringSubmatch(sh(t, n, "cat /etc/pantalan/pantalan.env"))
+		if token != nil && (strings.Contains(r.Output(), token[1]) || strings.Contains(log, token[1])) {
+			t.Errorf("the Admin Token was printed")
+		}
+		if got := sh(t, n, "cat /etc/docker/daemon.json"); !strings.Contains(strings.ReplaceAll(got, " ", ""), `"live-restore":true`) {
+			t.Errorf("the Docker it installed has daemon.json %q, want live-restore on", got)
+		}
+		sh(t, n, "command -v git && dpkg-query -W ca-certificates")
+	})
+}
+
+func TestFreshInstallKeepsAnAcceptableDocker(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, DockerOK)
+		dockerBefore := sh(t, n, "dpkg-query -W docker-ce; ls /etc/docker 2>&1")
+
+		r := installer{}.run(t, n, "--admin-user", "alice")
+		if r.Code != 0 {
+			t.Fatalf("install exited %d", r.Code)
+		}
+		s := parseSummary(t, r.Output())
+		assertInstalled(t, n, installed{
+			Version:       tag,
+			DashboardPort: 8443,
+			Fingerprint:   s.Fingerprint,
+			AdminUser:     "alice",
+			AdminPassword: s.AdminPassword,
+		})
+		if after := sh(t, n, "dpkg-query -W docker-ce; ls /etc/docker 2>&1"); after != dockerBefore {
+			t.Errorf("the installer changed the existing Docker:\nbefore: %s\nafter:  %s", dockerBefore, after)
+		}
+	})
+}
+
+func TestRefusesWithoutRootBeforeAnyChange(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, Bare)
+		before := hostState(t, n)
+
+		r := installer{asUser: "65534:65534"}.run(t, n, "--admin-user", "alice")
+
+		assertFailedNaming(t, r, "root", "| sudo sh -s -- --admin-user alice")
+		assertUntouched(t, n, before)
+		if got := n.Run(t, Cmd{Script: "test -e /var/log/pantalan-install.log"}); got.Code == 0 {
+			t.Errorf("a refused run left an install log")
+		}
+	})
+}
+
+func TestMissingAdminUserWithNoTTYNamesTheFlag(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, Bare)
+		before := hostState(t, n)
+
+		r := installer{}.run(t, n)
+
+		assertFailedNaming(t, r, "--admin-user")
+		assertUntouched(t, n, before)
+	})
+}
+
+func TestInvalidUsernameFailsBeforeAnyChange(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, Bare)
+		before := hostState(t, n)
+
+		r := installer{}.run(t, n, "--admin-user", "9lives")
+
+		assertFailedNaming(t, r, "9lives", "start with a letter")
+		assertUntouched(t, n, before)
+	})
+}
+
+func TestChecksumMismatchAbortsBeforeInstallingAnything(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, Bare)
+		before := hostState(t, n)
+
+		r := installer{origin: corruptOrigin}.run(t, n, "--admin-user", "alice")
+
+		assertFailedNaming(t, r, "checksum", "pantalan_"+tag+"_linux_"+nodeArch)
+		assertUntouched(t, n, before)
+	})
+}
