@@ -11,7 +11,7 @@ run:
 	PANTALAN_WEBHOOK_SECRET=dev \
 	PANTALAN_PROXY_ADDR=:8080 \
 	PANTALAN_DATA_DIR=./data \
-	go run ./cmd/pantalan
+	go run ./cmd/pantalan serve
 
 test:
 	go test -race ./...
