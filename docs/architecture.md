@@ -228,14 +228,18 @@ The page:
 `deploy/install.sh` is a POSIX `sh` script (`set -eu`, ShellCheck-clean,
 run by dash on the supported distros) shipped as a release asset, with
 `DEFAULT_VERSION=@VERSION@` replaced by the tag at release time. Every
-function is defined before `main "$@"`, the last line, and `main` runs one
-function per step: preflight (read-only), download and verify, collect
+function is defined before the line that runs `main`, the last, and `main`
+runs one function per step: preflight (read-only), download and verify, collect
 inputs, packages, files, Admin, service, firewall, then the summary. The
 firewall comes last, once the service answers: preflight classifies the
 host (`classify_firewall`: mode from `PANTALAN_FIREWALL`, other firewall
 managers, an active ufw, risks that make it stage rather than enable, and
 the SSH ports as a union of sources) and `configure_firewall` reconciles
-the `pantalan`-commented rules and adds `pantalan-ssh` ones. Nothing on the
+the `pantalan`-commented rules and adds `pantalan-ssh` ones: `plan_firewall`
+works out the changes and the summary's Firewall line, `apply_firewall`
+runs `ufw`. Each step is split into probe, decide and apply: the probes
+are the only functions preflight's decisions ask the host with, and the
+fixed host paths they read are prefixed with `HOST_ROOT`. Nothing on the
 host changes before the packages step: collecting inputs asks the
 downloaded binary's `admin show` whether an Admin exists, and `show` opens
 the database read-only (`sqlite.OpenReadOnly`: no migration, no snapshot).
@@ -249,7 +253,9 @@ and the Dashboard port when the default can't be used); with no tty the
 run stops and names the flag, so nothing is ever picked silently. Output
 goes through `tee` into `/var/log/pantalan-install.log` except the Admin
 password, which is printed after the log is closed.
-`PANTALAN_RELEASE_BASE_URL` (test-only) points downloads at a fake release.
+`PANTALAN_RELEASE_BASE_URL` (test-only) points downloads at a fake release,
+and `PANTALAN_INSTALL_NO_MAIN` (test-only) makes sourcing the script define
+its functions and run nothing.
 
 `--uninstall` and `--purge` take a separate, shorter path through `main`
 (`remove_pantalan`): `--uninstall` removes only what an install puts back
@@ -259,6 +265,12 @@ drop-ins, app containers, `pantalan/*` images and the user, after `purge` is
 typed at `/dev/tty` or `--yes` is given. Both delete the `pantalan` ufw
 rules and keep the `pantalan-ssh` ones. Docker, ufw and git are never
 removed.
+
+The decisions have unit tests with no build tag, run by `make check`
+(`deploy/installtest/install_unit_test.go`): the test sources the script
+in dash with `PANTALAN_INSTALL_NO_MAIN` set, replaces the probes with stubs
+and points `HOST_ROOT` at a temp dir, then calls one decision and checks
+its output and exit status.
 
 `deploy/installtest` (build tag `installtest`) tests it end to end: Go tests
 drive a `Substrate` that boots a fresh Node per path, run the script as

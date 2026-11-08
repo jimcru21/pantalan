@@ -10,9 +10,14 @@
 # download happens before the first change to the host, and every step
 # converges, so re-running after a failure resumes.
 #
-# Layout of this file: settings, then small helpers, then one function per
-# step in the order main runs them. All logic is in functions and `main "$@"`
-# is the last line, so a download cut off part-way runs nothing.
+# Layout of this file: settings, then small helpers, then the probes, then
+# one function per step in the order main runs them. Each step is split
+# into probe, decide and apply: the probes are the only functions that
+# preflight's decisions ask the host with, the decisions read what the
+# probes report and change nothing, and only the apply half of a step
+# changes the host. All
+# logic is in functions and the line that runs main is the last, so a
+# download cut off part-way runs nothing.
 set -eu
 
 # The release this script installs by default. release.yml replaces the
@@ -35,6 +40,11 @@ LOG_FILE=/var/log/pantalan-install.log
 SERVICE_USER=pantalan
 DEFAULT_DASHBOARD_PORT=8443
 MIN_DOCKER_MAJOR=28
+
+# Test-only: prefixed to every fixed host path preflight reads, so the
+# installer's unit test (deploy/installtest) can source this file and point
+# them at a temp dir. The steps that change the host never use it.
+HOST_ROOT=
 
 # Flags, as given.
 OPT_ADMIN_USER=
@@ -66,6 +76,10 @@ FINGERPRINT=
 FIREWALL_MODE=       # ufw or off, as stored in ENV_FILE (PANTALAN_FIREWALL)
 FW_ACTION=           # enable, add (ufw already active), stage, skip or off
 SSH_PORTS=           # the SSH ports found, space-separated
+FW_TARGETS=          # the ports Pantalan's own ufw rules allow: 80, 443, the Dashboard's
+FW_ADD=              # the ports apply_firewall allows with comment pantalan
+FW_ADD_SSH=          # the SSH ports it allows with comment pantalan-ssh
+FW_REMOVE=           # the ports whose pantalan rules it deletes
 FW_LINE=             # the summary's Firewall line
 FW_WARNINGS=         # lines the summary repeats under it
 FW_REASON=           # why ufw is staged rather than enabled, or skipped
@@ -110,18 +124,11 @@ Options:
 EOF
 }
 
-# have_tty: is there a terminal to prompt on?
-have_tty() { (exec 0</dev/tty) 2>/dev/null; }
-
 # ask PROMPT: prints the line typed at the terminal.
 ask() {
 	printf '%s' "$1" >/dev/tty
 	IFS= read -r ask_answer </dev/tty || ask_answer=
 	printf '%s\n' "$ask_answer"
-}
-
-pkg_installed() {
-	dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null | grep -q '^ii'
 }
 
 is_release_tag() {
@@ -156,28 +163,6 @@ run_again() {
 	fi
 }
 
-# os_field KEY: a value from /etc/os-release, unquoted.
-os_field() {
-	sed -n "s/^$1=//p" /etc/os-release | sed 's/^"\(.*\)"$/\1/' | head -n 1
-}
-
-# port_holder PORT: the name of the process listening on TCP PORT, if any.
-port_holder() {
-	ph_lines=$(ss -Hltnp "sport = :$1" 2>/dev/null) || ph_lines=
-	[ -n "$ph_lines" ] || return 0
-	ph_name=$(printf '%s\n' "$ph_lines" | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | head -n 1)
-	printf '%s\n' "${ph_name:-an unknown process}"
-}
-
-docker_responds() { docker version --format '{{.Server.Version}}' >/dev/null 2>&1; }
-
-# env_setting KEY: KEY's value in ENV_FILE, empty when it or the file is
-# missing.
-env_setting() {
-	[ -r "$ENV_FILE" ] || return 0
-	sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1
-}
-
 # quietly CMD...: runs CMD with its (long) output going to the log only. When
 # it fails, its last lines are shown on the terminal too.
 quietly() {
@@ -188,6 +173,167 @@ quietly() {
 		tail -n 25 "$TMP_DIR/quietly.out" >&4
 		die "$* failed (exit $q_code)"
 	fi
+}
+
+# ---------------------------------------------------------------------------
+# Probes: what the host is like. Each only reports a fact, and changes and
+# decides nothing; the files they read (/etc and the installed Pantalan's)
+# are read under HOST_ROOT. The decisions in the steps below learn about
+# the host only through these, so a test that sources this file can
+# replace them.
+
+# have_tty: is there a terminal to prompt on?
+have_tty() { (exec 0</dev/tty) 2>/dev/null; }
+
+pkg_installed() {
+	dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null | grep -q '^ii'
+}
+
+# dpkg_arch: dpkg's architecture name for this host.
+dpkg_arch() { dpkg --print-architecture; }
+
+# pkg_version PKG: the installed version of PKG.
+pkg_version() { dpkg-query -W -f='${Version}' "$1"; }
+
+# os_field KEY: a value from /etc/os-release, unquoted.
+os_field() {
+	sed -n "s/^$1=//p" "$HOST_ROOT/etc/os-release" | sed 's/^"\(.*\)"$/\1/' | head -n 1
+}
+
+# port_holder PORT: the name of the process listening on TCP PORT, if any.
+port_holder() {
+	ph_lines=$(ss -Hltnp "sport = :$1" 2>/dev/null) || ph_lines=
+	[ -n "$ph_lines" ] || return 0
+	ph_name=$(printf '%s\n' "$ph_lines" | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | head -n 1)
+	printf '%s\n' "${ph_name:-an unknown process}"
+}
+
+# listening_tcp: every listening TCP socket, as `ss -Hltnp` prints them.
+listening_tcp() { ss -Hltnp 2>/dev/null; }
+
+# env_setting KEY: KEY's value in ENV_FILE, empty when it or the file is
+# missing.
+env_setting() {
+	[ -r "$HOST_ROOT$ENV_FILE" ] || return 0
+	sed -n "s/^$1=//p" "$HOST_ROOT$ENV_FILE" | tail -n 1
+}
+
+# installed_version: what the installed binary says its version is, or
+# that it fails to run. It fails when no binary is installed.
+installed_version() {
+	[ -x "$HOST_ROOT$BIN" ] || return 1
+	iv_version=$("$HOST_ROOT$BIN" version 2>/dev/null) || iv_version="nothing: it fails to run"
+	printf '%s\n' "$iv_version"
+}
+
+# db_snapshots: the names of the pantalan.db.bak-* snapshots in DATA_DIR,
+# one per line.
+db_snapshots() {
+	for ds_path in "$HOST_ROOT$DATA_DIR"/pantalan.db.bak-*; do
+		[ ! -e "$ds_path" ] || printf '%s\n' "${ds_path##*/}"
+	done
+}
+
+docker_responds() { docker version --format '{{.Server.Version}}' >/dev/null 2>&1; }
+
+# snap_docker: is there a docker from the snap?
+snap_docker() { [ -e "$HOST_ROOT/snap/bin/docker" ]; }
+
+# docker_firewall_backend: the firewall backend the running Docker uses.
+docker_firewall_backend() {
+	docker info --format '{{with .FirewallBackend}}{{.Driver}}{{end}}' 2>/dev/null
+}
+
+# docker_daemon_config: /etc/docker/daemon.json, empty when there is none.
+docker_daemon_config() { cat "$HOST_ROOT/etc/docker/daemon.json" 2>/dev/null || :; }
+
+# running_containers: each running container as "NAME (PORTS)", one per
+# line.
+running_containers() { docker ps --format '{{.Names}} ({{.Ports}})'; }
+
+# unit_active UNIT: is systemd's UNIT active?
+unit_active() { systemctl is-active --quiet "$1" 2>/dev/null; }
+
+# unit_enabled UNIT: is systemd's UNIT enabled?
+unit_enabled() { systemctl is-enabled --quiet "$1" 2>/dev/null; }
+
+# nftables_conf_is_stock: is /etc/nftables.conf the one the nftables
+# package shipped?
+nftables_conf_is_stock() {
+	ns_shipped=$(dpkg-query -W -f='${Conffiles}\n' nftables 2>/dev/null | awk '$1 == "/etc/nftables.conf" { print $2 }')
+	[ -n "$ns_shipped" ] && [ "$(md5sum <"$HOST_ROOT/etc/nftables.conf" 2>/dev/null | cut -d ' ' -f 1)" = "$ns_shipped" ]
+}
+
+# ufw_default KEY: KEY's value in /etc/default/ufw (left from an earlier
+# ufw, or the operator's), unquoted; empty before ufw is installed.
+ufw_default() {
+	[ -r "$HOST_ROOT/etc/default/ufw" ] || return 0
+	sed -n "s/^$1=//p" "$HOST_ROOT/etc/default/ufw" | tr -d '"' | tail -n 1
+}
+
+ufw_active() {
+	command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active$'
+}
+
+# ufw_incoming_policy: an active ufw's default incoming policy (deny,
+# reject or allow).
+ufw_incoming_policy() {
+	ufw status verbose | sed -n 's/^Default: \([a-z]*\) (incoming).*/\1/p'
+}
+
+# ufw_show_added: ufw's rules, as `ufw show added` prints them.
+ufw_show_added() { ufw show added; }
+
+# global_ipv6: this host's global IPv6 addresses, as `ip -6 addr` prints
+# them; empty when it has none.
+global_ipv6() { ip -6 addr show scope global 2>/dev/null; }
+
+# ssh_socket_listens: what an active ssh.socket listens on, as systemd's
+# Listen property says it ("ADDR (Stream)" lines).
+ssh_socket_listens() {
+	unit_active ssh.socket || return 0
+	systemctl show --property Listen --value ssh.socket
+}
+
+# sshd_test_config: sshd's effective config, as `sshd -T` prints it; empty
+# with no sshd installed.
+sshd_test_config() {
+	st_sshd=$(command -v sshd 2>/dev/null) || st_sshd=/usr/sbin/sshd
+	[ -x "$st_sshd" ] || return 0
+	# sshd -T refuses to run without /run/sshd, which only exists while
+	# ssh.service runs: socket-activated SSH has none until the first login.
+	# A private mount namespace provides one without touching the host.
+	# shellcheck disable=SC2016 # $0 expands in the inner shell
+	"$st_sshd" -T 2>/dev/null ||
+		[ -d /run/sshd ] ||
+		unshare --mount --propagation private \
+			sh -c 'mount -t tmpfs tmpfs /run && mkdir /run/sshd && exec "$0" -T' "$st_sshd" 2>/dev/null
+}
+
+# session_ssh_port: the local port of the SSH connection this script runs
+# under, if any.
+session_ssh_port() {
+	if [ -n "${SSH_CONNECTION:-}" ]; then
+		# shellcheck disable=SC2086 # client-ip client-port server-ip server-port
+		set -- $SSH_CONNECTION
+		[ $# -lt 4 ] || {
+			printf '%s\n' "$4"
+			return 0
+		}
+	fi
+	ss_pid=$$
+	while [ "${ss_pid:-0}" -gt 1 ]; do
+		case $(cat "/proc/$ss_pid/comm" 2>/dev/null) in
+		sshd | sshd-session)
+			ss_addr=$(ss -Htnp 2>/dev/null | awk -v p="pid=$ss_pid," '$1 == "ESTAB" && index($0, p) { print $4; exit }')
+			if [ -n "$ss_addr" ]; then
+				port_of "$ss_addr"
+				return 0
+			fi
+			;;
+		esac
+		ss_pid=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$ss_pid/status" 2>/dev/null)
+	done
 }
 
 # ---------------------------------------------------------------------------
@@ -312,7 +458,7 @@ preflight() {
 }
 
 check_os() {
-	[ -r /etc/os-release ] || die "can't read /etc/os-release, so this isn't a supported distro (Debian 12 or 13, Ubuntu 24.04 or 26.04 LTS)"
+	[ -r "$HOST_ROOT/etc/os-release" ] || die "can't read /etc/os-release, so this isn't a supported distro (Debian 12 or 13, Ubuntu 24.04 or 26.04 LTS)"
 	OS_ID=$(os_field ID)
 	OS_NAME=$(os_field PRETTY_NAME)
 	OS_CODENAME=$(os_field UBUNTU_CODENAME)
@@ -324,7 +470,7 @@ check_os() {
 }
 
 check_arch() {
-	ARCH=$(dpkg --print-architecture)
+	ARCH=$(dpkg_arch)
 	case $ARCH in
 	amd64 | arm64) ;;
 	*) die "the $ARCH architecture isn't supported. Pantalan supports amd64 and arm64." ;;
@@ -332,7 +478,7 @@ check_arch() {
 }
 
 check_systemd() {
-	[ -d /run/systemd/system ] || die "systemd isn't running as PID 1. Pantalan runs as a systemd service."
+	[ -d "$HOST_ROOT/run/systemd/system" ] || die "systemd isn't running as PID 1. Pantalan runs as a systemd service."
 }
 
 check_tools() {
@@ -356,8 +502,7 @@ resolve_version() {
 # doesn't know. With no binary installed (a first install, or after
 # --uninstall) there is nothing to compare.
 compare_installed_version() {
-	[ -x "$BIN" ] || return 0
-	cv_installed=$("$BIN" version 2>/dev/null) || cv_installed="nothing: it fails to run"
+	cv_installed=$(installed_version) || return 0
 	if ! is_release_tag "$cv_installed"; then
 		warn "the installed $BIN reports $cv_installed, not a release version; replacing it with $VERSION"
 		return 0
@@ -379,10 +524,7 @@ compare_installed_version() {
 # snapshot. Each migration snapshots the database first as
 # pantalan.db.bak-<schema version>; the binary refuses a newer schema.
 refuse_downgrade() {
-	rd_snapshots=
-	for rd_path in "$DATA_DIR"/pantalan.db.bak-*; do
-		[ ! -e "$rd_path" ] || rd_snapshots="${rd_snapshots:+$rd_snapshots, }${rd_path##*/}"
-	done
+	rd_snapshots=$(db_snapshots | paste -s -d ',' - | sed 's/,/, /g')
 	{
 		say "pantalan-install: Pantalan $1 is installed, and $VERSION is older. Nothing was changed."
 		say "The installer doesn't downgrade: $1 may have moved pantalan.db to a schema $VERSION doesn't know."
@@ -493,7 +635,7 @@ next_dashboard_port() {
 # anything else is the operator's to sort out, and nothing is removed.
 classify_docker() {
 	if pkg_installed docker-ce; then
-		cd_version=$(dpkg-query -W -f='${Version}' docker-ce)
+		cd_version=$(pkg_version docker-ce)
 		cd_major=${cd_version#*:}
 		cd_major=${cd_major%%.*}
 		case $cd_major in
@@ -512,7 +654,7 @@ classify_docker() {
 			die "$cd_pkg is installed. Pantalan needs Docker CE from Docker's apt repository ($MIN_DOCKER_MAJOR or newer) and never removes a Docker for you. Migrate off $cd_pkg (https://docs.docker.com/engine/install/$OS_ID/), then run this again."
 		fi
 	done
-	if [ -e /snap/bin/docker ] || docker_responds; then
+	if snap_docker || docker_responds; then
 		die "a Docker that isn't Docker CE from Docker's apt repository is installed (snap, or installed by hand). Pantalan never removes a Docker for you. Replace it with Docker CE $MIN_DOCKER_MAJOR or newer (https://docs.docker.com/engine/install/$OS_ID/), then run this again."
 	fi
 	DOCKER_STATE=missing
@@ -802,7 +944,8 @@ wait_for_dashboard() {
 # Dashboard port: made to match that set on every run) or `pantalan-ssh`
 # (only ever added, never removed). The installer never runs `ufw disable`
 # or `ufw reset`, never edits /etc/default/ufw and adds no DOCKER-USER rules.
-# Its read-only half (classify_firewall) runs in preflight.
+# Its read-only half (classify_firewall) runs in preflight; here,
+# plan_firewall works out the changes and apply_firewall makes them.
 
 # classify_firewall works out the mode and what to do with this host's
 # firewall (FW_ACTION). The SSH ports are already found: the Dashboard port
@@ -846,7 +989,7 @@ stage_reason() {
 	if [ "$(ufw_default MANAGE_BUILTINS)" = yes ]; then
 		# Enabling would flush the built-in chains, Docker's rules with them.
 		printf '%s\n' "MANAGE_BUILTINS=yes in /etc/default/ufw"
-	elif [ "$(ufw_default IPV6)" = no ] && [ -n "$(ip -6 addr show scope global 2>/dev/null)" ]; then
+	elif [ "$(ufw_default IPV6)" = no ] && [ -n "$(global_ipv6)" ]; then
 		# An SSH session over IPv6 would drop as soon as ufw came up.
 		printf '%s\n' "IPV6=no in /etc/default/ufw on a Node with a global IPv6 address"
 	elif docker_nftables; then
@@ -856,19 +999,12 @@ stage_reason() {
 	fi
 }
 
-# ufw_default KEY: KEY's value in /etc/default/ufw (left from an earlier
-# ufw, or the operator's), unquoted; empty before ufw is installed.
-ufw_default() {
-	[ -r /etc/default/ufw ] || return 0
-	sed -n "s/^$1=//p" /etc/default/ufw | tr -d '"' | tail -n 1
-}
-
 # docker_nftables: is Docker set up for its own nftables backend, which
 # has no DOCKER-USER chain and isn't tested alongside ufw?
 docker_nftables() {
-	grep -Eq '"firewall-backend"[[:space:]]*:[[:space:]]*"nftables"' /etc/docker/daemon.json 2>/dev/null && return 0
+	docker_daemon_config | grep -Eq '"firewall-backend"[[:space:]]*:[[:space:]]*"nftables"' && return 0
 	docker_responds || return 1
-	[ "$(docker info --format '{{with .FirewallBackend}}{{.Driver}}{{end}}' 2>/dev/null)" = nftables ]
+	[ "$(docker_firewall_backend)" = nftables ]
 }
 
 # other_firewall_manager: what other than ufw manages this host's firewall,
@@ -876,22 +1012,11 @@ docker_nftables() {
 # operator's: Docker CE pulls in the nftables package, which on Debian and
 # Ubuntu enables the service with its stock accept-everything ruleset.
 other_firewall_manager() {
-	if systemctl is-active --quiet firewalld.service 2>/dev/null; then
+	if unit_active firewalld.service; then
 		printf '%s\n' "firewalld is active"
-	elif systemctl is-enabled --quiet nftables.service 2>/dev/null && ! nftables_conf_is_stock; then
+	elif unit_enabled nftables.service && ! nftables_conf_is_stock; then
 		printf '%s\n' "nftables.service is enabled with its own ruleset"
 	fi
-}
-
-# nftables_conf_is_stock: is /etc/nftables.conf the one the nftables
-# package shipped?
-nftables_conf_is_stock() {
-	ns_shipped=$(dpkg-query -W -f='${Conffiles}\n' nftables 2>/dev/null | awk '$1 == "/etc/nftables.conf" { print $2 }')
-	[ -n "$ns_shipped" ] && [ "$(md5sum </etc/nftables.conf 2>/dev/null | cut -d ' ' -f 1)" = "$ns_shipped" ]
-}
-
-ufw_active() {
-	command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active$'
 }
 
 # check_published_containers WHY warns about running containers that
@@ -901,7 +1026,7 @@ ufw_active() {
 # 127.0.0.1.
 check_published_containers() {
 	docker_responds || return 0
-	cp_published=$(docker ps --format '{{.Names}} ({{.Ports}})' | grep -E '(0\.0\.0\.0|\[::\]|:::):[0-9]' | paste -s -d ';' - | sed 's/;/; /g') || :
+	cp_published=$(running_containers | grep -E '(0\.0\.0\.0|\[::\]|:::):[0-9]' | paste -s -d ';' - | sed 's/;/; /g') || :
 	[ -n "$cp_published" ] || return 0
 	FW_WARNINGS="${FW_WARNINGS}these running containers publish ports on all addresses, $1: $cp_published
 "
@@ -910,7 +1035,7 @@ check_published_containers() {
 
 # check_ufw_policy warns when an active ufw lets in what no rule allows.
 check_ufw_policy() {
-	cu_policy=$(ufw status verbose | sed -n 's/^Default: \([a-z]*\) (incoming).*/\1/p')
+	cu_policy=$(ufw_incoming_policy)
 	case $cu_policy in
 	deny | reject) ;;
 	*)
@@ -971,54 +1096,17 @@ port_set() {
 	printf '%s\n' "$*" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -n -u | tr '\n' ' ' | sed 's/ $//'
 }
 
+# sshd_listening_ports: the ports sshd, or ssh.socket for it, listens on.
 sshd_listening_ports() {
 	{
-		ss -Hltnp 2>/dev/null | awk '/\("sshd",/ { print $4 }'
-		if systemctl is-active --quiet ssh.socket 2>/dev/null; then
-			systemctl show --property Listen --value ssh.socket | awk '$2 == "(Stream)" { print $1 }'
-		fi
+		listening_tcp | awk '/\("sshd",/ { print $4 }'
+		ssh_socket_listens | awk '$2 == "(Stream)" { print $1 }'
 	} | while read -r sl_addr; do port_of "$sl_addr"; done
 }
 
+# sshd_config_ports: the ports sshd's config says it listens on.
 sshd_config_ports() {
-	sc_sshd=$(command -v sshd 2>/dev/null) || sc_sshd=/usr/sbin/sshd
-	[ -x "$sc_sshd" ] || return 0
-	# sshd -T refuses to run without /run/sshd, which only exists while
-	# ssh.service runs: socket-activated SSH has none until the first login.
-	# A private mount namespace provides one without touching the host.
-	# shellcheck disable=SC2016 # $0 expands in the inner shell
-	{
-		"$sc_sshd" -T 2>/dev/null ||
-			[ -d /run/sshd ] ||
-			unshare --mount --propagation private \
-				sh -c 'mount -t tmpfs tmpfs /run && mkdir /run/sshd && exec "$0" -T' "$sc_sshd" 2>/dev/null
-	} | awk '$1 == "port" { print $2 }'
-}
-
-# session_ssh_port: the local port of the SSH connection this script runs
-# under, if any.
-session_ssh_port() {
-	if [ -n "${SSH_CONNECTION:-}" ]; then
-		# shellcheck disable=SC2086 # client-ip client-port server-ip server-port
-		set -- $SSH_CONNECTION
-		[ $# -lt 4 ] || {
-			printf '%s\n' "$4"
-			return 0
-		}
-	fi
-	ss_pid=$$
-	while [ "${ss_pid:-0}" -gt 1 ]; do
-		case $(cat "/proc/$ss_pid/comm" 2>/dev/null) in
-		sshd | sshd-session)
-			ss_addr=$(ss -Htnp 2>/dev/null | awk -v p="pid=$ss_pid," '$1 == "ESTAB" && index($0, p) { print $4; exit }')
-			if [ -n "$ss_addr" ]; then
-				port_of "$ss_addr"
-				return 0
-			fi
-			;;
-		esac
-		ss_pid=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$ss_pid/status" 2>/dev/null)
-	done
+	sshd_test_config | awk '$1 == "port" { print $2 }'
 }
 
 # comma_list PORTS...: "a, b, c", sorted.
@@ -1026,96 +1114,125 @@ comma_list() {
 	port_set "$*" | sed 's/ /, /g'
 }
 
-# ufw_rules COMMENT: the ports `ufw allow PORT/tcp comment COMMENT` rules
-# exist for, one per line.
+# rule_ports COMMENT: of the rules on stdin, as `ufw show added` prints
+# them, the ports `ufw allow PORT/tcp comment COMMENT` rules exist for, one
+# per line.
+rule_ports() {
+	sed -n "s|^ufw allow \([0-9]*\)/tcp comment '$1'\$|\1|p"
+}
+
+# ufw_rules COMMENT: rule_ports COMMENT of ufw's rules.
 ufw_rules() {
-	ufw show added | sed -n "s|^ufw allow \([0-9]*\)/tcp comment '$1'\$|\1|p"
+	ufw_show_added | rule_ports "$1"
 }
 
-# ufw_has_rule PORT: is there a rule for exactly PORT/tcp, whatever its
-# comment? Adding ours on top of an operator's would only rewrite their
-# comment (ufw treats the comment as part of no rule's identity).
-ufw_has_rule() {
-	ufw show added | grep -Eq "^ufw allow $1/tcp( comment '.*')?\$"
+# has_rule PORT RULES: is there among RULES (as `ufw show added` prints
+# them) a rule for exactly PORT/tcp, whatever its comment? Adding ours on
+# top of an operator's would only rewrite their comment (ufw treats the
+# comment as part of no rule's identity).
+has_rule() {
+	printf '%s\n' "$2" | grep -Eq "^ufw allow $1/tcp( comment '.*')?\$"
 }
 
+# configure_firewall makes this host's firewall what FW_ACTION says.
 configure_firewall() {
-	cf_targets=$(port_set "80 443 $DASHBOARD_PORT")
+	plan_firewall
+	apply_firewall
+	say "Firewall: $FW_LINE"
+}
+
+# plan_firewall works out, from ufw's rules, the changes apply_firewall
+# makes (FW_TARGETS, FW_ADD, FW_ADD_SSH, FW_REMOVE) and the summary's
+# FW_LINE. It changes nothing.
+plan_firewall() {
+	FW_TARGETS=$(port_set "80 443 $DASHBOARD_PORT")
+	FW_ADD=
+	FW_ADD_SSH=
+	FW_REMOVE=
 	case $FW_ACTION in
 	off | skip)
 		FW_LINE="off (PANTALAN_FIREWALL=off)"
-		[ "$FW_ACTION" = off ] || FW_LINE="skipped: $FW_REASON; open $(comma_list "$cf_targets") in it"
-		say "Firewall: $FW_LINE"
+		[ "$FW_ACTION" = off ] || FW_LINE="skipped: $FW_REASON; open $(comma_list "$FW_TARGETS") in it"
 		return 0
 		;;
 	esac
+	pf_rules=$(ufw_show_added) || pf_rules=
 	# Rules from an earlier run make this an upgrade or repair, whose
 	# summary says what changed.
-	cf_ours=$(port_set "$(ufw_rules pantalan)")
-	cf_had=$(port_set "$cf_ours $(ufw_rules pantalan-ssh)")
-	cf_added=
-	cf_taken=
-	cf_removed=
-	cf_ssh_added=
-	# Added before anything is removed or enabled, so no moment is missing
-	# a port.
-	for cf_port in $cf_targets; do
-		if in_list "$cf_port" "$cf_ours"; then
+	pf_ours=$(port_set "$(printf '%s\n' "$pf_rules" | rule_ports pantalan)")
+	pf_had=$(port_set "$pf_ours $(printf '%s\n' "$pf_rules" | rule_ports pantalan-ssh)")
+	pf_taken=
+	for pf_port in $FW_TARGETS; do
+		if in_list "$pf_port" "$pf_ours"; then
 			continue
-		elif ufw_has_rule "$cf_port"; then
-			cf_taken="$cf_taken $cf_port"
+		elif has_rule "$pf_port" "$pf_rules"; then
+			pf_taken="$pf_taken $pf_port"
 		else
-			quietly ufw allow "$cf_port/tcp" comment pantalan
-			cf_added="$cf_added $cf_port"
+			FW_ADD="$FW_ADD $pf_port"
 		fi
 	done
-	for cf_port in $SSH_PORTS; do
-		ufw_has_rule "$cf_port" && continue
-		quietly ufw allow "$cf_port/tcp" comment pantalan-ssh
-		cf_ssh_added="$cf_ssh_added $cf_port"
+	for pf_port in $SSH_PORTS; do
+		# An SSH port among the targets gets the pantalan rule only.
+		in_list "$pf_port" "$FW_ADD" && continue
+		has_rule "$pf_port" "$pf_rules" && continue
+		FW_ADD_SSH="$FW_ADD_SSH $pf_port"
 	done
-	for cf_port in $cf_ours; do
-		in_list "$cf_port" "$cf_targets" && continue
-		quietly ufw --force delete allow "$cf_port/tcp"
-		cf_removed="$cf_removed $cf_port"
+	for pf_port in $pf_ours; do
+		in_list "$pf_port" "$FW_TARGETS" && continue
+		FW_REMOVE="$FW_REMOVE $pf_port"
+	done
+
+	pf_allows="${SSH_PORTS:+SSH $(comma_list "$SSH_PORTS"), }$(comma_list "$FW_TARGETS")"
+	pf_added_text=$(comma_list "$FW_ADD")
+	if [ -n "$FW_ADD_SSH" ]; then
+		pf_added_text="${pf_added_text:+$pf_added_text and }SSH $(comma_list "$FW_ADD_SSH")"
+	fi
+	pf_change="${pf_added_text:+added $pf_added_text}"
+	if [ -n "$FW_REMOVE" ]; then
+		pf_change="${pf_change:+$pf_change, }removed $(comma_list "$FW_REMOVE")"
+	fi
+	case $FW_ACTION:${pf_had:+had} in
+	enable:) FW_LINE="ufw enabled: allows $pf_allows" ;;
+	enable:had) FW_LINE="ufw enabled: allows $pf_allows; ${pf_change:-unchanged}" ;;
+	add:had) FW_LINE="ufw active: allows $pf_allows; ${pf_change:-unchanged}" ;;
+	stage:*) FW_LINE="ufw NOT enabled ($FW_REASON): rules are staged${pf_had:+ (${pf_change:-unchanged})}; check SSH, then run: ufw --force enable" ;;
+	add:)
+		if [ -z "$pf_added_text" ]; then
+			FW_LINE="ufw already active: your rules already allow $pf_allows, and are unchanged"
+		else
+			case $(port_set "$pf_taken") in
+			*" "*) pf_set=were ;;
+			*) pf_set=was ;;
+			esac
+			FW_LINE="ufw already active: added $pf_added_text${pf_taken:+ ($(comma_list "$pf_taken") $pf_set already allowed)}; your existing rules are unchanged"
+		fi
+		;;
+	esac
+}
+
+# apply_firewall makes the changes plan_firewall worked out, and enables
+# ufw when FW_ACTION says to.
+apply_firewall() {
+	# Added before anything is removed or enabled, so no moment is missing
+	# a port.
+	for af_port in $FW_ADD; do
+		quietly ufw allow "$af_port/tcp" comment pantalan
+	done
+	for af_port in $FW_ADD_SSH; do
+		quietly ufw allow "$af_port/tcp" comment pantalan-ssh
+	done
+	for af_port in $FW_REMOVE; do
+		quietly ufw --force delete allow "$af_port/tcp"
 	done
 	case $FW_ACTION in
 	enable)
 		# --force: without it ufw asks y/n on stdin, which under curl | sh
 		# is the script.
 		quietly ufw --force enable
-		confirm_ufw_active "$cf_targets $SSH_PORTS"
+		confirm_ufw_active "$FW_TARGETS $SSH_PORTS"
 		;;
-	add) confirm_ufw_active "$cf_targets $SSH_PORTS" ;;
+	add) confirm_ufw_active "$FW_TARGETS $SSH_PORTS" ;;
 	esac
-
-	cf_allows="${SSH_PORTS:+SSH $(comma_list "$SSH_PORTS"), }$(comma_list "$cf_targets")"
-	cf_added_text=$(comma_list "$cf_added")
-	if [ -n "$cf_ssh_added" ]; then
-		cf_added_text="${cf_added_text:+$cf_added_text and }SSH $(comma_list "$cf_ssh_added")"
-	fi
-	cf_change="${cf_added_text:+added $cf_added_text}"
-	if [ -n "$cf_removed" ]; then
-		cf_change="${cf_change:+$cf_change, }removed $(comma_list "$cf_removed")"
-	fi
-	case $FW_ACTION:${cf_had:+had} in
-	enable:) FW_LINE="ufw enabled: allows $cf_allows" ;;
-	enable:had) FW_LINE="ufw enabled: allows $cf_allows; ${cf_change:-unchanged}" ;;
-	add:had) FW_LINE="ufw active: allows $cf_allows; ${cf_change:-unchanged}" ;;
-	stage:*) FW_LINE="ufw NOT enabled ($FW_REASON): rules are staged${cf_had:+ (${cf_change:-unchanged})}; check SSH, then run: ufw --force enable" ;;
-	add:)
-		if [ -z "$cf_added_text" ]; then
-			FW_LINE="ufw already active: your rules already allow $cf_allows, and are unchanged"
-		else
-			case $(port_set "$cf_taken") in
-			*" "*) cf_set=were ;;
-			*) cf_set=was ;;
-			esac
-			FW_LINE="ufw already active: added $cf_added_text${cf_taken:+ ($(comma_list "$cf_taken") $cf_set already allowed)}; your existing rules are unchanged"
-		fi
-		;;
-	esac
-	say "Firewall: $FW_LINE"
 }
 
 # in_list WORD LIST: is WORD one of LIST's space-separated words?
@@ -1243,7 +1360,7 @@ remove_firewall_rules() {
 		# shellcheck disable=SC2086 # the rule's words, as ufw printed them
 		quietly ufw --force delete $rr_rule
 	done <<EOF
-$(ufw show added | sed -n "s/^ufw \(.*\) comment 'pantalan'\$/\1/p")
+$(ufw_show_added | sed -n "s/^ufw \(.*\) comment 'pantalan'\$/\1/p")
 EOF
 	[ -z "$rr_ports" ] || say "Removed ufw's pantalan rules for $(comma_list "$rr_ports")."
 	FW_KEPT_SSH=$(port_set "$(ufw_rules pantalan-ssh)")
@@ -1382,4 +1499,6 @@ main() {
 	print_summary ": shown on screen only" >>"$LOG_FILE"
 }
 
-main "$@"
+# Test-only: the unit test sources this file with PANTALAN_INSTALL_NO_MAIN set,
+# to call its functions without running it.
+[ -n "${PANTALAN_INSTALL_NO_MAIN:-}" ] || main "$@"
