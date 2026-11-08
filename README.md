@@ -38,7 +38,8 @@ restarting, so its firewall rule moves too.
 
 Running the command is the consent: there's no "continue?" prompt. The
 installer first checks this Node without changing anything (root, the
-distro and architecture, systemd, Docker, and that ports 80, 443 and the
+distro and architecture, systemd, Docker, and that the app proxy's port
+(80, unless `PANTALAN_PROXY_ADDR` in the env file moves it), 443 and the
 Dashboard port are free), then downloads the release binary and verifies it
 against the release's `SHA256SUMS`, and checks the Admin username with it.
 Only then does it change the Node:

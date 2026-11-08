@@ -283,10 +283,10 @@ preflight() {
 	resolve_version
 	compare_installed_version
 	classify_docker
-	check_port 80 "the app proxy needs it"
+	check_port "$(proxy_port)" "the app proxy needs it"
 	check_port 443 "Pantalan keeps it for app HTTPS"
 	detect_ssh_ports
-	# After the refusals, so a host that can't be used at all is refused
+	# After the refusals, so a Node that can't be used at all is refused
 	# before anything is asked.
 	resolve_dashboard_port
 	classify_firewall

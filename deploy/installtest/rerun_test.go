@@ -184,6 +184,25 @@ func TestAnUnusableDashboardPortInTheEnvFileStopsTheReRun(t *testing.T) {
 	})
 }
 
+// The port preflight needs free for the app proxy is the one the env file
+// gives it, not always 80: a re-run after the operator moved the proxy to
+// a port something else holds stops before any change.
+func TestAProxyPortInTheEnvFileMustBeFree(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, DockerOK)
+		installAs(t, n, "alice")
+		occupy(t, n, 8081)
+		sh(t, n, `echo PANTALAN_PROXY_ADDR=:8081 >> /etc/pantalan/pantalan.env`)
+		before := hostState(t, n)
+
+		r := installer{}.run(t, n)
+
+		assertFailedNaming(t, r, "port 8081 is in use by perl, and the app proxy needs it")
+		assertUntouched(t, n, before)
+	})
+}
+
 // needNewerRelease skips paths that need N+1 when only one release is
 // served (INSTALLTEST_RELEASE_DIR).
 func needNewerRelease(t *testing.T) {
