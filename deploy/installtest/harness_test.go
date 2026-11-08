@@ -83,10 +83,14 @@ func selectedDistros(t *testing.T) []string {
 }
 
 // installer is one run of install.sh, the way an operator runs it:
-// `curl -fsSL <release>/install.sh | sudo sh -s -- <flags>`, with no terminal.
+// `curl -fsSL <release>/install.sh | sudo sh -s -- <flags>`, with no
+// terminal unless typed is set.
 type installer struct {
 	origin string // which fake release origin to download from; empty means good
 	asUser string // run as this uid:gid instead of root, e.g. 65534:65534
+	// typed runs it at a terminal (script(1)'s pty) where the operator has
+	// typed these lines in advance; prompts read them in order.
+	typed []string
 }
 
 // run runs the installer on n with flags and returns how it ended. The
@@ -105,10 +109,17 @@ func (in installer) run(t *testing.T, n Node, flags ...string) Result {
 	}
 	script := fmt.Sprintf(`curl -fsSL %s | %s -s --%s`,
 		shellQuote(base+"/"+tag+"/install.sh"), shell, quoteAll(flags))
+	var stdin string
+	if in.typed != nil {
+		// stdout and stderr both arrive on stdout, through the pty.
+		script = "script --quiet --return --command " + shellQuote(script) + " /dev/null"
+		stdin = strings.Join(in.typed, "\n") + "\n"
+	}
 	start := time.Now()
 	r := n.Run(t, Cmd{
 		Script:  script,
 		Env:     []string{"PANTALAN_RELEASE_BASE_URL=" + base},
+		Stdin:   stdin,
 		Timeout: 12 * time.Minute,
 	})
 	t.Logf("install.sh %s exited %d after %s:\n%s", strings.Join(flags, " "), r.Code,
@@ -137,20 +148,39 @@ var summaryLines = map[string]*regexp.Regexp{
 // test when a line is missing.
 func parseSummary(t *testing.T, out string) summary {
 	t.Helper()
-	field := func(name string) string {
-		m := summaryLines[name].FindStringSubmatch(out)
-		if m == nil {
-			t.Fatalf("the install summary has no %s line:\n%s", name, out)
+	return summary{
+		Version:       summaryField(t, out, "version"),
+		DashboardURL:  summaryField(t, out, "dashboard"),
+		Fingerprint:   summaryField(t, out, "fingerprint"),
+		Admin:         summaryField(t, out, "admin"),
+		AdminPassword: summaryField(t, out, "admin password"),
+	}
+}
+
+// parseKeptAdminSummary reads the summary of a run that found an Admin
+// already there: it has no Admin or password lines, and fails the test if
+// it does.
+func parseKeptAdminSummary(t *testing.T, out string) summary {
+	t.Helper()
+	for _, name := range []string{"admin", "admin password"} {
+		if summaryLines[name].MatchString(out) {
+			t.Errorf("the summary has an %s line, but the Admin was already there:\n%s", name, out)
 		}
-		return m[1]
 	}
 	return summary{
-		Version:       field("version"),
-		DashboardURL:  field("dashboard"),
-		Fingerprint:   field("fingerprint"),
-		Admin:         field("admin"),
-		AdminPassword: field("admin password"),
+		Version:      summaryField(t, out, "version"),
+		DashboardURL: summaryField(t, out, "dashboard"),
+		Fingerprint:  summaryField(t, out, "fingerprint"),
 	}
+}
+
+func summaryField(t *testing.T, out, name string) string {
+	t.Helper()
+	m := summaryLines[name].FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("the install summary has no %s line:\n%s", name, out)
+	}
+	return m[1]
 }
 
 func quoteAll(args []string) string {
