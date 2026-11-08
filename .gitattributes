@@ -3,3 +3,7 @@
 
 # Vendored, minified third-party code (see web/static/vendor).
 web/static/vendor/** linguist-vendored
+
+# Shell scripts run in Linux containers (dev/entrypoint.sh) and on Nodes:
+# keep them LF even in a Windows checkout with core.autocrlf.
+*.sh text eol=lf
