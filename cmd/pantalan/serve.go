@@ -76,7 +76,17 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 	cert := certs.Current()
 	log.Info("tls certificate", "fingerprint", cert.Fingerprint(), "expires", cert.Leaf().NotAfter, "generated", generated)
 
-	auth := service.NewAuthService(store, store, password.Hasher{}, node.now)
+	var hasher service.PasswordHasher = password.Hasher{}
+	if node.Hasher != nil {
+		hasher = node.Hasher
+	}
+	auth := service.NewAuthService(service.AuthDeps{
+		Admins:   store,
+		Sessions: store,
+		Hasher:   hasher,
+		Now:      node.now,
+		After:    node.HashSlotWait,
+	})
 	pruneSessions(ctx, log, auth)
 
 	ctx, stop := context.WithCancel(ctx)

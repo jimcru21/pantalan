@@ -133,6 +133,11 @@ func (d *Dashboard) login(w http.ResponseWriter, r *http.Request) {
 		data.Throttled = formatWait(throttled.Wait)
 		data.Username = username
 		d.render(w, http.StatusTooManyRequests, d.views.login, "base", data)
+	case errors.Is(err, service.ErrBusy):
+		w.Header().Set("Retry-After", "5")
+		data.Error = "Too many sign-ins at once. Try again in a few seconds."
+		data.Username = username
+		d.render(w, http.StatusServiceUnavailable, d.views.login, "base", data)
 	case errors.Is(err, service.ErrNoAdmin):
 		data.NoAdmin = true
 		d.render(w, http.StatusForbidden, d.views.login, "base", data)

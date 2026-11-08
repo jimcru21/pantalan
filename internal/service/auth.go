@@ -22,6 +22,16 @@ var (
 	// ErrNoSession means a token names no live session: it never existed,
 	// expired, was signed out, or was ended by a password reset.
 	ErrNoSession = errors.New("not signed in")
+	// ErrBusy refuses a sign-in that waited HashSlotWait without getting
+	// to hash its password.
+	ErrBusy = errors.New("too many sign-ins at once")
+)
+
+// At most HashSlots password hashes run at once; a sign-in that can't
+// start one within HashSlotWait is refused with ErrBusy.
+const (
+	HashSlots    = 2
+	HashSlotWait = 5 * time.Second
 )
 
 // ThrottledError refuses a sign-in that came too soon after too many
@@ -46,21 +56,45 @@ type AuthService struct {
 	sessions SessionRepository
 	hasher   PasswordHasher
 	now      func() time.Time
+	after    func(time.Duration) <-chan time.Time
 	// dummy is a hash checked for unknown usernames, so they take as long
 	// to refuse as a wrong password.
 	dummy func() (string, error)
+	// hashSlots holds a token for every hash running, so at most
+	// HashSlots run at once: each one takes 64 MiB.
+	hashSlots chan struct{}
 }
 
-// NewAuthService builds the service; now is the clock sessions are timed
-// with (time.Now in production).
-func NewAuthService(admins AdminRepository, sessions SessionRepository, hasher PasswordHasher, now func() time.Time) *AuthService {
-	return &AuthService{
-		admins:   admins,
-		sessions: sessions,
-		hasher:   hasher,
-		now:      now,
-		dummy:    sync.OnceValues(func() (string, error) { return hasher.Hash(rand.Text()) }),
+// AuthDeps is what an AuthService works with.
+type AuthDeps struct {
+	Admins   AdminRepository
+	Sessions SessionRepository
+	Hasher   PasswordHasher
+	// Now is the clock sessions and the back-off are timed with; nil
+	// means time.Now.
+	Now func() time.Time
+	// After times the wait for a hash slot; nil means time.After.
+	After func(time.Duration) <-chan time.Time
+}
+
+// NewAuthService builds the service.
+func NewAuthService(deps AuthDeps) *AuthService {
+	s := &AuthService{
+		admins:    deps.Admins,
+		sessions:  deps.Sessions,
+		hasher:    deps.Hasher,
+		now:       deps.Now,
+		after:     deps.After,
+		dummy:     sync.OnceValues(func() (string, error) { return deps.Hasher.Hash(rand.Text()) }),
+		hashSlots: make(chan struct{}, HashSlots),
 	}
+	if s.now == nil {
+		s.now = time.Now
+	}
+	if s.after == nil {
+		s.after = time.After
+	}
+	return s
 }
 
 // AdminExists reports whether there is an Admin to sign in as.
@@ -81,7 +115,19 @@ func (s *AuthService) AdminExists(ctx context.Context) (bool, error) {
 // is checked, and a success clears the count again. So two attempts
 // racing at the end of a wait can't both be checked: the second sees the
 // first's failure and waits.
+//
+// It fails with ErrBusy when it can't start a hash within HashSlotWait;
+// such an attempt isn't counted either.
 func (s *AuthService) SignIn(ctx context.Context, username, password string) (string, error) {
+	// Refuse throttled attempts before they queue for a hash slot.
+	if _, err := s.admitted(ctx); err != nil {
+		return "", err
+	}
+	release, err := s.acquireHashSlot(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	admin, err := s.reserveAttempt(ctx)
 	if err != nil {
 		return "", err
@@ -112,22 +158,51 @@ func (s *AuthService) SignIn(ctx context.Context, username, password string) (st
 	return token, nil
 }
 
+// admitted returns the Admin, or the reason a sign-in can't be checked
+// now: ErrNoAdmin or a *ThrottledError.
+func (s *AuthService) admitted(ctx context.Context) (domain.Admin, error) {
+	admin, err := s.admins.GetAdmin(ctx)
+	if errors.Is(err, domain.ErrNotFound) {
+		return domain.Admin{}, ErrNoAdmin
+	}
+	if err != nil {
+		return domain.Admin{}, err
+	}
+	if wait := admin.NextAttemptAt().Sub(s.now().UTC()); wait > 0 {
+		return domain.Admin{}, &ThrottledError{Wait: wait}
+	}
+	return admin, nil
+}
+
+// acquireHashSlot waits up to HashSlotWait for one of the HashSlots and
+// returns the func that frees it again.
+func (s *AuthService) acquireHashSlot(ctx context.Context) (release func(), err error) {
+	release = func() { <-s.hashSlots }
+	select {
+	case s.hashSlots <- struct{}{}:
+		return release, nil
+	default:
+	}
+	// Only a sign-in that has to queue starts the timer.
+	select {
+	case s.hashSlots <- struct{}{}:
+		return release, nil
+	case <-s.after(HashSlotWait):
+		return nil, ErrBusy
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // reserveAttempt counts a sign-in attempt as a failure, unless the
 // back-off refuses it, and returns the Admin it is checked against.
 func (s *AuthService) reserveAttempt(ctx context.Context) (domain.Admin, error) {
 	for {
-		admin, err := s.admins.GetAdmin(ctx)
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.Admin{}, ErrNoAdmin
-		}
+		admin, err := s.admitted(ctx)
 		if err != nil {
 			return domain.Admin{}, err
 		}
-		now := s.now().UTC()
-		if wait := admin.NextAttemptAt().Sub(now); wait > 0 {
-			return domain.Admin{}, &ThrottledError{Wait: wait}
-		}
-		counted, err := s.admins.RecordFailedLogin(ctx, admin.FailedLogins, now)
+		counted, err := s.admins.RecordFailedLogin(ctx, admin.FailedLogins, s.now().UTC())
 		if err != nil {
 			return domain.Admin{}, fmt.Errorf("record failed login: %w", err)
 		}
