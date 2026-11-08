@@ -125,6 +125,10 @@ func (s vmSpec) virtInstallArgs() []string {
 		"--network", "network=default,model=virtio,mac=" + s.MAC,
 		"--osinfo", "detect=on,require=off",
 		"--graphics", "none",
+		// No display, but still a video device: trixie's GRUB
+		// (terminal_output gfxterm serial) can't boot a kernel without
+		// one and loops on "Booting `Debian GNU/Linux'" (Debian #1111240).
+		"--video", "vga",
 		"--serial", "file,path=" + s.console(),
 		"--noautoconsole",
 	}

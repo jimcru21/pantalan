@@ -370,6 +370,8 @@ func (n *vm) waitUp(t *testing.T, notBootID string) {
 			n.addr = addr
 		} else if err != nil {
 			last = err
+		} else if n.addr == "" {
+			last = fmt.Errorf("no DHCP lease for %s yet (virsh domifaddr: %q)", n.spec.MAC, strings.TrimSpace(out))
 		}
 		if n.addr != "" {
 			r, err := n.run(Cmd{Script: "cat /proc/sys/kernel/random/boot_id"}, 20*time.Second)
@@ -404,6 +406,12 @@ func (n *vm) waitUp(t *testing.T, notBootID string) {
 // dumpDiagnostics logs what a failing test most likely needs: the same as
 // for a container over SSH, or the serial console when SSH never came up.
 func (n *vm) dumpDiagnostics(t *testing.T) {
+	if n.addr == "" {
+		// An empty address would dial the runner's own sshd.
+		t.Logf("no SSH to %s (no DHCP lease); serial console (tail):\n%s\n--- DHCP leases on default\n%s",
+			n.spec.Name, n.consoleTail(), n.leases())
+		return
+	}
 	r, err := n.run(Cmd{Script: `
 		echo "--- systemctl status pantalan"; systemctl status --no-pager pantalan 2>&1
 		echo "--- journalctl -u pantalan"; journalctl -u pantalan -n 80 --no-pager 2>&1
@@ -415,15 +423,37 @@ func (n *vm) dumpDiagnostics(t *testing.T) {
 		t.Logf("diagnostics from %s:\n%s", n.spec.Name, r.Output())
 		return
 	}
-	console, cerr := os.ReadFile(n.spec.console())
-	if cerr != nil {
-		t.Logf("no diagnostics from %s: %v; console: %v", n.spec.Name, err, cerr)
-		return
+	t.Logf("no SSH to %s (%v); serial console (tail):\n%s", n.spec.Name, err, n.consoleTail())
+}
+
+// consoleTail is the last 16 KiB of the VM's serial console. libvirt
+// writes the log as root, mode 0600, so a plain read falls back to sudo.
+func (n *vm) consoleTail() string {
+	console, err := os.ReadFile(n.spec.console())
+	if err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		out, serr := run(ctx, "", nil, "sudo", "-n", "cat", n.spec.console())
+		if serr != nil {
+			return fmt.Sprintf("(unreadable: %v; sudo: %v)", err, serr)
+		}
+		console = []byte(out)
 	}
 	if len(console) > 16<<10 {
 		console = console[len(console)-16<<10:]
 	}
-	t.Logf("no SSH to %s (%v); serial console (tail):\n%s", n.spec.Name, err, console)
+	return string(console)
+}
+
+// leases is libvirt's view of the default network's DHCP leases.
+func (n *vm) leases() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := virsh(ctx, "net-dhcp-leases", "default")
+	if err != nil {
+		return fmt.Sprintf("(virsh net-dhcp-leases: %v)", err)
+	}
+	return out
 }
 
 // virsh runs virsh against the system libvirt and returns its stdout.
