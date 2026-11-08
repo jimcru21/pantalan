@@ -301,9 +301,15 @@ docker compose down                                              # stop (data, a
 docker compose down -v                                           # stop and wipe everything: a fresh start
 ```
 
+The stack's settings go in a `.env` file next to `compose.yaml` (ignored by
+git). [.env.example](.env.example) lists them all with their defaults:
+
+```sh
+cp .env.example .env
+```
+
 **On a VPS**, to open the Dashboard from your own browser, make the ports
-listen on every address with a `.env` file next to `compose.yaml` (it's
-ignored by git):
+listen on every address in `.env`:
 
 ```sh
 PANTALAN_DEV_BIND=0.0.0.0
@@ -315,8 +321,7 @@ published ports bypass ufw, so the provider's firewall or security group is
 what decides who can reach them: open 8443 (and 8080 to try the app proxy),
 ideally only to your own IP. The Admin Token and webhook secret are random,
 made on first start and kept in the data volume, because anyone who can
-reach the API with the token can deploy containers on the VPS. Other
-settings are listed at the top of `compose.yaml` (ports, the Admin's name).
+reach the API with the token can deploy containers on the VPS.
 
 The `docker` service runs privileged, which Docker-in-Docker needs.
 

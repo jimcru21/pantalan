@@ -10,7 +10,8 @@
 # containers on 127.0.0.1 and its proxy reaches them there, so both must
 # see the same loopback. That's also why the ports are published on docker.
 #
-# Settings, from the environment or a .env file next to this one:
+# Settings, from the environment or a .env file next to this one (start
+# from .env.example):
 #
 #   PANTALAN_DEV_BIND            where the ports listen: 127.0.0.1 (default,
 #                                this machine only) or 0.0.0.0 (a VPS, to
