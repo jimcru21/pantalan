@@ -18,6 +18,7 @@ import (
 	"github.com/pantalan/pantalan/internal/domain"
 	"github.com/pantalan/pantalan/internal/health"
 	"github.com/pantalan/pantalan/internal/httpapi"
+	"github.com/pantalan/pantalan/internal/nodeinfo"
 	"github.com/pantalan/pantalan/internal/password"
 	"github.com/pantalan/pantalan/internal/proxy"
 	"github.com/pantalan/pantalan/internal/queue"
@@ -107,8 +108,20 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 	if err != nil {
 		return fmt.Errorf("hostname: %w", err)
 	}
+	sampler := nodeinfo.NewSampler(nodeinfo.Host{ProcRoot: node.ProcRoot, Statfs: node.Statfs}, log)
+	samplerDone := make(chan struct{})
+	go func() {
+		sampler.Run(ctx, node.SampleTicks)
+		close(samplerDone)
+	}()
+	defer func() {
+		stop()
+		<-samplerDone
+	}()
+
 	dash, err := dashboard.New(dashboard.Deps{
 		Auth:         service.NewAuthService(store, store, password.Hasher{}, node.now),
+		Host:         sampler,
 		Templates:    web.Templates(),
 		Static:       web.Static(),
 		AssetVersion: assetVersion(bin, web.Static()),

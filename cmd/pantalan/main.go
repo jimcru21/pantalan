@@ -26,6 +26,11 @@ type Stdio struct {
 type Node struct {
 	ProcRoot     string // usually /proc
 	DockerSocket string // the Docker Engine API unix socket
+	// Statfs reports the host's disk space; nil means syscall.Statfs.
+	Statfs func(path string, buf *syscall.Statfs_t) error
+	// SampleTicks makes the Node sampler read the host; nil means every
+	// nodeinfo.SampleInterval. Tests send on it to take a sample now.
+	SampleTicks <-chan time.Time
 	// Clock is the time Dashboard sessions are timed by; nil means
 	// time.Now. Tests move it forward instead of waiting.
 	Clock func() time.Time
@@ -44,6 +49,7 @@ func main() {
 	code := run(ctx, os.Args[1:], os.Environ(), Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}, Node{
 		ProcRoot:     "/proc",
 		DockerSocket: "/var/run/docker.sock",
+		Statfs:       syscall.Statfs,
 		Clock:        time.Now,
 	})
 	stop()

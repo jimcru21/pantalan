@@ -46,6 +46,7 @@ func TestABrokenTemplateFailsNew(t *testing.T) {
 		"syntax error in the login":   {"login.html": `{{define "body"}}{{.Hostname}{{end}}`},
 		"syntax error in a page":      {"pages/overview.html": `{{define "main"}}{{range}}{{end}}`},
 		"page that defines no main":   {"pages/overview.html": `{{define "other"}}{{end}}`},
+		"page missing a fragment":     {"pages/overview.html": `{{define "main"}}{{end}}{{define "topbar"}}{{end}}`},
 		"call of an unknown function": {"shell.html": `{{define "body"}}{{nosuchfunc}}{{end}}`},
 	} {
 		t.Run(name, func(t *testing.T) {

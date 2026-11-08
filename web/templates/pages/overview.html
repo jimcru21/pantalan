@@ -1,10 +1,75 @@
-{{/* Node overview. Empty for now: the top bar, stat band and tabs come
-     with the Node-info module. */}}
+{{/* Node overview. Data: dashboard.overviewData.
+     Each polled region is a block here and a route at /fragments/<block>
+     (see the page's fragments in dashboard.New): "main" renders the
+     blocks for the first load, and each poll swaps one block's element
+     for a fresh render of the same block. A polled element carries its own
+     hx-get, hx-trigger and hx-swap="outerHTML", so the fresh copy keeps
+     polling. */}}
 {{define "main"}}
+{{template "topbar" .}}
 <main class="page">
-  <div class="page-head"><h1>Node overview</h1></div>
-  <section class="panel empty">
-    <p class="muted">Node information will appear here.</p>
-  </section>
+  <h1 class="sr-only">Node overview</h1>
+  {{template "band" .}}
 </main>
+{{end}}
+
+{{define "topbar"}}
+<header class="topbar" hx-get="/fragments/topbar" hx-trigger="every 5s" hx-swap="outerHTML">
+  {{if .HostOK}}
+  <div class="node">
+    {{template "status" .Top.Status}}
+    <b>{{.Top.Hostname}}</b>
+    <span class="muted mono node-meta">{{.Top.IP}} · {{.Top.OS}} · {{.Top.Arch}}</span>
+  </div>
+  <div class="muted node-time"><span>up {{.Top.Uptime}}</span> <span>load {{.Top.Load}}</span></div>
+  {{else}}
+  <div class="node">{{template "status" .Top.Status}}<b>Host information unavailable</b></div>
+  {{end}}
+</header>
+{{end}}
+
+{{/* The status dot; its tooltip lists the reasons. Data: dashboard.status. */}}
+{{define "status"}}
+<span class="dot {{.Level}}" role="img" aria-label="Status: {{.Tooltip}}" title="{{.Tooltip}}"></span>
+{{end}}
+
+{{define "band"}}
+<section class="band" hx-get="/fragments/band" hx-trigger="every 5s" hx-swap="outerHTML" aria-label="Node health">
+  {{if .HostOK}}
+  {{with .Band.CPU}}
+  <div class="stat">
+    <span class="k">CPU</span>
+    <span class="v">{{.Percent}}</span>
+    {{template "sparkline" .Spark}}
+  </div>
+  {{end}}
+  {{with .Band.Memory}}
+  <div class="stat">
+    <span class="k">Memory</span>
+    <span class="v">{{.Percent}}</span>
+    <span class="sub">{{.Used}}</span>
+    {{with .Swap}}<span class="sub">Swap {{.}}</span>{{end}}
+    {{template "sparkline" .Spark}}
+  </div>
+  {{end}}
+  {{with .Band.Disk}}
+  <div class="stat">
+    <span class="k">Disk {{.Path}}</span>
+    <span class="v">{{.Free}} <small>free</small></span>
+    <span class="sub">of {{.Total}}</span>
+    <meter min="0" max="100" high="90" optimum="0" value="{{printf "%.1f" .UsedPercent}}" aria-label="Disk {{.Path}} used"></meter>
+  </div>
+  {{end}}
+  {{else}}
+  <div class="stat wide">
+    <span class="k">Host</span>
+    <span class="sub">Unavailable{{with .HostErr}}: {{.}}{{end}}</span>
+  </div>
+  {{end}}
+</section>
+{{end}}
+
+{{/* A server-drawn sparkline. Data: dashboard.sparkline. */}}
+{{define "sparkline"}}
+<svg class="spark" viewBox="0 0 {{.Width}} 100" preserveAspectRatio="none" role="img" aria-label="{{.Label}}"><polyline points="{{.Points}}" vector-effect="non-scaling-stroke"/></svg>
 {{end}}

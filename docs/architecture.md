@@ -116,6 +116,27 @@ Auth surfaces on the one listener:
   stamp, such as `go run`) a digest of the files. Pages, fragments and
   redirects are `no-store`.
 
+### Node overview
+
+The Dashboard's home page shows the Node's health, read by
+`internal/nodeinfo`: the host from `/proc` (`stat`, `meminfo`, `loadavg`,
+`uptime`, `sys/kernel/*`) and `statfs`, stdlib only. A background sampler
+reads it every 5 s into a 120-sample in-memory ring (10 minutes) that
+feeds the sparklines and the CPU delta; nothing is persisted.
+
+- Each polled region (the top bar, the stat band) is a template block in
+  `web/templates/pages/overview.html` and its own route,
+  `GET /fragments/<block>`, which renders the same block. The region's
+  element carries `hx-get`, a plain `hx-trigger="every 5s"` and
+  `hx-swap="outerHTML"`, so each fresh copy keeps polling.
+- `app.js` cancels `htmx:beforeRequest` while the tab is hidden and
+  refreshes every polled region once when it is shown again.
+- A fragment request without a live session gets 401 with
+  `HX-Redirect: /login`, which htmx turns into a full navigation.
+- The status dot is amber when `/` or `MemAvailable` is under 10 % free,
+  with the reasons in its tooltip. Sparklines are server-drawn SVG and the
+  disk bar is a `<meter>`.
+
 ## Packages
 
 | Path | Role |
@@ -134,7 +155,8 @@ Auth surfaces on the one listener:
 | `internal/proxy` | Host-based reverse proxy |
 | `internal/queue` | In-process job queue |
 | `internal/execx` | Shared helpers for running external commands |
-| `internal/dashboard` | Dashboard handlers: login, logout, session middleware, pages; security and cache headers |
+| `internal/dashboard` | Dashboard handlers: login, logout, session middleware, pages and their fragments; security and cache headers |
+| `internal/nodeinfo` | Read-only Node information: host health from `/proc` and `statfs`, and the background sampler's ring |
 | `web` | Dashboard assets only (templates and static files), embedded into the binary |
 
 ## Decisions

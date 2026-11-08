@@ -8,6 +8,7 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -28,6 +29,9 @@ type Auth interface {
 
 type Deps struct {
 	Auth Auth
+	// Host is the Node's host health for the Node overview; nil shows it
+	// as unavailable.
+	Host Host
 	// Templates and Static are web.Templates() and web.Static().
 	Templates fs.FS
 	Static    fs.FS
@@ -58,6 +62,18 @@ type page struct {
 	icon  string // templates/icons/<icon>.svg
 	// data is what the page's "main" template gets as its dot.
 	data func(*http.Request) (any, error)
+	// fragments are the page's polled regions. Each is served at
+	// GET /fragments/<name> from the template block of the same name in
+	// the page's file, which "main" also renders, so the first load and
+	// every poll share markup.
+	fragments []fragment
+}
+
+// fragment is one polled region of a page.
+type fragment struct {
+	name string
+	// data is the block's dot; nil means the page's data.
+	data func(*http.Request) (any, error)
 }
 
 // New parses the templates and builds the routes. A template that fails
@@ -73,7 +89,10 @@ func New(deps Deps) (*Dashboard, error) {
 
 	// The sidebar, in order. Add a page here and in templates/pages/.
 	d.pages = []page{
-		{name: "overview", path: "/", label: "Node overview", icon: "overview", data: noData},
+		{
+			name: "overview", path: "/", label: "Node overview", icon: "overview", data: d.overviewData,
+			fragments: []fragment{{name: "topbar"}, {name: "band"}},
+		},
 	}
 
 	names := make([]string, len(d.pages))
@@ -83,6 +102,13 @@ func New(deps Deps) (*Dashboard, error) {
 	var err error
 	if d.views, err = parseViews(deps.Templates, d.assetBase(), names); err != nil {
 		return nil, err
+	}
+	for _, p := range d.pages {
+		for _, f := range p.fragments {
+			if d.views.pages[p.name].Lookup(f.name) == nil {
+				return nil, fmt.Errorf("parse templates: pages/%s.html does not define fragment %q", p.name, f.name)
+			}
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -97,6 +123,9 @@ func New(deps Deps) (*Dashboard, error) {
 			pattern = "GET /{$}"
 		}
 		mux.Handle(pattern, noStore(d.requireSession(d.pageHandler(p))))
+		for _, f := range p.fragments {
+			mux.Handle("GET /fragments/"+f.name, noStore(d.requireSession(d.fragmentHandler(p, f))))
+		}
 	}
 	// Anything else is a 404, but only once signed in, so the route list
 	// isn't probed from outside.
@@ -107,8 +136,6 @@ func New(deps Deps) (*Dashboard, error) {
 }
 
 func (d *Dashboard) ServeHTTP(w http.ResponseWriter, r *http.Request) { d.handler.ServeHTTP(w, r) }
-
-func noData(*http.Request) (any, error) { return nil, nil }
 
 // shellData is what shell.html renders around a page.
 type shellData struct {
@@ -135,5 +162,22 @@ func (d *Dashboard) pageHandler(p page) http.Handler {
 			nav[i] = navLink{Href: q.path, Label: q.label, Icon: q.icon, Active: q.name == p.name}
 		}
 		d.render(w, http.StatusOK, d.views.pages[p.name], "base", shellData{Title: p.label, Nav: nav, Page: data})
+	})
+}
+
+// fragmentHandler serves one polled region of page p on its own.
+func (d *Dashboard) fragmentHandler(p page, f fragment) http.Handler {
+	data := f.data
+	if data == nil {
+		data = p.data
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dot, err := data(r)
+		if err != nil {
+			d.log.Error("dashboard fragment", "fragment", f.name, "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		d.render(w, http.StatusOK, d.views.pages[p.name], f.name, dot)
 	})
 }
