@@ -29,12 +29,51 @@ type installed struct {
 	Fingerprint   string // the one the installer printed
 	AdminUser     string
 	AdminPassword string // one that signs in
+	Firewall      firewall
+}
+
+// firewall is what the install must have left in ufw. The zero value is the
+// common case: ufw enabled, allowing 80, 443, the Dashboard port and SSH 22.
+type firewall struct {
+	State firewallState
+	// Pantalan is the ports with a `pantalan` rule; nil means 80, 443 and
+	// the Dashboard port.
+	Pantalan []int
+	// SSH is the ports with a `pantalan-ssh` rule (in the ufw states), each
+	// of which SSH from outside must reach; nil means 22.
+	SSH []int
+}
+
+type firewallState int
+
+const (
+	// ufwEnabled: ufw is active with Pantalan's rules, and a port outside
+	// them is unreachable from outside.
+	ufwEnabled firewallState = iota
+	// ufwStaged: Pantalan's rules are added, but ufw is inactive.
+	ufwStaged
+	// noUfw: the installer left the firewall alone, and didn't install ufw.
+	noUfw
+)
+
+func (f firewall) pantalanPorts(dashboardPort int) []int {
+	if f.Pantalan == nil {
+		return []int{80, 443, dashboardPort}
+	}
+	return f.Pantalan
+}
+
+func (f firewall) sshPorts() []int {
+	if f.SSH == nil {
+		return []int{22}
+	}
+	return f.SSH
 }
 
 // assertInstalled is the shared post-install assertion every path that ends
 // in a running install makes (fresh, repair, upgrade, reinstall), on any
 // Substrate. Each check reports on its own, so one failure doesn't hide the
-// others. (The firewall rule assertions join these with the firewall.)
+// others.
 func assertInstalled(t *testing.T, n Node, want installed) {
 	t.Helper()
 	assertServiceRunning(t, n)
@@ -45,7 +84,106 @@ func assertInstalled(t *testing.T, n Node, want installed) {
 	assertPlainHTTPRedirects(t, dashboard)
 	assertAdminSignsIn(t, dashboard, want)
 	assertAdminToken(t, n, dashboard, want.Fingerprint)
-	assertSSHFromOutside(t, n)
+	assertFirewall(t, n, want.Firewall, want.DashboardPort)
+	for _, port := range want.Firewall.sshPorts() {
+		assertSSHFromOutside(t, n, port)
+	}
+}
+
+// assertFirewall: ufw is in the wanted state, and the rules carrying
+// Pantalan's two comments are exactly the wanted ones.
+func assertFirewall(t *testing.T, n Node, want firewall, dashboardPort int) {
+	t.Helper()
+	if want.State == noUfw {
+		if got := ufwRules(t, n); len(got["pantalan"])+len(got["pantalan-ssh"]) != 0 {
+			t.Errorf("ufw has Pantalan's rules %v, want none", got)
+		}
+		if n.Run(t, Cmd{Script: "dpkg-query -W -f '${db:Status-Abbrev}' ufw | grep -q ^ii"}).Code == 0 {
+			t.Errorf("ufw is installed, want it left alone (not installed)")
+		}
+		return
+	}
+	status := ufwStatus(t, n)
+	if wantStatus := map[firewallState]string{ufwEnabled: "active", ufwStaged: "inactive"}[want.State]; status != wantStatus {
+		t.Errorf("ufw is %q, want %s", status, wantStatus)
+	}
+	got := ufwRules(t, n)
+	for comment, ports := range map[string][]int{"pantalan": want.pantalanPorts(dashboardPort), "pantalan-ssh": want.sshPorts()} {
+		if !slices.Equal(got[comment], sorted(ports)) {
+			t.Errorf("ufw allows %v/tcp with comment %q, want %v", got[comment], comment, sorted(ports))
+		}
+	}
+	if want.State == ufwEnabled {
+		assertPortFiltered(t, n)
+	}
+}
+
+// ufwStatus is "active" or "inactive".
+func ufwStatus(t *testing.T, n Node) string {
+	t.Helper()
+	return strings.TrimPrefix(strings.SplitN(sh(t, n, "ufw status"), "\n", 2)[0], "Status: ")
+}
+
+var ufwAllowLine = regexp.MustCompile(`^ufw allow (\d+)/tcp comment '([^']*)'$`)
+
+// ufwRules maps each comment to the sorted TCP ports `ufw allow`ed with it,
+// from `ufw show added`, which lists rules whether or not ufw is active.
+// A rule of any other shape carrying Pantalan's comments fails the test.
+func ufwRules(t *testing.T, n Node) map[string][]int {
+	t.Helper()
+	rules := map[string][]int{}
+	if n.Run(t, Cmd{Script: "command -v ufw"}).Code != 0 {
+		return rules
+	}
+	for _, line := range strings.Split(sh(t, n, "ufw show added"), "\n") {
+		if m := ufwAllowLine.FindStringSubmatch(line); m != nil {
+			port, _ := strconv.Atoi(m[1])
+			rules[m[2]] = append(rules[m[2]], port)
+		} else if strings.Contains(line, "comment 'pantalan") {
+			t.Errorf("unexpected ufw rule with Pantalan's comment: %s", line)
+		}
+	}
+	for c := range rules {
+		slices.Sort(rules[c])
+	}
+	return rules
+}
+
+// operatorRules is `ufw show added` without Pantalan's rules: the
+// operator's own, which the installer must never change.
+func operatorRules(t *testing.T, n Node) string {
+	t.Helper()
+	var lines []string
+	for _, line := range strings.Split(sh(t, n, "ufw show added"), "\n") {
+		if !strings.Contains(line, "comment 'pantalan") {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func sorted(ports []int) []int {
+	s := slices.Clone(ports)
+	slices.Sort(s)
+	return s
+}
+
+// probePort is a port no rule allows, where assertPortFiltered listens.
+const probePort = 2399
+
+// assertPortFiltered: a port no rule allows is unreachable from outside
+// even with something listening on it, so ufw really filters (rather than
+// the rules merely being written down). The listener is a second sshd,
+// which every Node with SSH has.
+func assertPortFiltered(t *testing.T, n Node) {
+	t.Helper()
+	port := strconv.Itoa(probePort)
+	sh(t, n, "install -d -m 0755 /run/sshd && /usr/sbin/sshd -p "+port+" -o PidFile=/run/pantalan-probe.pid && sleep 0.5 && ss -Hltn 'sport = :"+port+"' | grep -q .")
+	defer n.Run(t, Cmd{Script: "kill $(cat /run/pantalan-probe.pid)"})
+	if conn, err := net.DialTimeout("tcp", net.JoinHostPort(n.Addr(), port), 3*time.Second); err == nil {
+		conn.Close()
+		t.Errorf("port %s (no rule allows it) is reachable from outside: ufw isn't filtering", port)
+	}
 }
 
 // assertServiceRunning: the unit is active and enabled, runs `pantalan
@@ -258,9 +396,9 @@ func assertAdminToken(t *testing.T, n Node, addr, fp string) {
 	}
 }
 
-// assertSSHFromOutside: an SSH session from the test machine still works,
-// so the install didn't cut the operator off.
-func assertSSHFromOutside(t *testing.T, n Node) {
+// assertSSHFromOutside: an SSH session from the test machine to port still
+// works, so the install didn't cut the operator off.
+func assertSSHFromOutside(t *testing.T, n Node, port int) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -275,14 +413,14 @@ func assertSSHFromOutside(t *testing.T, n Node) {
 		t.Fatal(err)
 	}
 	sh(t, n, "install -d -m 0700 /root/.ssh && echo "+shellQuote(strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub))))+" >> /root/.ssh/authorized_keys")
-	client, err := ssh.Dial("tcp", net.JoinHostPort(n.Addr(), "22"), &ssh.ClientConfig{
+	client, err := ssh.Dial("tcp", net.JoinHostPort(n.Addr(), strconv.Itoa(port)), &ssh.ClientConfig{
 		User:            "root",
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // a throwaway Node
 		Timeout:         10 * time.Second,
 	})
 	if err != nil {
-		t.Errorf("SSH from outside to %s: %v", n.Addr(), err)
+		t.Errorf("SSH from outside to %s port %d: %v", n.Addr(), port, err)
 		return
 	}
 	defer client.Close()

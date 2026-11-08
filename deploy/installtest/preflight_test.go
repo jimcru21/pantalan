@@ -4,7 +4,6 @@ package installtest
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -37,7 +36,7 @@ func TestDockerCEOlderThan28AbortsAndIsNotUpgraded(t *testing.T) {
 	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d Distro) {
 		// Only these two have a docker-ce < 28 in Docker's repo.
-		only(t, d, "debian-12", "ubuntu-24.04")
+		onlyOn(t, d, "debian-12", "ubuntu-24.04")
 		n := substrate.Boot(t, d, DockerConflictOldDockerCE)
 		version := sh(t, n, "dpkg-query -W -f '${Version}' docker-ce")
 		before := hostState(t, n)
@@ -52,7 +51,7 @@ func TestDockerCEOlderThan28AbortsAndIsNotUpgraded(t *testing.T) {
 func TestPodmanDockerAborts(t *testing.T) {
 	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d Distro) {
-		only(t, d, "debian-12", "ubuntu-24.04")
+		onlyOn(t, d, "debian-12", "ubuntu-24.04")
 		n := substrate.Boot(t, d, DockerConflictPodmanDocker)
 		before := hostState(t, n)
 
@@ -98,7 +97,7 @@ func TestDashboardPortTakenWithNoTTYAbortsNamingTheHolderAndTheFlag(t *testing.T
 func TestDashboardPortTakenAtATerminalAsksAndInstalls(t *testing.T) {
 	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d Distro) {
-		only(t, d, "debian-12", "ubuntu-24.04")
+		onlyOn(t, d, "debian-12", "ubuntu-24.04")
 		if nodeArch != "amd64" {
 			t.Skip("this path runs on amd64 only")
 		}
@@ -171,13 +170,4 @@ func occupy(t *testing.T, n Node, port int) {
 		sleep' &&
 		for i in $(seq 50); do ss -Hltn "sport = :%[1]d" | grep -q . && exit 0; sleep 0.1; done
 		echo "nothing listens on %[1]d" >&2; exit 1`, port))
-}
-
-// only skips t unless the Node is one of the named distros: for the paths
-// the installer test strategy runs on a subset of the matrix.
-func only(t *testing.T, d Distro, names ...string) {
-	t.Helper()
-	if !slices.Contains(names, d.Name) {
-		t.Skipf("this path runs on %v only", names)
-	}
 }

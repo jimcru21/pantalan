@@ -68,6 +68,8 @@ const (
 	Bare Variant = "bare"
 	// DockerOK is Bare plus docker-ce from Docker's apt repo, enabled.
 	DockerOK Variant = "docker-ok"
+	// UFW is Bare plus ufw, installed and inactive.
+	UFW Variant = "ufw"
 )
 
 // Distro is one supported release.
