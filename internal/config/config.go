@@ -11,7 +11,7 @@ import (
 )
 
 type Config struct {
-	APIAddr       string // dashboard + REST API
+	DashboardAddr string // HTTPS: Dashboard, REST API, webhooks, /healthz
 	ProxyAddr     string // public traffic to deployed apps
 	DataDir       string
 	AdminToken    string
@@ -23,7 +23,7 @@ type Config struct {
 // unset variable, like os.Getenv.
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		APIAddr:       or(getenv("PANTALAN_API_ADDR"), ":3000"),
+		DashboardAddr: or(getenv("PANTALAN_DASHBOARD_ADDR"), ":8443"),
 		ProxyAddr:     or(getenv("PANTALAN_PROXY_ADDR"), ":80"),
 		DataDir:       DataDir(getenv),
 		AdminToken:    getenv("PANTALAN_ADMIN_TOKEN"),

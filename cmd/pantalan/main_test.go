@@ -131,19 +131,20 @@ func (s *running) addr(t *testing.T, server string) string {
 func serveEnv(t *testing.T) []string {
 	return []string{
 		"PANTALAN_ADMIN_TOKEN=test-token",
-		"PANTALAN_API_ADDR=127.0.0.1:0",
+		"PANTALAN_DASHBOARD_ADDR=127.0.0.1:0",
 		"PANTALAN_PROXY_ADDR=127.0.0.1:0",
 		"PANTALAN_DATA_DIR=" + t.TempDir(),
 	}
 }
 
 func TestServeRunsTheServiceUntilStopped(t *testing.T) {
-	s := startServe(t, serveEnv(t))
-	api := s.addr(t, "api")
+	env := serveEnv(t)
+	s := startServe(t, env)
+	dashboard := s.addr(t, "dashboard")
 
-	req, _ := http.NewRequest(http.MethodGet, "http://"+api+"/api/v1/apps", nil)
+	req, _ := http.NewRequest(http.MethodGet, "https://"+dashboard+"/api/v1/apps", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := pinnedClient(t, env).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +162,7 @@ func TestServeRunsTheServiceUntilStopped(t *testing.T) {
 
 func TestServeLogsVersionRevisionAndGoVersionAtStartup(t *testing.T) {
 	s := startServe(t, serveEnv(t))
-	s.addr(t, "api")
+	s.addr(t, "dashboard")
 
 	// Test binaries carry no VCS stamp, so the revision is empty here.
 	want := regexp.MustCompile(`msg=starting version=\(devel\) revision="" go=go1\.\d+`)

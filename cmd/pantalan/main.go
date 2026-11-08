@@ -62,6 +62,7 @@ func run(ctx context.Context, args, env []string, stdio Stdio, node Node) int {
 // commands are the subcommands, by name.
 var commands = map[string]command{
 	"serve":   {opensDataDir: true, run: serveCmd},
+	"tls":     {opensDataDir: true, run: tlsCmd},
 	"version": {run: versionCmd},
 }
 
@@ -97,6 +98,7 @@ const usageText = `Usage: pantalan <command>
 
 Commands:
   serve     run the Pantalan service (what the systemd unit runs)
+  tls       show or replace the Dashboard's TLS certificate
   version   print the version
 `
 
