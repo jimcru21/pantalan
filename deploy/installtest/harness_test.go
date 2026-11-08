@@ -141,6 +141,10 @@ type installer struct {
 	// published runs this published release's install.sh from GitHub
 	// instead, with no base-URL override: exactly what an operator ran.
 	published string
+	// downloaded saves install.sh to this path first and runs it from
+	// there (`sh <path> <flags>`), the way the README shows, instead of
+	// piping it into sh.
+	downloaded string
 }
 
 // run runs the installer on n with flags and returns how it ended. The
@@ -166,6 +170,11 @@ func (in installer) run(t *testing.T, n Node, flags ...string) Result {
 		url, env = publishedReleases+"/"+in.published+"/install.sh", nil
 	}
 	script := fmt.Sprintf(`curl -fsSL %s | %s -s --%s`, shellQuote(url), shell, quoteAll(flags))
+	if in.downloaded != "" {
+		p := shellQuote(in.downloaded)
+		script = fmt.Sprintf(`curl -fsSL -o %s %s && chmod a+r %s && %s %s%s`,
+			p, shellQuote(url), p, shell, p, quoteAll(flags))
+	}
 	var stdin string
 	if in.typed != nil {
 		// stdout and stderr both arrive on stdout, through the pty.

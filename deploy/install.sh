@@ -1,8 +1,10 @@
 #!/bin/sh
 # Pantalan installer: installs, repairs or upgrades Pantalan on this Node.
 #
-#   curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh
-#   curl -fsSL .../install.sh | sudo sh -s -- --admin-user alice --dashboard-port 8443
+#   curl -fL --max-time 120 -o install.sh https://github.com/jimcru21/pantalan/releases/latest/download/install.sh
+#   sudo sh install.sh [--admin-user alice --dashboard-port 8443]
+#
+# or piped: curl -fsSL .../install.sh | sudo sh -s -- [flags]
 #
 # Running it is the consent: there is no "continue?" prompt. Every check and
 # download happens before the first change to the host, and every step
@@ -89,9 +91,12 @@ step() {
 
 usage() {
 	cat <<EOF
-Install, repair or upgrade Pantalan on this server.
+Install, repair or upgrade Pantalan on this server. Download it, then run it:
 
-  curl -fsSL $INSTALL_URL | sudo sh -s -- [options]
+  curl -fL --max-time 120 -o install.sh $INSTALL_URL
+  sudo sh install.sh [options]
+
+or in one line: curl -fsSL $INSTALL_URL | sudo sh -s -- [options]
 
 Options:
   --admin-user NAME     the Admin's username (asked for when there's a terminal)
@@ -131,6 +136,24 @@ shell_words() {
 		*) printf ' %s' "$sw_arg" ;;
 		esac
 	done
+}
+
+# run_again [WORD...]: the command that runs this installer again with
+# WORDs. Run from a downloaded file (sudo sh install.sh), that's the same
+# file; piped into sh, $0 is the shell and there's no file, so it's the
+# curl pipe.
+run_again() {
+	case ${0##*/} in
+	sh | -sh | dash | bash | ash | ksh | zsh) ra_file= ;;
+	*) ra_file=$0 ;;
+	esac
+	if [ -n "$ra_file" ] && [ -f "$ra_file" ]; then
+		printf 'sudo sh%s%s' "$(shell_words "$ra_file")" "$(shell_words "$@")"
+	elif [ $# -eq 0 ]; then
+		printf 'curl -fsSL %s | sudo sh' "$INSTALL_URL"
+	else
+		printf 'curl -fsSL %s | sudo sh -s --%s' "$INSTALL_URL" "$(shell_words "$@")"
+	fi
 }
 
 # os_field KEY: a value from /etc/os-release, unquoted.
@@ -263,11 +286,7 @@ require_root() {
 		say "pantalan-install: this installer must run as root. Nothing was changed."
 		say "Run it with sudo:"
 		say ""
-		if [ $# -eq 0 ]; then
-			say "  curl -fsSL $INSTALL_URL | sudo sh"
-		else
-			say "  curl -fsSL $INSTALL_URL | sudo sh -s --$(shell_words "$@")"
-		fi
+		say "  $(run_again "$@")"
 	} >&2
 	exit 1
 }
@@ -370,10 +389,10 @@ refuse_downgrade() {
 		say "To roll back to $VERSION, remove $1 (data and config stay), restore the pantalan.db.bak-<version>"
 		say "snapshot taken when $DATA_DIR/pantalan.db was migrated (here: ${rd_snapshots:-none}), then install $VERSION:"
 		say ""
-		say "  curl -fsSL $INSTALL_URL | sudo sh -s -- --uninstall"
+		say "  $(run_again --uninstall)"
 		say "  sudo install -m 0600 -o $SERVICE_USER -g $SERVICE_USER $DATA_DIR/pantalan.db.bak-<version> $DATA_DIR/pantalan.db"
 		say "  sudo rm -f $DATA_DIR/pantalan.db-wal $DATA_DIR/pantalan.db-shm"
-		say "  curl -fsSL $INSTALL_URL | sudo sh -s -- --version $VERSION"
+		say "  $(run_again --version "$VERSION")"
 		say ""
 		say "No snapshot means pantalan.db was never upgraded in place: skip the two middle lines"
 		say "($VERSION refuses a schema it doesn't know rather than damage it). Restoring a snapshot"
@@ -552,7 +571,7 @@ collect_inputs() {
 	fi
 	ADMIN_USER=$OPT_ADMIN_USER
 	if [ -z "$ADMIN_USER" ]; then
-		have_tty || die "--admin-user is required: there's no terminal to ask on. Pass it, e.g. curl -fsSL $INSTALL_URL | sudo sh -s -- --admin-user alice"
+		have_tty || die "--admin-user is required: there's no terminal to ask on. Pass it, e.g. $(run_again --admin-user alice)"
 		ADMIN_USER=$(ask "Admin username: ")
 	fi
 	while ! ci_problem=$("$NEW_BIN" admin create --username "$ADMIN_USER" --check 2>&1); do
@@ -1256,8 +1275,8 @@ print_uninstalled() {
 	say "  Docker, ufw and git: the installer never removes them"
 	print_kept_ssh_rules
 	say ""
-	say "  Install again    curl -fsSL $INSTALL_URL | sudo sh"
-	say "  Remove the rest  curl -fsSL $INSTALL_URL | sudo sh -s -- --purge"
+	say "  Install again    $(run_again)"
+	say "  Remove the rest  $(run_again --purge)"
 	say "  Install log      $LOG_FILE"
 }
 
@@ -1269,7 +1288,7 @@ purge_preflight() {
 		die "the Docker daemon doesn't answer, so the app containers and images can't be removed. Check \`systemctl status docker\`, then run this again. Nothing was changed."
 	fi
 	[ -z "$OPT_YES" ] || return 0
-	have_tty || die "--purge deletes Pantalan's data, config, app containers and images and the $SERVICE_USER user, and there's no terminal to confirm it on. Nothing was changed. To purge without asking: curl -fsSL $INSTALL_URL | sudo sh -s -- --purge --yes"
+	have_tty || die "--purge deletes Pantalan's data, config, app containers and images and the $SERVICE_USER user, and there's no terminal to confirm it on. Nothing was changed. To purge without asking: $(run_again --purge --yes)"
 	{
 		say "--purge deletes, for good: $CONFIG_DIR (with the Admin Token), $DATA_DIR (the"
 		say "database, the TLS certificate and builds), $DROPIN_DIR, Pantalan's app"
