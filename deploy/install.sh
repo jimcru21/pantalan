@@ -184,7 +184,9 @@ parse_args() {
 	while [ $# -gt 0 ]; do
 		case $1 in
 		--admin-user | --dashboard-port | --version)
-			[ $# -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
+			if [ $# -lt 2 ] || [ -z "$2" ]; then
+				die "$1 needs a value"
+			fi
 			pa_value=$2
 			pa_flag=$1
 			shift 2
@@ -284,7 +286,9 @@ resolve_dashboard_port() {
 	case $DASHBOARD_PORT in
 	'' | *[!0-9]*) die "--dashboard-port must be a port number, not $DASHBOARD_PORT" ;;
 	esac
-	[ "$DASHBOARD_PORT" -ge 1 ] && [ "$DASHBOARD_PORT" -le 65535 ] || die "--dashboard-port must be between 1 and 65535, not $DASHBOARD_PORT"
+	if [ "$DASHBOARD_PORT" -lt 1 ] || [ "$DASHBOARD_PORT" -gt 65535 ]; then
+		die "--dashboard-port must be between 1 and 65535, not $DASHBOARD_PORT"
+	fi
 }
 
 # classify_docker: no Docker at all is installed later; Docker CE 28 or
