@@ -208,8 +208,11 @@ function is defined before `main "$@"`, the last line, and `main` runs one
 function per step: preflight (read-only), download and verify, collect
 inputs, packages, files, Admin, service, then the summary. Nothing on the
 host changes before the packages step; each step converges, so a re-run
-resumes. Output goes through `tee` into `/var/log/pantalan-install.log`
-except the Admin password, which is printed after the log is closed.
+resumes. What's missing is asked for on `/dev/tty` (the Admin username, and
+the Dashboard port when the default can't be used); with no tty the run
+stops and names the flag, so nothing is ever picked silently. Output goes
+through `tee` into `/var/log/pantalan-install.log` except the Admin
+password, which is printed after the log is closed.
 `PANTALAN_RELEASE_BASE_URL` (test-only) points downloads at a fake release.
 
 `--uninstall` and `--purge` take a separate, shorter path through `main`

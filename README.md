@@ -25,7 +25,7 @@ curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install
 | Flag | |
 |---|---|
 | `--admin-user NAME` | The Admin's username. Asked for on the terminal when missing; with no terminal, the install stops and names the flag. |
-| `--dashboard-port N` | The Dashboard's HTTPS port, default `8443`. |
+| `--dashboard-port N` | The Dashboard's HTTPS port, default `8443`. Ports below 1024 (80 and 443 among them) and the ports SSH listens on are refused. When the default is taken and the flag wasn't given, the installer names what holds it and asks on the terminal, suggesting the next free port; with no terminal, it stops and names the flag. It never picks a port by itself. |
 | `--version vX.Y.Z` | Install that release instead of the one the script came with. |
 
 Running the command is the consent: there's no "continue?" prompt. The
