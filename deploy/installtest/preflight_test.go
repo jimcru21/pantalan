@@ -3,6 +3,7 @@
 package installtest
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 )
@@ -77,6 +78,57 @@ func TestDockerCEWhoseDaemonDoesNotAnswerAborts(t *testing.T) {
 			t.Errorf("the installer started the stopped Docker daemon")
 		}
 	})
+}
+
+func TestDashboardPortTakenWithNoTTYAbortsNamingTheHolderAndTheFlag(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, Bare)
+		occupy(t, n, 8443)
+		before := hostState(t, n)
+
+		r := installer{}.run(t, n, "--admin-user", "alice")
+
+		assertFailedNaming(t, r, "8443", "in use by perl", "--dashboard-port 8444")
+		assertUntouched(t, n, before)
+	})
+}
+
+func TestRefusedDashboardPortsAreRejectedWithAReason(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, Bare)
+		// A second sshd, on a port the below-1024 rule wouldn't catch.
+		sh(t, n, "mkdir -p /run/sshd && /usr/sbin/sshd -p 2222")
+		occupy(t, n, 9000)
+		before := hostState(t, n)
+
+		for port, reason := range map[string]string{
+			"80":    "app proxy",
+			"443":   "kept for app HTTPS",
+			"1023":  "below 1024",
+			"22":    "SSH listens on port 22",
+			"2222":  "SSH listens on port 2222",
+			"9000":  "in use by perl",
+			"8x443": "isn't a port number",
+			"65536": "isn't a port number",
+		} {
+			r := installer{}.run(t, n, "--admin-user", "alice", "--dashboard-port", port)
+			assertFailedNaming(t, r, "--dashboard-port "+port+": ", reason)
+		}
+		assertUntouched(t, n, before)
+	})
+}
+
+// occupy has some other program, perl, listen on port on n, the way a
+// web server already running there would.
+func occupy(t *testing.T, n Node, port int) {
+	t.Helper()
+	sh(t, n, fmt.Sprintf(`systemd-run --quiet --unit=squatter-%[1]d perl -MIO::Socket::INET -e '
+		my $s = IO::Socket::INET->new(LocalPort => %[1]d, Listen => 5, ReuseAddr => 1) or die "listen: $!";
+		sleep' &&
+		for i in $(seq 50); do ss -Hltn "sport = :%[1]d" | grep -q . && exit 0; sleep 0.1; done
+		echo "nothing listens on %[1]d" >&2; exit 1`, port))
 }
 
 // only skips t unless the Node is one of the named distros: for the paths

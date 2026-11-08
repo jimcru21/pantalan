@@ -262,11 +262,12 @@ preflight() {
 	check_systemd
 	check_tools
 	resolve_version
-	resolve_dashboard_port
 	classify_docker
 	check_port 80 "the app proxy needs it"
 	check_port 443 "Pantalan keeps it for app HTTPS"
-	check_port "$DASHBOARD_PORT" "the Dashboard needs it; choose another with --dashboard-port"
+	# Last, so a host that can't be used at all is refused before anything
+	# is asked.
+	resolve_dashboard_port
 }
 
 check_os() {
@@ -308,14 +309,80 @@ resolve_version() {
 	die "--version must be a release tag like v1.2.3, not $OPT_VERSION"
 }
 
+# resolve_dashboard_port: --dashboard-port, which must be usable, or the
+# default. A default that can't be used is never swapped for another port
+# silently: at a terminal the operator is asked, with the next usable port
+# suggested; with no terminal the run stops and names the flag.
 resolve_dashboard_port() {
 	DASHBOARD_PORT=${OPT_DASHBOARD_PORT:-$DEFAULT_DASHBOARD_PORT}
-	case $DASHBOARD_PORT in
-	'' | *[!0-9]*) die "--dashboard-port must be a port number, not $DASHBOARD_PORT" ;;
-	esac
-	if [ "$DASHBOARD_PORT" -lt 1 ] || [ "$DASHBOARD_PORT" -gt 65535 ]; then
-		die "--dashboard-port must be between 1 and 65535, not $DASHBOARD_PORT"
+	rd_problem=$(dashboard_port_problem "$DASHBOARD_PORT")
+	[ -n "$rd_problem" ] || return 0
+	[ -z "$OPT_DASHBOARD_PORT" ] || die "--dashboard-port $DASHBOARD_PORT: $rd_problem. Choose another port."
+	rd_free=$(next_dashboard_port "$DASHBOARD_PORT")
+	if ! have_tty; then
+		die "$rd_problem, and it's the Dashboard's default port. Choose another with --dashboard-port N, e.g. --dashboard-port $rd_free"
 	fi
+	say "The Dashboard's default port can't be used: $rd_problem." >/dev/tty
+	rd_default=$DASHBOARD_PORT
+	while :; do
+		rd_answer=$(ask "Dashboard port [$rd_free]: ")
+		DASHBOARD_PORT=${rd_answer:-$rd_free}
+		rd_answer_problem=$(dashboard_port_problem "$DASHBOARD_PORT")
+		[ -n "$rd_answer_problem" ] || break
+		say "$rd_answer_problem." >/dev/tty
+	done
+	say "Dashboard: port $DASHBOARD_PORT, chosen at the terminal ($rd_default can't be used: $rd_problem)."
+}
+
+# dashboard_port_problem PORT: why PORT can't be the Dashboard's port, or
+# nothing when it can. A port Pantalan already holds is its own, from an
+# earlier run.
+dashboard_port_problem() {
+	case $1 in
+	'' | 0* | *[!0-9]* | ??????*)
+		say "$1 isn't a port number"
+		return 0
+		;;
+	esac
+	if [ "$1" -gt 65535 ]; then
+		say "$1 isn't a port number: they go up to 65535"
+	elif [ "$1" -eq 80 ]; then
+		say "port 80 is the app proxy's"
+	elif [ "$1" -eq 443 ]; then
+		say "port 443 is kept for app HTTPS"
+	elif ssh_ports | grep -qx "$1"; then
+		say "SSH listens on port $1, and the Dashboard can't share it"
+	elif [ "$1" -lt 1024 ]; then
+		say "port $1 is below 1024, where system services live"
+	else
+		dp_holder=$(port_holder "$1")
+		case $dp_holder in
+		'' | pantalan) ;;
+		*) say "port $1 is in use by $dp_holder" ;;
+		esac
+	fi
+}
+
+# next_dashboard_port PORT: the first port after PORT the Dashboard can use.
+next_dashboard_port() {
+	nd_port=$(($1 + 1))
+	while [ "$nd_port" -le 65535 ]; do
+		if [ -z "$(dashboard_port_problem "$nd_port")" ]; then
+			say "$nd_port"
+			return 0
+		fi
+		nd_port=$((nd_port + 1))
+	done
+}
+
+# ssh_ports: the TCP ports SSH listens on, one per line: sshd's own
+# listeners, ssh.socket's when systemd listens for it, and sshd's config.
+ssh_ports() {
+	ss -Hltnp 2>/dev/null | awk '/users:\(\("sshd"/ { n = split($4, a, ":"); print a[n] }'
+	if systemctl is-active --quiet ssh.socket 2>/dev/null; then
+		systemctl show -p Listen --value ssh.socket | sed -n 's/.*:\([0-9][0-9]*\) (Stream)$/\1/p'
+	fi
+	{ sshd -T 2>/dev/null || :; } | sed -n 's/^port //p'
 }
 
 # classify_docker: no Docker at all is installed later; Docker CE 28 or
