@@ -99,6 +99,17 @@ func TestActiveUfwOnlyGetsRulesAdded(t *testing.T) {
 		if got := operatorRules(t, n); got != rulesBefore {
 			t.Errorf("the operator's rules changed on the re-run:\nbefore:\n%s\nafter:\n%s", rulesBefore, got)
 		}
+
+		// --uninstall takes only Pantalan's rules away; the operator's own
+		// 443 rule stays.
+		r = installer{}.run(t, n, "--uninstall")
+		if r.Code != 0 {
+			t.Fatalf("--uninstall exited %d", r.Code)
+		}
+		assertFirewallAfterRemoval(t, n, r, []int{22})
+		if got := operatorRules(t, n); got != rulesBefore {
+			t.Errorf("--uninstall changed the operator's rules:\nbefore:\n%s\nafter:\n%s", rulesBefore, got)
+		}
 	})
 }
 

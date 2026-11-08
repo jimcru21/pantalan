@@ -65,6 +65,7 @@ SSH_PORTS=           # the SSH ports found, space-separated
 FW_LINE=             # the summary's Firewall line
 FW_WARNINGS=         # lines the summary repeats under it
 FW_REASON=           # why ufw is staged rather than enabled, or skipped
+FW_KEPT_SSH=         # pantalan-ssh ports a removal left in ufw
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1038,7 +1039,8 @@ remove_pantalan() {
 	[ -z "$OPT_PURGE" ] || purge_preflight
 	step "Removing the service"
 	remove_service
-	# Pantalan's firewall rules are removed here (the firewall ticket).
+	step "Removing Pantalan's firewall rules"
+	remove_firewall_rules
 	if [ -n "$OPT_PURGE" ]; then
 		step "Removing app containers and images"
 		remove_apps
@@ -1069,6 +1071,32 @@ remove_service() {
 	fi
 }
 
+# remove_firewall_rules deletes every ufw rule with the `pantalan` comment.
+# The `pantalan-ssh` rules stay, and so does ufw, as active as it was:
+# removing an SSH rule from an active ufw would lock out the next login.
+remove_firewall_rules() {
+	command -v ufw >/dev/null 2>&1 || return 0
+	rr_ports=$(port_set "$(ufw_rules pantalan)")
+	# Each rule as `ufw show added` prints it, minus the comment, is what
+	# `ufw delete` takes.
+	while IFS= read -r rr_rule; do
+		[ -n "$rr_rule" ] || continue
+		# shellcheck disable=SC2086 # the rule's words, as ufw printed them
+		quietly ufw --force delete $rr_rule
+	done <<EOF
+$(ufw show added | sed -n "s/^ufw \(.*\) comment 'pantalan'\$/\1/p")
+EOF
+	[ -z "$rr_ports" ] || say "Removed ufw's pantalan rules for $(comma_list "$rr_ports")."
+	FW_KEPT_SSH=$(port_set "$(ufw_rules pantalan-ssh)")
+}
+
+# print_kept_ssh_rules: what the removal left in ufw on purpose.
+print_kept_ssh_rules() {
+	[ -n "$FW_KEPT_SSH" ] || return 0
+	say "  ufw rules allowing SSH $(comma_list "$FW_KEPT_SSH") (comment pantalan-ssh), kept so your next login still gets in."
+	say "  To remove them: sudo ufw status numbered, then sudo ufw delete N for each pantalan-ssh line"
+}
+
 # app_containers: the IDs of Pantalan's app containers, running or not.
 app_containers() { docker ps -aq --filter label=pantalan.app; }
 
@@ -1086,6 +1114,7 @@ print_uninstalled() {
 	fi
 	! getent passwd "$SERVICE_USER" >/dev/null || say "  The $SERVICE_USER user"
 	say "  Docker, ufw and git: the installer never removes them"
+	print_kept_ssh_rules
 	say ""
 	say "  Install again    curl -fsSL $INSTALL_URL | sudo sh"
 	say "  Remove the rest  curl -fsSL $INSTALL_URL | sudo sh -s -- --purge"
@@ -1152,6 +1181,7 @@ print_purged() {
 	say "Pantalan is purged: its service, binary, config, data, unit drop-ins, app"
 	say "containers, pantalan/* images and the $SERVICE_USER user are gone."
 	say "Docker, ufw and git are left as they are: the installer never removes them."
+	print_kept_ssh_rules
 	say "  Install log      $LOG_FILE"
 }
 
