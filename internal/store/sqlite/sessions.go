@@ -10,10 +10,36 @@ import (
 	"github.com/pantalan/pantalan/internal/domain"
 )
 
-func (s *Store) CreateSession(ctx context.Context, sess domain.Session) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions (token_hash, created_at, last_seen_at) VALUES (?, ?, ?)`,
-		sess.TokenHash, formatTime(sess.CreatedAt), formatTime(sess.LastSeenAt))
-	return err
+// CreateSession stores sess and then deletes the oldest sessions beyond
+// the newest keep, in one transaction. Sessions created at the same time
+// are ordered by insertion.
+func (s *Store) CreateSession(ctx context.Context, sess domain.Session, keep int) error {
+	tx, err := s.db.BeginTx(ctx, nil) // BEGIN IMMEDIATE (see dsn)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO sessions (token_hash, created_at, last_seen_at) VALUES (?, ?, ?)`,
+		sess.TokenHash, formatTime(sess.CreatedAt), formatTime(sess.LastSeenAt)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE rowid NOT IN
+		(SELECT rowid FROM sessions ORDER BY created_at DESC, rowid DESC LIMIT ?)`, keep); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// DeleteExpiredSessions deletes the sessions last seen at or before seenBy
+// or created at or before createdBy, and returns how many it deleted.
+func (s *Store) DeleteExpiredSessions(ctx context.Context, seenBy, createdBy time.Time) (int, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE last_seen_at <= ? OR created_at <= ?`,
+		formatTime(seenBy), formatTime(createdBy))
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }
 
 func (s *Store) GetSession(ctx context.Context, tokenHash string) (domain.Session, error) {

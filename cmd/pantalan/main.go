@@ -34,6 +34,9 @@ type Node struct {
 	// EventsBackoff waits out the delay before Docker's event stream
 	// reconnects; nil means time.After. Tests see each delay and fire it.
 	EventsBackoff func(time.Duration) <-chan time.Time
+	// MaintenanceTicks runs the daily maintenance (TLS renewal check and
+	// session pruning); nil means once a day. Tests send on it.
+	MaintenanceTicks <-chan time.Time
 	// Clock is the time Dashboard sessions and the Docker tab's shared
 	// system/df are timed by; nil means time.Now. Tests move it forward
 	// instead of waiting.

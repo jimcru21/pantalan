@@ -106,7 +106,7 @@ func (s *AuthService) SignIn(ctx context.Context, username, password string) (st
 
 	token := rand.Text()
 	now := s.now().UTC()
-	if err := s.sessions.CreateSession(ctx, domain.Session{TokenHash: tokenHash(token), CreatedAt: now, LastSeenAt: now}); err != nil {
+	if err := s.sessions.CreateSession(ctx, domain.Session{TokenHash: tokenHash(token), CreatedAt: now, LastSeenAt: now}, domain.MaxSessions); err != nil {
 		return "", fmt.Errorf("create session: %w", err)
 	}
 	return token, nil
@@ -165,6 +165,13 @@ func (s *AuthService) Authenticate(ctx context.Context, token string) error {
 		}
 	}
 	return nil
+}
+
+// PruneSessions deletes every session that has expired by now and
+// returns how many there were.
+func (s *AuthService) PruneSessions(ctx context.Context) (int, error) {
+	now := s.now().UTC()
+	return s.sessions.DeleteExpiredSessions(ctx, now.Add(-domain.SessionIdle), now.Add(-domain.SessionMaxAge))
 }
 
 // SignOut ends the session token names, if there is one.
