@@ -82,7 +82,7 @@ the same command again.
 **The `docker` group is effectively root.** The service runs as `pantalan`
 in a hardened unit (`ProtectSystem=strict`, `NoNewPrivileges`, only
 `CAP_NET_BIND_SERVICE`), but anything that can talk to Docker can get root
-on the host, so that hardening is defence in depth, not a boundary.
+on the Node, so that hardening is defence in depth, not a boundary.
 
 ### Firewall
 
