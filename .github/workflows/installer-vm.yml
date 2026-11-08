@@ -1,0 +1,111 @@
+name: installer-vm
+
+# The installer's VM tier: deploy/install.sh on KVM VMs booted from each
+# distro's official x64 cloud image, for what the PR gate's containers
+# can't show (distro kernels, the packages the images really ship, real
+# reboots, global IPv6, snapd). arm64 stays container-only: arm64 runners
+# have no KVM.
+#
+# Nightly on main and by hand it tests the working tree, built as two fake
+# releases tagged after the newest published one. release.yml calls it as
+# its gate with the exact assets it built, and publishes only if it passes.
+
+on:
+  schedule:
+    - cron: "23 3 * * *" # nightly; schedules run on the default branch
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-tag:
+        description: The tag of the release under test (release.yml's).
+        type: string
+        required: true
+      release-artifact:
+        description: The workflow artifact in the calling run holding that release's assets.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  vm:
+    name: installer VM (${{ matrix.distro }})
+    # x64: the hosted arm64 runners have no /dev/kvm.
+    runs-on: ubuntu-24.04
+    # No retries: a flake here is a convergence bug until shown otherwise.
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [debian-12, debian-13, ubuntu-24.04, ubuntu-26.04]
+    env:
+      INSTALLTEST_DISTROS: ${{ matrix.distro }}
+      INSTALLTEST_VM_DIR: /var/lib/libvirt/images/pantalan-installtest
+      # A runner without KVM fails the job instead of skipping every path.
+      INSTALLTEST_VM_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # GitHub's documented udev rule for hardware acceleration on hosted
+      # Linux runners; the job fails here if the runner has no KVM.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -c /dev/kvm
+
+      # libvirt's system instance gives the VMs virbr0, which the runner is
+      # on: the release server listens there and SSH from outside comes from
+      # there. The world-writable socket is the k3s pattern, accepted for
+      # these ephemeral hosted runners only (they hold no secrets).
+      - name: Install libvirt and the image tools
+        run: |
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst cloud-image-utils
+          sudo systemctl start libvirtd
+          sudo chmod a+rw /var/run/libvirt/libvirt-sock
+          virsh --connect qemu:///system net-info default | grep -q '^Active: *yes' ||
+            virsh --connect qemu:///system net-start default
+          sudo install -d -m 0755 -o "$(id -u)" -g "$(id -g)" "$INSTALLTEST_VM_DIR"
+          virsh --connect qemu:///system version
+
+      # What an operator could have installed before: the upgrade-from-the-
+      # previous-release path starts there, and skips while none exists.
+      - name: List the published releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tags=$(gh release list --exclude-drafts --limit 1000 --json tagName --jq '.[].tagName' | paste -sd ' ')
+          echo "published: ${tags:-none}"
+          echo "INSTALLTEST_PUBLISHED_TAGS=$tags" >> "$GITHUB_ENV"
+
+      # The release gate: the exact assets release.yml built, from its run.
+      - if: inputs.release-artifact != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.release-artifact }}
+          path: ${{ runner.temp }}/release
+
+      - if: inputs.release-artifact != ''
+        name: Test the release under test
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          {
+            echo "INSTALLTEST_RELEASE_DIR=$RUNNER_TEMP/release"
+            echo "INSTALLTEST_RELEASE_TAG=$RELEASE_TAG"
+          } >> "$GITHUB_ENV"
+          ls -l "$RUNNER_TEMP/release"
+
+      - name: Installer VM paths
+        run: make installtest-vm

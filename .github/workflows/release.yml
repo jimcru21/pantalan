@@ -69,12 +69,25 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The installer on KVM VMs of all four distros, run on the exact assets
+  # the build job uploaded (both binaries, SHA256SUMS, the baked
+  # install.sh), read back from this run's artifact.
+  installer-vm:
+    name: installer VM tier
+    needs: build
+    uses: ./.github/workflows/installer-vm.yml
+    permissions:
+      contents: read
+    with:
+      release-tag: ${{ github.ref_name }}
+      release-artifact: release-assets
+
   # The only job with write access. It runs no repository code: it attests,
-  # drafts, uploads and publishes the assets the build job made. The VM
-  # tier's release gate goes in `needs` here, on the same artifact.
+  # drafts, uploads and publishes the assets the build job made. It needs
+  # the VM tier, so a failed gate leaves no draft behind.
   release:
     name: publish release
-    needs: build
+    needs: [build, installer-vm]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
