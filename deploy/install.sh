@@ -325,7 +325,14 @@ resolve_version() {
 }
 
 resolve_dashboard_port() {
-	DASHBOARD_PORT=${OPT_DASHBOARD_PORT:-$DEFAULT_DASHBOARD_PORT}
+	# An installed Node's port is the one its env file says; a flag that
+	# disagrees stops the run instead of silently losing to it.
+	rd_stored=$(env_setting PANTALAN_DASHBOARD_ADDR)
+	rd_stored_port=${rd_stored##*:}
+	if [ -n "$OPT_DASHBOARD_PORT" ] && [ -n "$rd_stored" ] && [ "$OPT_DASHBOARD_PORT" != "$rd_stored_port" ]; then
+		die "--dashboard-port $OPT_DASHBOARD_PORT disagrees with PANTALAN_DASHBOARD_ADDR=$rd_stored in $ENV_FILE. Nothing was changed. To move the Dashboard, edit pantalan.env, then run this again without --dashboard-port."
+	fi
+	DASHBOARD_PORT=${OPT_DASHBOARD_PORT:-${rd_stored_port:-$DEFAULT_DASHBOARD_PORT}}
 	case $DASHBOARD_PORT in
 	'' | *[!0-9]*) die "--dashboard-port must be a port number, not $DASHBOARD_PORT" ;;
 	esac

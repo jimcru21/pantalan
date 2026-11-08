@@ -101,6 +101,45 @@ func TestActiveUfwOnlyGetsRulesAdded(t *testing.T) {
 	})
 }
 
+// A re-run converges the firewall to the env file: a new Dashboard port's
+// rule replaces the old one's, and a ufw disabled by hand comes back on.
+func TestReRunConvergesTheFirewallToTheEnvFile(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, Bare)
+		first := installAs(t, n, "alice")
+		sh(t, n, "ufw disable && sed -i 's/^PANTALAN_DASHBOARD_ADDR=.*/PANTALAN_DASHBOARD_ADDR=:9443/' /etc/pantalan/pantalan.env")
+		before := hostState(t, n) + sh(t, n, "ufw status; ufw show added")
+
+		// Flags that disagree with the env file stop the run before any
+		// change.
+		for flag, names := range map[string][]string{
+			"--no-firewall":         {"PANTALAN_FIREWALL=ufw", "pantalan.env"},
+			"--dashboard-port=8443": {"PANTALAN_DASHBOARD_ADDR=:9443", "pantalan.env"},
+		} {
+			r := installer{}.run(t, n, flag)
+			assertFailedNaming(t, r, names...)
+		}
+		if after := hostState(t, n) + sh(t, n, "ufw status; ufw show added"); after != before {
+			t.Errorf("a refused run changed the host:\nbefore:\n%s\nafter:\n%s", before, after)
+		}
+
+		r := installer{}.run(t, n)
+		if r.Code != 0 {
+			t.Fatalf("re-run exited %d", r.Code)
+		}
+		assertFirewallLine(t, r.Output(), "ufw enabled: allows SSH 22, 80, 443, 9443; added 9443, removed 8443")
+		assertInstalled(t, n, installed{
+			Version:       tag,
+			DashboardPort: 9443,
+			Fingerprint:   first.Fingerprint,
+			AdminUser:     "alice",
+			AdminPassword: first.AdminPassword,
+		})
+		assertEnvFirewall(t, n, "ufw")
+	})
+}
+
 // ufwPolicy is ufw's "Default: ..." line.
 func ufwPolicy(t *testing.T, n Node) string {
 	t.Helper()
