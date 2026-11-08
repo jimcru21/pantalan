@@ -401,7 +401,7 @@ func TestAFragmentWithoutALiveSessionGets401AndHXRedirectToLogin(t *testing.T) {
 	clock.advance(2 * time.Hour) // past the idle hour
 
 	for name, b := range map[string]*browser{"no session": anon, "expired session": expired} {
-		for _, path := range []string{"/fragments/topbar", "/fragments/band", "/fragments/containers", "/fragments/images", "/fragments/docker"} {
+		for _, path := range []string{"/fragments/topbar", "/fragments/band", "/fragments/containers", "/fragments/images", "/fragments/docker", "/fragments/events"} {
 			got := b.fragment(path)
 			if got.StatusCode != http.StatusUnauthorized || got.Header.Get("HX-Redirect") != "/login" {
 				t.Errorf("%s: GET %s = %d HX-Redirect %q, want 401 to /login", name, path, got.StatusCode, got.Header.Get("HX-Redirect"))

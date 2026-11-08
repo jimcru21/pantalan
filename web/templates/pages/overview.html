@@ -134,6 +134,39 @@
 </section>
 {{end}}
 
+{{/* The last 100 container events, newest first, from the event stream
+     the service holds open; it shows them while Docker is down too. A
+     "stream reconnected" row sits where events may be missing. */}}
+{{define "events"}}
+<section class="tabs" id="tabs" hx-get="/fragments/events" hx-trigger="every 5s" hx-swap="outerHTML">
+  {{template "tabnav" .Nav}}
+  <div role="tabpanel" aria-label="Events">
+  <div class="panel table-wrap">
+    {{with .StreamErr}}<p class="alert" role="alert">Not connected to Docker's event stream, retrying: {{.}}</p>{{end}}
+    <table>
+      <thead><tr><th>Time (UTC)</th><th>Container</th><th>Event</th><th>Detail</th><th>Image</th></tr></thead>
+      <tbody>
+        {{range .Rows}}
+        <tr>
+          <td class="mono">{{.Time}}</td>
+          <td><b>{{.Container}}</b></td>
+          <td{{if or (eq .Action "die" "oom" "kill") (eq .Detail "unhealthy")}} class="bad"{{end}}>{{.Action}}</td>
+          <td>{{.Detail}}</td>
+          <td class="mono">{{.Image}}</td>
+        </tr>
+        {{if .GapBefore}}
+        <tr class="gap"><td colspan="5">Stream reconnected: earlier events may be missing</td></tr>
+        {{end}}
+        {{else}}
+        <tr><td colspan="5" class="muted">No container events since Pantalan started.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  </div>
+</section>
+{{end}}
+
 {{define "topbar"}}
 <header class="topbar" hx-get="/fragments/topbar" hx-trigger="every 5s" hx-swap="outerHTML">
   {{if .HostOK}}

@@ -134,6 +134,17 @@ The Dashboard's home page shows the Node's health, read by
   `images/json`, `version` and `system/df`. These are reads only:
   container lifecycle for deployments stays on the docker CLI (see
   Decisions).
+- **Docker events**: `nodeinfo.EventStream` holds one `/events` stream
+  open, filtered at the source to container `start`, `stop`, `die`,
+  `oom`, `kill`, `restart`, `health_status` and `destroy`, into a
+  100-event in-memory ring. A dropped stream reconnects after 1 s,
+  doubling to 30 s while attempts fail and back to 1 s once one connects,
+  and backfills with `since=<last event time>` (or the time it last
+  connected, before any event). dockerd replays its buffer from `since`
+  inclusive, so a replay that starts with the ring's last event proves
+  the gap was covered; one that doesn't (the buffer moved past it, or
+  dockerd restarted) puts a "stream reconnected" marker before the next
+  event.
 
 The page:
 
@@ -151,16 +162,19 @@ The page:
   container's previous one-shot sample, "–" the first time, and memory as
   usage − inactive file over the limit), Images (repo:tag, size, created,
   in use by any container), and Docker (version, API version, storage
-  driver, cgroup, root dir, `Warnings`, and `system/df`). Each tab is a
-  block and fragment that renders the tab bar too, so a tab button swaps
-  the whole section and only the open tab polls: Containers every 5 s,
-  Images every 30 s, Docker not at all (it has a Refresh button).
+  driver, cgroup, root dir, `Warnings`, and `system/df`), and Events (the
+  ring newest first, in UTC, with `die`'s exit code and `kill`'s signal;
+  it keeps showing while Docker is down, with a note that the stream is
+  retrying). Each tab is a block and fragment that renders the tab bar
+  too, so a tab button swaps the whole section and only the open tab
+  polls: Containers and Events every 5 s, Images every 30 s, Docker not
+  at all (it has a Refresh button).
   `system/df` is slow and grows with the Node's data, so its result is
   shared between requests for 60 s, by the Node clock. Both response
   shapes are read: the per-kind summaries of API 1.52+ and the item lists
   of older daemons.
 - With Docker down the host tiles keep updating, the Docker tiles say
-  "Docker unreachable" and every tab shows one error card with a
+  "Docker unreachable" and every tab but Events shows one error card with a
   `systemctl status docker` hint; the open tab's next poll recovers.
 - Each polled region (the top bar, the stat band, the open tab) is a
   template block in `web/templates/pages/overview.html` and its own
@@ -220,7 +234,7 @@ and Ubuntu 24.04/26.04, on amd64 and arm64.
 | `internal/queue` | In-process job queue |
 | `internal/execx` | Shared helpers for running external commands |
 | `internal/dashboard` | Dashboard handlers: login, logout, session middleware, pages and their fragments; security and cache headers |
-| `internal/nodeinfo` | Read-only Node information: host health from `/proc` and `statfs`, the background sampler's ring, and Docker through the Engine API on its unix socket |
+| `internal/nodeinfo` | Read-only Node information: host health from `/proc` and `statfs`, the background sampler's ring, Docker through the Engine API on its unix socket, and the container event ring fed by its `/events` stream |
 | `web` | Dashboard assets only (templates and static files), embedded into the binary |
 
 ## Decisions
