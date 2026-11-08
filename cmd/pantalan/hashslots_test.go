@@ -63,6 +63,8 @@ func (g *gatedHasher) Verify(pw, hash string) (bool, error) {
 // openGate lets every check through from now on.
 func (g *gatedHasher) openGate() { g.openOnce.Do(func() { close(g.opened) }) }
 
+func (g *gatedHasher) NeedsRehash(hash string) bool { return g.inner.NeedsRehash(hash) }
+
 func (g *gatedHasher) peakRunning() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()

@@ -149,6 +149,16 @@ func (s *AuthService) SignIn(ctx context.Context, username, password string) (st
 	if err := s.admins.ResetFailedLogins(ctx); err != nil {
 		return "", fmt.Errorf("reset failed logins: %w", err)
 	}
+	if s.hasher.NeedsRehash(hash) {
+		// Still holding the hash slot.
+		rehashed, err := s.hasher.Hash(password)
+		if err != nil {
+			return "", fmt.Errorf("rehash password: %w", err)
+		}
+		if err := s.admins.RehashPassword(ctx, hash, rehashed); err != nil {
+			return "", fmt.Errorf("rehash password: %w", err)
+		}
+	}
 
 	token := rand.Text()
 	now := s.now().UTC()

@@ -94,6 +94,10 @@ type AdminRepository interface {
 	RecordFailedLogin(ctx context.Context, seen int, at time.Time) (bool, error)
 	// ResetFailedLogins clears the failure count.
 	ResetFailedLogins(ctx context.Context) error
+	// RehashPassword replaces the password hash old with rehashed, the same
+	// password under current parameters. It does nothing when the stored
+	// hash is no longer old (the password was reset meanwhile).
+	RehashPassword(ctx context.Context, old, rehashed string) error
 }
 
 // SessionRepository stores Dashboard sessions by the hash of their token.
@@ -116,4 +120,7 @@ type SessionRepository interface {
 type PasswordHasher interface {
 	Hash(password string) (string, error)
 	Verify(password, hash string) (bool, error)
+	// NeedsRehash reports whether hash was made with other parameters
+	// than Hash uses now.
+	NeedsRehash(hash string) bool
 }

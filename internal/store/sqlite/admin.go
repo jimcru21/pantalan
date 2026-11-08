@@ -96,3 +96,10 @@ func (s *Store) ResetFailedLogins(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE admin SET failed_logins = 0, last_failed_at = NULL WHERE id = 1`)
 	return err
 }
+
+// RehashPassword leaves password_changed_at alone: the password is the
+// same, only its hash changes.
+func (s *Store) RehashPassword(ctx context.Context, old, rehashed string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE admin SET password_hash = ? WHERE id = 1 AND password_hash = ?`, rehashed, old)
+	return err
+}

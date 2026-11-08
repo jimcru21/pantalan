@@ -44,30 +44,52 @@ func (Hasher) Hash(password string) (string, error) {
 // the parameters recorded in phc, so hashes made with older parameters
 // still verify. A hash it can't parse is an error, not a mismatch.
 func (Hasher) Verify(password, phc string) (bool, error) {
+	h, err := parse(phc)
+	if err != nil {
+		return false, err
+	}
+	got := argon2.IDKey([]byte(password), h.salt, h.iterations, h.memory, h.threads, uint32(len(h.key)))
+	return subtle.ConstantTimeCompare(got, h.key) == 1, nil
+}
+
+// NeedsRehash reports whether phc was made with other parameters than
+// Hash uses now (including one it can't parse), so a password that
+// verifies against it should be hashed again.
+func (Hasher) NeedsRehash(phc string) bool {
+	h, err := parse(phc)
+	return err != nil || h.memory != Memory || h.iterations != Time || h.threads != Threads ||
+		len(h.salt) != SaltLen || len(h.key) != KeyLen
+}
+
+// hash is a parsed PHC string.
+type hash struct {
+	memory     uint32
+	iterations uint32
+	threads    uint8
+	salt, key  []byte
+}
+
+func parse(phc string) (hash, error) {
 	var (
-		version    int
-		memory     uint32
-		iterations uint32
-		threads    uint8
+		h       hash
+		version int
 	)
 	parts := strings.Split(phc, "$")
 	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
-		return false, errors.New("password hash is not an argon2id PHC string")
+		return hash{}, errors.New("password hash is not an argon2id PHC string")
 	}
 	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || version != argon2.Version {
-		return false, fmt.Errorf("password hash has unsupported argon2 version %q", parts[2])
+		return hash{}, fmt.Errorf("password hash has unsupported argon2 version %q", parts[2])
 	}
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterations, &threads); err != nil || iterations == 0 || threads == 0 {
-		return false, fmt.Errorf("password hash has malformed parameters %q", parts[3])
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &h.memory, &h.iterations, &h.threads); err != nil || h.iterations == 0 || h.threads == 0 {
+		return hash{}, fmt.Errorf("password hash has malformed parameters %q", parts[3])
 	}
-	salt, err := b64.DecodeString(parts[4])
-	if err != nil {
-		return false, fmt.Errorf("password hash salt: %w", err)
+	var err error
+	if h.salt, err = b64.DecodeString(parts[4]); err != nil {
+		return hash{}, fmt.Errorf("password hash salt: %w", err)
 	}
-	want, err := b64.DecodeString(parts[5])
-	if err != nil || len(want) == 0 {
-		return false, errors.New("password hash key is malformed")
+	if h.key, err = b64.DecodeString(parts[5]); err != nil || len(h.key) == 0 {
+		return hash{}, errors.New("password hash key is malformed")
 	}
-	got := argon2.IDKey([]byte(password), salt, iterations, memory, threads, uint32(len(want)))
-	return subtle.ConstantTimeCompare(got, want) == 1, nil
+	return h, nil
 }
