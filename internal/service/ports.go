@@ -89,6 +89,11 @@ type AdminRepository interface {
 	// password hash, deletes every session and clears the failure count.
 	// It returns domain.ErrNotFound when there is no Admin.
 	ResetAdminPassword(ctx context.Context, hash string, at time.Time) error
+	// RecordFailedLogin adds one to the failure count and sets its time to
+	// at, only if the count is still seen. It reports whether it did.
+	RecordFailedLogin(ctx context.Context, seen int, at time.Time) (bool, error)
+	// ResetFailedLogins clears the failure count.
+	ResetFailedLogins(ctx context.Context) error
 }
 
 // SessionRepository stores Dashboard sessions by the hash of their token.

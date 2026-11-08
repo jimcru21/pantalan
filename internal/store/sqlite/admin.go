@@ -78,3 +78,21 @@ func (s *Store) GetAdmin(ctx context.Context) (domain.Admin, error) {
 	}
 	return a, nil
 }
+
+// RecordFailedLogin counts one more failed sign-in at at, but only while
+// the count is still seen: a sign-in racing another sees false and must
+// look again.
+func (s *Store) RecordFailedLogin(ctx context.Context, seen int, at time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE admin SET failed_logins = failed_logins + 1, last_failed_at = ?
+		WHERE id = 1 AND failed_logins = ?`, formatTime(at), seen)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+func (s *Store) ResetFailedLogins(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE admin SET failed_logins = 0, last_failed_at = NULL WHERE id = 1`)
+	return err
+}
