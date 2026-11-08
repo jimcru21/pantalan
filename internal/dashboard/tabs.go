@@ -79,7 +79,7 @@ func (d *Dashboard) containersTab(ctx context.Context, n node) containersTab {
 			Name:   c.Name(),
 			Image:  c.Image,
 			State:  c.Status,
-			Bad:    c.State == "restarting" || c.HealthStatus() == "unhealthy",
+			Bad:    containerTrouble(c) != "",
 			Ports:  formatPorts(c.Ports),
 			Uptime: "–",
 			CPU:    "–",
