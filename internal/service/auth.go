@@ -108,16 +108,15 @@ func (s *AuthService) AdminExists(ctx context.Context) (bool, error) {
 
 // SignIn checks the credentials and starts a new session, returning its
 // token for the browser's cookie. It fails with ErrNoAdmin before any
-// Admin exists, ErrBadCredentials for a wrong username or password, and a
-// *ThrottledError while the back-off after repeated failures runs.
+// Admin exists, ErrBadCredentials for a wrong username or password, a
+// *ThrottledError while the back-off after repeated failures runs, and
+// ErrBusy when it can't start a hash within HashSlotWait. Neither of the
+// last two is counted as a failure.
 //
 // Every attempt that gets checked counts as a failure before its password
 // is checked, and a success clears the count again. So two attempts
 // racing at the end of a wait can't both be checked: the second sees the
 // first's failure and waits.
-//
-// It fails with ErrBusy when it can't start a hash within HashSlotWait;
-// such an attempt isn't counted either.
 func (s *AuthService) SignIn(ctx context.Context, username, password string) (string, error) {
 	// Refuse throttled attempts before they queue for a hash slot.
 	if _, err := s.admitted(ctx); err != nil {
