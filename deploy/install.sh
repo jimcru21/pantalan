@@ -814,7 +814,16 @@ sshd_listening_ports() {
 sshd_config_ports() {
 	sc_sshd=$(command -v sshd 2>/dev/null) || sc_sshd=/usr/sbin/sshd
 	[ -x "$sc_sshd" ] || return 0
-	"$sc_sshd" -T 2>/dev/null | awk '$1 == "port" { print $2 }'
+	# sshd -T refuses to run without /run/sshd, which only exists while
+	# ssh.service runs: socket-activated SSH has none until the first login.
+	# A private mount namespace provides one without touching the host.
+	# shellcheck disable=SC2016 # $0 expands in the inner shell
+	{
+		"$sc_sshd" -T 2>/dev/null ||
+			[ -d /run/sshd ] ||
+			unshare --mount --propagation private \
+				sh -c 'mount -t tmpfs tmpfs /run && mkdir /run/sshd && exec "$0" -T' "$sc_sshd" 2>/dev/null
+	} | awk '$1 == "port" { print $2 }'
 }
 
 # session_ssh_port: the local port of the SSH connection this script runs

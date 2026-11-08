@@ -141,6 +141,42 @@ func TestReRunConvergesTheFirewallToTheEnvFile(t *testing.T) {
 	})
 }
 
+// Ubuntu's socket-activated SSH listening on a port sshd's own config
+// doesn't know (an ssh.socket.d override) is found and allowed, so enabling
+// ufw doesn't lock out logins on it.
+func TestSSHSocketOnAnotherPortIsAllowed(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		onlyOn(t, d, "ubuntu-24.04", "ubuntu-26.04")
+		n := substrate.Boot(t, d, Bare)
+		// With ssh.service stopped, only systemd holds the sockets, so
+		// ssh.socket is the one source that knows 2222 (and sshd -T must
+		// cope with sshd not running).
+		sh(t, n, `install -d /etc/systemd/system/ssh.socket.d
+			printf '[Socket]\nListenStream=0.0.0.0:2222\n' > /etc/systemd/system/ssh.socket.d/zz-listen.conf
+			systemctl daemon-reload && systemctl restart ssh.socket && systemctl stop ssh.service
+			ss -Hltnp 'sport = :2222' | grep -q '"systemd"'`)
+
+		r := installer{}.run(t, n, "--admin-user", "alice")
+		if r.Code != 0 {
+			t.Fatalf("install exited %d", r.Code)
+		}
+		if !strings.Contains(r.Output(), "listening: 22 2222; sshd -T: 22;") {
+			t.Errorf("the installer didn't report 2222 from ssh.socket and only 22 from sshd -T")
+		}
+		s := parseSummary(t, r.Output())
+		assertFirewallLine(t, r.Output(), "ufw enabled: allows SSH 22, 2222, 80, 443, 8443")
+		assertInstalled(t, n, installed{
+			Version:       tag,
+			DashboardPort: 8443,
+			Fingerprint:   s.Fingerprint,
+			AdminUser:     "alice",
+			AdminPassword: s.AdminPassword,
+			Firewall:      firewall{SSH: []int{22, 2222}},
+		})
+	})
+}
+
 // Hosts where enabling ufw is risky get the rules staged and ufw left off,
 // and the install still succeeds. One Debian and one Ubuntu each.
 func TestRiskyHostsGetTheFirewallStaged(t *testing.T) {
