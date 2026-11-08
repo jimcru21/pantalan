@@ -49,7 +49,7 @@ jobs:
           persist-credentials: false
 
       # shellcheck ships with the hosted Ubuntu image.
-      - name: ShellCheck deploy/install.sh
+      - name: ShellCheck the installer and release scripts
         run: |
           shellcheck --version
           make shellcheck
