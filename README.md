@@ -31,8 +31,10 @@ curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install
 
 Once installed, the env file holds the settings: a re-run reads the
 Dashboard port and firewall mode from it, and a flag that disagrees with it
-stops the run. To change one, edit `/etc/pantalan/pantalan.env` and run
-the installer again.
+stops the run before changing anything. To change one, edit
+`/etc/pantalan/pantalan.env`, then `sudo systemctl restart pantalan`. For
+the Dashboard port, run the installer again (without the flag) instead of
+restarting, so its firewall rule moves too.
 
 Running the command is the consent: there's no "continue?" prompt. The
 installer first checks the host without changing anything (root, the
@@ -117,6 +119,58 @@ Two things are outside ufw's reach:
   the server knows nothing of ufw: open 80, 443 and the Dashboard port
   there too.
 
+### Upgrade and repair
+
+Run the install command again. There's no separate upgrade mode: every step
+checks what's already there and does only what's missing, so the same
+command installs, upgrades, repairs a damaged install (a deleted unit, say)
+and resumes one that failed part-way. It needs no flags and no terminal,
+since the Admin, the Admin Token and the settings already exist; the Admin
+prompt appears only when there's no Admin.
+
+The installer compares the release it installs (the latest, or
+`--version vX.Y.Z`) with what `pantalan version` says is installed:
+
+- **Newer:** the binary is replaced atomically and the service restarted.
+  The Admin, sessions, apps and the certificate carry over. If the new
+  release changes the database schema, the service snapshots the database
+  to `/var/lib/pantalan/pantalan.db.bak-<schema version>` before migrating
+  it (the two most recent snapshots are kept). The summary opens with
+  `Upgraded vA → vB` and has no Admin or password lines.
+- **The same:** a repair. Anything missing is put back, and the service is
+  restarted.
+- **Older:** refused, before anything changes. See
+  [Rolling back](#rolling-back).
+
+The unit file is rewritten on every run; your own changes in
+`/etc/systemd/system/pantalan.service.d/` are left alone.
+
+### Rolling back
+
+The installer doesn't downgrade, because a newer release may have migrated
+the database to a schema the older one doesn't know (an older binary
+refuses such a database rather than damage it). To go back, remove the
+newer binary, restore the snapshot taken when the database was migrated,
+and install the older release:
+
+```sh
+curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh -s -- --uninstall
+sudo ls -l /var/lib/pantalan/   # pick the pantalan.db.bak-<version> taken at the upgrade you're undoing
+sudo install -m 0600 -o pantalan -g pantalan /var/lib/pantalan/pantalan.db.bak-<version> /var/lib/pantalan/pantalan.db
+sudo rm -f /var/lib/pantalan/pantalan.db-wal /var/lib/pantalan/pantalan.db-shm
+curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh -s -- --version v1.2.3
+```
+
+`--uninstall` stops the service and removes the binary but keeps the data,
+config and Admin (see [Uninstall and purge](#uninstall-and-purge)), and with
+no binary installed there's nothing to compare against, so the older
+release installs. Removing the `-wal` and `-shm` files matters: they belong
+to the newer database. Anything that changed after the snapshot was taken
+(apps, deployments, a new password) is lost. With no snapshot, the database
+was never migrated in place: skip the restore. If the older release still
+can't read the database, the install stops at "Checking the Admin username"
+with the database's error and changes nothing else.
+
 ### Uninstall and purge
 
 ```sh
@@ -193,8 +247,9 @@ make check    # vet + race tests + gofmt
 ### Test the installer
 
 `deploy/installtest` runs `deploy/install.sh` end to end in privileged
-systemd containers, one fresh container per path, against a fake release
-built from your working tree. It needs Docker and network access to the
+systemd containers, one fresh container per path, against two fake
+releases built from your working tree (`v0.0.1` and `v0.0.2`, for the
+upgrade and downgrade paths). It needs Docker and network access to the
 distro and Docker apt repositories, and takes a minute or two per distro.
 
 ```sh
