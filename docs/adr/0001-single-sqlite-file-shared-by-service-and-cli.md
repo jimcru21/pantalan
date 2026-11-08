@@ -15,3 +15,5 @@ All persistent state (the Admin, sessions, login-failure counts, apps, deploymen
 - No down migrations: rolling back a release means restoring a `pantalan.db.bak-<version>` snapshot (the two most recent are kept).
 - The in-memory store is gone; tests run against SQLite in a temp directory.
 - The service runs as the `pantalan` user, but the CLI is run as `sudo pantalan …`. A subcommand running as root switches to the data directory owner's uid/gid before opening the file, so it never leaves root-owned `-wal`, `-shm` or `.bak-*` files the service can't write.
+- `admin show` is the one exception to "every process migrates": it opens the file read-only and never migrates or snapshots it, so the installer can ask whether an Admin exists before it changes anything on the host. It still refuses a schema newer than it knows, so the `admin` table's username must stay readable by every later release.
+- Two processes opening a brand-new file at once race to switch it to WAL, and SQLite answers the loser with `SQLITE_BUSY` without waiting out `busy_timeout`; opening retries the migration while it meets `SQLITE_BUSY`, for up to 15 s.

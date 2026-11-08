@@ -137,7 +137,7 @@ func (d *Deployer) run(ctx context.Context, app domain.App, dep *domain.Deployme
 		Image:  dep.Image,
 		Port:   app.Port,
 		Env:    app.Env,
-		Labels: map[string]string{"pantalan.app": app.ID, "pantalan.deployment": dep.ID},
+		Labels: map[string]string{domain.AppLabel: app.ID, domain.DeploymentLabel: dep.ID},
 	})
 	if err != nil {
 		return fmt.Errorf("start container: %w", err)

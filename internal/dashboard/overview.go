@@ -47,30 +47,51 @@ type overviewData struct {
 // status is the top bar's dot: its colour and the reasons for it, which
 // its tooltip lists.
 type status struct {
-	// Level is the dot's CSS class: "ok" (green), "warn" (amber), "down"
-	// (red, Docker unreachable) or "off" (grey, no host data yet).
-	Level   string
+	Level   level
 	Reasons []string
 }
+
+// level is the status dot's colour, and its CSS class.
+type level string
+
+const (
+	levelOK   level = "ok"   // green
+	levelWarn level = "warn" // amber
+	levelDown level = "down" // red: Docker unreachable
+	levelOff  level = "off"  // grey: no Node data yet
+)
 
 // Tooltip is the reasons, one per line.
 func (s status) Tooltip() string { return strings.Join(s.Reasons, "\n") }
 
 // warn turns the dot amber for reason, unless it is red.
 func (s *status) warn(reason string) {
-	if s.Level != "down" {
-		s.Level = "warn"
+	if s.Level != levelDown {
+		s.Level = levelWarn
 	}
 	s.Reasons = append(s.Reasons, reason)
+}
+
+// containerTrouble is what is wrong with c, "restarting" or "unhealthy",
+// or "" when nothing is. A container in trouble turns the dot amber and
+// its row red.
+func containerTrouble(c nodeinfo.Container) string {
+	switch {
+	case c.State == "restarting":
+		return "restarting"
+	case c.HealthStatus() == "unhealthy":
+		return "unhealthy"
+	}
+	return ""
 }
 
 // hostStatus is the status the host gives: amber when a disk the band
 // shows or memory runs under 10 % free, or when the latest read failed
 // (readErr) and s is an older sample. The thresholds are fixed in v1.
 func hostStatus(s nodeinfo.Sample, readErr error, disks []nodeinfo.Disk) status {
-	st := status{Level: "ok"}
+	st := status{Level: levelOK}
 	if readErr != nil {
-		st.warn("Can't read the host, so this is older data: " + readErr.Error())
+		st.warn("Can't read the Node, so this is older data: " + readErr.Error())
 	}
 	for _, disk := range disks {
 		if underTenth(disk.Free, disk.Total) {
@@ -88,16 +109,13 @@ func hostStatus(s nodeinfo.Sample, readErr error, disks []nodeinfo.Disk) status 
 // restarting and for each warning Docker reports.
 func (s *status) addDocker(n node) {
 	if n.dockerErr != nil {
-		s.Level = "down"
+		s.Level = levelDown
 		s.Reasons = append([]string{"Docker unreachable: " + n.dockerErr.Error()}, s.Reasons...)
 		return
 	}
 	for _, c := range n.docker.Containers {
-		switch {
-		case c.State == "restarting":
-			s.warn("Container " + c.Name() + " is restarting")
-		case c.HealthStatus() == "unhealthy":
-			s.warn("Container " + c.Name() + " is unhealthy")
+		if trouble := containerTrouble(c); trouble != "" {
+			s.warn("Container " + c.Name() + " is " + trouble)
 		}
 	}
 	for _, w := range n.docker.Info.Warnings {
@@ -234,7 +252,7 @@ func (d *Dashboard) overviewData(r *http.Request) (any, error) {
 
 func (d *Dashboard) overview(r *http.Request, n node) overviewData {
 	data := overviewData{Top: topBar{
-		Status: status{Level: "off", Reasons: []string{"No host information yet"}},
+		Status: status{Level: levelOff, Reasons: []string{"No Node information yet"}},
 		IP:     localIP(r),
 		Arch:   runtime.GOARCH,
 	}}

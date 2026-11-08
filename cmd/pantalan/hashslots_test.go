@@ -97,12 +97,12 @@ func (g *gatedHasher) letOneThrough(t *testing.T) {
 // under the test's control, with Admin alice created.
 func serveGated(t *testing.T) (*running, *gatedHasher, *slotTimer, string) {
 	t.Helper()
-	node := testNode(t)
+	world := testWorld(t)
 	hasher := newGatedHasher()
 	slotWait := newSlotTimer()
-	node.Hasher = hasher
-	node.HashSlotWait = slotWait.after
-	s := startServeOn(t, serveEnv(t), node)
+	world.Hasher = hasher
+	world.HashSlotWait = slotWait.after
+	s := startServeOn(t, serveEnv(t), world)
 	// Registered after serve's cleanup, so it runs first: a test that
 	// fails mid-way doesn't leave checks stuck at the gate.
 	t.Cleanup(hasher.openGate)
@@ -225,6 +225,9 @@ func TestALoginThatWaitsOverFiveSecondsForAHashSlotGets503(t *testing.T) {
 	if len(got.Cookies()) != 0 {
 		t.Errorf("the 503 sets cookies %q", got.Header.Values("Set-Cookie"))
 	}
+	if ra := got.Header.Get("Retry-After"); ra != "5" {
+		t.Errorf("the 503's Retry-After = %q, want 5 (the hash-slot wait)", ra)
+	}
 
 	hasher.openGate()
 	<-first
@@ -235,5 +238,28 @@ func TestALoginThatWaitsOverFiveSecondsForAHashSlotGets503(t *testing.T) {
 	failLogins(t, b, 2)
 	if got := b.login("alice", pw); got.StatusCode != http.StatusSeeOther {
 		t.Errorf("login with the right password after 4 failures = %d, want 303; body:\n%s", got.StatusCode, got.body)
+	}
+}
+
+func TestASignInCheckedAgainstTheOldPasswordGetsNoSessionWhenAResetLandsMeanwhile(t *testing.T) {
+	s, hasher, _, pw := serveGated(t)
+
+	login := loginAsync(t, s, "alice", pw)
+	hasher.waitEntered(t, 1) // checking pw against the hash read before the reset
+	reset := runCLI(t, t.Context(), s.env, "admin", "reset-password")
+	if reset.code != 0 {
+		t.Fatalf("admin reset-password exit code = %d (stderr %q)", reset.code, reset.stderr)
+	}
+	hasher.letOneThrough(t)
+
+	if got := <-login; got.StatusCode != http.StatusUnauthorized {
+		t.Errorf("login with the password reset while it was checked = %d, want 401; body:\n%s", got.StatusCode, got.body)
+	}
+	var sessions int
+	if err := adminDB(t, s.env).QueryRow(`SELECT count(*) FROM sessions`).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 0 {
+		t.Errorf("%d sessions stored after the reset, want 0", sessions)
 	}
 }

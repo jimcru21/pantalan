@@ -177,7 +177,7 @@
   </div>
   <div class="muted node-time"><span>up {{.Top.Uptime}}</span> <span>load {{.Top.Load}}</span></div>
   {{else}}
-  <div class="node">{{template "status" .Top.Status}}<b>Host information unavailable</b></div>
+  <div class="node">{{template "status" .Top.Status}}<b>Node information unavailable</b></div>
   {{end}}
 </header>
 {{end}}
@@ -216,7 +216,7 @@
   {{end}}
   {{else}}
   <div class="stat wide">
-    <span class="k">Host</span>
+    <span class="k">Node</span>
     <span class="sub">Unavailable{{with .HostErr}}: {{.}}{{end}}</span>
   </div>
   {{end}}

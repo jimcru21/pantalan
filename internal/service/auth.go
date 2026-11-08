@@ -157,11 +157,21 @@ func (s *AuthService) SignIn(ctx context.Context, username, password string) (st
 		if err := s.admins.RehashPassword(ctx, hash, rehashed); err != nil {
 			return "", fmt.Errorf("rehash password: %w", err)
 		}
+		// If a reset replaced the hash meanwhile, the rehash did nothing
+		// and the session below is refused all the same.
+		hash = rehashed
 	}
 
 	token := rand.Text()
 	now := s.now().UTC()
-	if err := s.sessions.CreateSession(ctx, domain.Session{TokenHash: tokenHash(token), CreatedAt: now, LastSeenAt: now}, domain.MaxSessions); err != nil {
+	// Only while the password is still the one just checked: a reset that
+	// committed after the hash was read takes effect on this request too
+	// (ADR 0001).
+	err = s.sessions.CreateSession(ctx, domain.Session{TokenHash: tokenHash(token), CreatedAt: now, LastSeenAt: now}, domain.MaxSessions, hash)
+	if errors.Is(err, domain.ErrConflict) {
+		return "", ErrBadCredentials
+	}
+	if err != nil {
 		return "", fmt.Errorf("create session: %w", err)
 	}
 	return token, nil

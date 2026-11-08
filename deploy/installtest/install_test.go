@@ -79,18 +79,14 @@ func TestFreshInstallKeepsAnAcceptableDocker(t *testing.T) {
 		dockerBefore := sh(t, n, dockerState)
 		// Someone else's container, published on every address the way
 		// Docker does by default: it bypasses ufw, so the summary warns.
-		// Its image is just sleep and the libraries it needs.
-		sh(t, n, `tar -chf - /usr/bin/sleep $(ldd /usr/bin/sleep | grep -o '/[^ ]*') 2>/dev/null | docker import - published:local >/dev/null
-			docker run --detach --name published-web --publish 8081:80 published:local /usr/bin/sleep infinity >/dev/null`)
+		runPublishedContainer(t, n)
 
 		r := installer{}.run(t, n, "--admin-user", "alice")
 		if r.Code != 0 {
 			t.Fatalf("install exited %d", r.Code)
 		}
 		s := parseSummary(t, r.Output())
-		if !regexp.MustCompile(`(?m)^ +Warning: .*bypass ufw.*: published-web \(0\.0\.0\.0:8081->80/tcp`).MatchString(r.Output()) {
-			t.Errorf("the summary doesn't warn that published-web's 0.0.0.0:8081 bypasses ufw")
-		}
+		assertPublishedWarning(t, r, "which bypass ufw")
 		assertInstalled(t, n, installed{
 			Version:       tag,
 			DashboardPort: 8443,
@@ -157,4 +153,23 @@ func TestChecksumMismatchAbortsBeforeInstallingAnything(t *testing.T) {
 		assertFailedNaming(t, r, "checksum", "pantalan_"+tag+"_linux_"+nodeArch)
 		assertUntouched(t, n, before)
 	})
+}
+
+// runPublishedContainer starts published-web on n, publishing port 8081
+// on every address the way Docker does by default. Its image is just sleep
+// and the libraries it needs. n must have Docker running.
+func runPublishedContainer(t *testing.T, n Node) {
+	t.Helper()
+	sh(t, n, `tar -chf - /usr/bin/sleep $(ldd /usr/bin/sleep | grep -o '/[^ ]*') 2>/dev/null | docker import - published:local >/dev/null
+		docker run --detach --name published-web --publish 8081:80 published:local /usr/bin/sleep infinity >/dev/null`)
+}
+
+// assertPublishedWarning fails unless r's summary warns that
+// published-web's 0.0.0.0:8081 is reachable, for the reason why.
+func assertPublishedWarning(t *testing.T, r Result, why string) {
+	t.Helper()
+	want := regexp.MustCompile(`(?m)^ +Warning: these running containers publish ports on all addresses, ` + regexp.QuoteMeta(why) + `: published-web \(0\.0\.0\.0:8081->80/tcp`)
+	if !want.MatchString(r.Output()) {
+		t.Errorf("the summary doesn't warn that published-web's 0.0.0.0:8081 is published on all addresses, %s", why)
+	}
 }

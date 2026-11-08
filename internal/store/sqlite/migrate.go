@@ -54,7 +54,7 @@ func migrate(ctx context.Context, db *sql.DB, dbPath string, steps []migration) 
 	latest := len(steps)
 	current, err := userVersion(ctx, db)
 	if err != nil {
-		return err
+		return fmt.Errorf("read schema version: %w", err)
 	}
 	if err := checkKnown(current, latest); err != nil || current == latest {
 		return err
@@ -68,7 +68,7 @@ func migrate(ctx context.Context, db *sql.DB, dbPath string, steps []migration) 
 
 	tx, err := db.BeginTx(ctx, nil) // BEGIN IMMEDIATE (see dsn)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback()
 	// Another process may have migrated since we looked.

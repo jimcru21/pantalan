@@ -158,6 +158,51 @@ func TestOlderVersionIsRefusedWithTheSnapshotHint(t *testing.T) {
 	})
 }
 
+// The Dashboard port the env file holds is checked like a flag's, against
+// the proxy port the env file holds too, and one that can't be used stops
+// the re-run before any change: it is the operator's setting, so the
+// installer never picks another.
+func TestAnUnusableDashboardPortInTheEnvFileStopsTheReRun(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, DockerOK)
+		installAs(t, n, "alice")
+		const env = "/etc/pantalan/pantalan.env"
+
+		occupy(t, n, 9000)
+		sh(t, n, `sed -i 's/^PANTALAN_DASHBOARD_ADDR=.*/PANTALAN_DASHBOARD_ADDR=:9000/' `+env)
+		before := hostState(t, n)
+		r := installer{}.run(t, n)
+		assertFailedNaming(t, r, "PANTALAN_DASHBOARD_ADDR=:9000 in "+env+": port 9000 is in use by perl", "edit "+env)
+		assertUntouched(t, n, before)
+
+		sh(t, n, `sed -i 's/^PANTALAN_DASHBOARD_ADDR=.*/PANTALAN_DASHBOARD_ADDR=:8081/' `+env+` && echo PANTALAN_PROXY_ADDR=:8081 >> `+env)
+		before = hostState(t, n)
+		r = installer{}.run(t, n)
+		assertFailedNaming(t, r, "PANTALAN_DASHBOARD_ADDR=:8081 in "+env+": port 8081 is the app proxy's")
+		assertUntouched(t, n, before)
+	})
+}
+
+// The port preflight needs free for the app proxy is the one the env file
+// gives it, not always 80: a re-run after the operator moved the proxy to
+// a port something else holds stops before any change.
+func TestAProxyPortInTheEnvFileMustBeFree(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		n := substrate.Boot(t, d, DockerOK)
+		installAs(t, n, "alice")
+		occupy(t, n, 8081)
+		sh(t, n, `echo PANTALAN_PROXY_ADDR=:8081 >> /etc/pantalan/pantalan.env`)
+		before := hostState(t, n)
+
+		r := installer{}.run(t, n)
+
+		assertFailedNaming(t, r, "port 8081 is in use by perl, and the app proxy needs it")
+		assertUntouched(t, n, before)
+	})
+}
+
 // needNewerRelease skips paths that need N+1 when only one release is
 // served (INSTALLTEST_RELEASE_DIR).
 func needNewerRelease(t *testing.T) {

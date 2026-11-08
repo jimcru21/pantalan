@@ -57,11 +57,11 @@ func TestExpiredSessionsArePrunedAtStartup(t *testing.T) {
 func TestTheDailyTickPrunesExpiredSessions(t *testing.T) {
 	clock := newFakeClock()
 	env := serveEnv(t)
-	node := testNode(t)
-	node.Clock = clock.Now
+	world := testWorld(t)
+	world.Clock = clock.Now
 	ticks := make(chan time.Time)
-	node.MaintenanceTicks = ticks
-	s := startServeOn(t, env, node)
+	world.MaintenanceTicks = ticks
+	s := startServeOn(t, env, world)
 	_, live := expiredAndLive(t, s, clock)
 
 	ticks <- clock.Now()

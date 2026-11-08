@@ -57,6 +57,7 @@ DOCKER_STATE=        # missing: install it; ok: an acceptable docker-ce is runni
 DASHBOARD_PORT=
 NEW_BIN=             # the downloaded, verified binary in TMP_DIR
 ADMIN_USER=          # empty when an Admin already exists
+EXISTING_ADMIN=      # the username of the Admin that already exists, if one does
 ADMIN_CREATED=
 ADMIN_PASSWORD=
 FINGERPRINT=
@@ -282,10 +283,10 @@ preflight() {
 	resolve_version
 	compare_installed_version
 	classify_docker
-	check_port 80 "the app proxy needs it"
+	check_port "$(proxy_port)" "the app proxy needs it"
 	check_port 443 "Pantalan keeps it for app HTTPS"
 	detect_ssh_ports
-	# After the refusals, so a host that can't be used at all is refused
+	# After the refusals, so a Node that can't be used at all is refused
 	# before anything is asked.
 	resolve_dashboard_port
 	classify_firewall
@@ -428,8 +429,8 @@ dashboard_port_problem() {
 	esac
 	if [ "$1" -gt 65535 ]; then
 		say "$1 isn't a port number: they go up to 65535"
-	elif [ "$1" -eq 80 ]; then
-		say "port 80 is the app proxy's"
+	elif [ "$1" -eq "$(proxy_port)" ]; then
+		say "port $1 is the app proxy's"
 	elif [ "$1" -eq 443 ]; then
 		say "port 443 is kept for app HTTPS"
 	elif in_list "$1" "$SSH_PORTS"; then
@@ -443,6 +444,17 @@ dashboard_port_problem() {
 		*) say "port $1 is in use by $dp_holder" ;;
 		esac
 	fi
+}
+
+# proxy_port: the app proxy's port, from PANTALAN_PROXY_ADDR in the env
+# file when it's set there, else the service's default, 80.
+proxy_port() {
+	pp_addr=$(env_setting PANTALAN_PROXY_ADDR)
+	pp_port=${pp_addr##*:}
+	case $pp_port in
+	'' | *[!0-9]*) say 80 ;;
+	*) say "$pp_port" ;;
+	esac
 }
 
 # next_dashboard_port PORT: the first port after PORT the Dashboard can use.
@@ -513,7 +525,7 @@ download_release() {
 		die "checksum mismatch for $dr_asset: the download is corrupt or was tampered with. Nothing was installed."
 	chmod 0755 "$TMP_DIR/$dr_asset"
 	NEW_BIN=$TMP_DIR/$dr_asset
-	dr_reports=$("$NEW_BIN" version) || die "the downloaded $dr_asset doesn't run on this host"
+	dr_reports=$("$NEW_BIN" version) || die "the downloaded $dr_asset doesn't run on this Node"
 	[ "$dr_reports" = "$VERSION" ] || die "the downloaded $dr_asset says it is $dr_reports, not $VERSION"
 	say "Verified $dr_asset against SHA256SUMS."
 }
@@ -527,7 +539,11 @@ fetch() {
 
 collect_inputs() {
 	if admin_exists; then
-		say "An Admin already exists; keeping it."
+		say "An Admin ($EXISTING_ADMIN) already exists; keeping it."
+		ci_wanted=$(printf '%s' "$OPT_ADMIN_USER" | tr '[:upper:]' '[:lower:]')
+		if [ -n "$ci_wanted" ] && [ "$ci_wanted" != "$EXISTING_ADMIN" ]; then
+			warn "--admin-user $OPT_ADMIN_USER is ignored: the Admin $EXISTING_ADMIN already exists and is kept, since a Node has one Admin and a re-run never replaces it"
+		fi
 		return 0
 	fi
 	ADMIN_USER=$OPT_ADMIN_USER
@@ -543,17 +559,15 @@ collect_inputs() {
 	done
 }
 
-# admin_exists: is there an Admin in the database already? Asks the
-# installed binary, which knows the schema the database is at. After
-# --uninstall there is none, so the downloaded one asks instead: it migrates
-# a kept database to its own schema (which the install would do anyway), and
-# refuses one newer than it knows.
+# admin_exists: is there an Admin in the database already? If so, its
+# username goes in EXISTING_ADMIN. Asks the downloaded binary, whose
+# `admin show` only reads: it opens the database read-only, never migrates
+# or snapshots it, and refuses a schema newer than it knows. So this, like
+# every check, changes nothing on disk.
 admin_exists() {
 	[ -f "$DATA_DIR/pantalan.db" ] || return 1
-	ae_bin=$BIN
-	[ -x "$ae_bin" ] || ae_bin=$NEW_BIN
 	ae_code=0
-	"$ae_bin" admin show >/dev/null 2>"$TMP_DIR/admin-show.err" || ae_code=$?
+	EXISTING_ADMIN=$("$NEW_BIN" admin show 2>"$TMP_DIR/admin-show.err") || ae_code=$?
 	case $ae_code in
 	0) return 0 ;;
 	3) return 1 ;;
@@ -775,6 +789,7 @@ classify_firewall() {
 	if [ "$FIREWALL_MODE" = off ]; then
 		FW_ACTION=off
 		say "Firewall: off (PANTALAN_FIREWALL=off): left alone."
+		check_published_containers "which Docker forwards ahead of any firewall on this Node"
 		return 0
 	fi
 	FW_REASON=$(other_firewall_manager)
@@ -782,9 +797,10 @@ classify_firewall() {
 		# Two managers would fight over the same ruleset.
 		FW_ACTION=skip
 		warn "$FW_REASON, so Pantalan leaves ufw alone: open $(comma_list "80 443 $DASHBOARD_PORT") in it"
+		check_published_containers "which Docker forwards ahead of any firewall on this Node"
 		return 0
 	fi
-	check_published_containers
+	check_published_containers "which bypass ufw"
 	if ufw_active; then
 		# The operator's firewall: rules are added to it, and nothing of
 		# theirs (rules, policies) is touched.
@@ -809,7 +825,7 @@ stage_reason() {
 		printf '%s\n' "MANAGE_BUILTINS=yes in /etc/default/ufw"
 	elif [ "$(ufw_default IPV6)" = no ] && [ -n "$(ip -6 addr show scope global 2>/dev/null)" ]; then
 		# An SSH session over IPv6 would drop as soon as ufw came up.
-		printf '%s\n' "IPV6=no in /etc/default/ufw on a host with a global IPv6 address"
+		printf '%s\n' "IPV6=no in /etc/default/ufw on a Node with a global IPv6 address"
 	elif docker_nftables; then
 		printf '%s\n' "Docker uses its nftables firewall backend"
 	elif [ -z "$SSH_PORTS" ]; then
@@ -855,16 +871,18 @@ ufw_active() {
 	command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active$'
 }
 
-# check_published_containers warns about running containers that publish
-# ports on every address: Docker forwards those itself, past ufw, so they
-# are reachable whatever ufw says. Pantalan's own apps publish on 127.0.0.1.
+# check_published_containers WHY warns about running containers that
+# publish ports on every address: Docker forwards those itself, ahead of
+# ufw or any other firewall, so they are reachable whatever it says. WHY
+# says so for the firewall at hand. Pantalan's own apps publish on
+# 127.0.0.1.
 check_published_containers() {
 	docker_responds || return 0
 	cp_published=$(docker ps --format '{{.Names}} ({{.Ports}})' | grep -E '(0\.0\.0\.0|\[::\]|:::):[0-9]' | paste -s -d ';' - | sed 's/;/; /g') || :
 	[ -n "$cp_published" ] || return 0
-	FW_WARNINGS="${FW_WARNINGS}these running containers publish ports on all addresses, which bypass ufw: $cp_published
+	FW_WARNINGS="${FW_WARNINGS}these running containers publish ports on all addresses, $1: $cp_published
 "
-	warn "these running containers publish ports on all addresses, which bypass ufw: $cp_published"
+	warn "these running containers publish ports on all addresses, $1: $cp_published"
 }
 
 # check_ufw_policy warns when an active ufw lets in what no rule allows.
@@ -1152,7 +1170,7 @@ print_summary() {
 # and git are never removed: other things on the server may use them.
 
 remove_pantalan() {
-	step "Checking this host"
+	step "Checking this Node"
 	check_systemd
 	[ -z "$OPT_PURGE" ] || purge_preflight
 	step "Removing the service"
@@ -1318,7 +1336,7 @@ main() {
 		return 0
 	fi
 
-	step "Checking this host"
+	step "Checking this Node"
 	preflight
 	step "Downloading Pantalan $VERSION"
 	download_release

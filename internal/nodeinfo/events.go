@@ -57,6 +57,9 @@ type EventLog struct {
 type EventStream struct {
 	docker *Docker
 	log    *slog.Logger
+	// headerTimeout bounds the wait for /events to answer. Only the
+	// response headers are timed: the stream itself stays open.
+	headerTimeout time.Duration
 
 	mu   sync.Mutex
 	ring []Event // oldest first
@@ -71,13 +74,17 @@ type EventStream struct {
 	// it (dockerd's buffer moved past it, or dockerd restarted) leaves a
 	// gap, and the next event gets GapBefore.
 	replaying, backfilled bool
+	// unanchored is true from a reconnect with an empty ring until the
+	// next event: with no last event to find in the replay, nothing
+	// proves the gap was backfilled, so that event gets GapBefore.
+	unanchored bool
 }
 
 func NewEventStream(docker *Docker, log *slog.Logger) *EventStream {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &EventStream{docker: docker, log: log}
+	return &EventStream{docker: docker, log: log, headerTimeout: requestTimeout}
 }
 
 // Recent is a copy of the ring, newest first.
@@ -131,7 +138,16 @@ func (s *EventStream) stream(ctx context.Context) (connected bool, err error) {
 		// dockerd replays its buffered events from since on, inclusive.
 		q.Set("since", fmt.Sprintf("%d.%09d", since.Unix(), since.Nanosecond()))
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	headerTimer := time.AfterFunc(s.headerTimeout, cancel)
 	resp, err := s.docker.do(ctx, "/v"+ver+"/events?"+q.Encode())
+	if !headerTimer.Stop() {
+		if err == nil {
+			resp.Body.Close()
+		}
+		return false, fmt.Errorf("docker: /events didn't answer within %v", s.headerTimeout)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -142,6 +158,9 @@ func (s *EventStream) stream(ctx context.Context) (connected bool, err error) {
 	s.mu.Lock()
 	s.err = nil
 	s.replaying, s.backfilled = len(s.ring) > 0, false
+	// A reconnect (since is set once the first stream connects) with
+	// nothing in the ring yet.
+	s.unanchored = s.unanchored || !since.IsZero() && len(s.ring) == 0
 	if since.IsZero() {
 		s.since = connectedAt
 	}
@@ -183,6 +202,10 @@ func (s *EventStream) add(ev Event) {
 		}
 		s.replaying = false
 		ev.GapBefore = !s.backfilled
+	}
+	if s.unanchored {
+		s.unanchored = false
+		ev.GapBefore = true
 	}
 	s.insert(ev)
 }

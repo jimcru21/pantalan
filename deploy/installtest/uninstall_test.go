@@ -42,10 +42,14 @@ func TestUninstallKeepsDataAndAReinstallBringsItBack(t *testing.T) {
 			t.Errorf("a second --uninstall exited %d, want 0: there's nothing left to remove", r.Code)
 		}
 
-		// A reinstall needs no --admin-user: the Admin is still there.
-		r = installer{}.run(t, n)
+		// A reinstall needs no --admin-user: the Admin is still there. A
+		// differing one is ignored, and the run says so.
+		r = installer{}.run(t, n, "--admin-user", "Bob")
 		if r.Code != 0 {
 			t.Fatalf("reinstall after --uninstall exited %d", r.Code)
+		}
+		if want := "--admin-user Bob is ignored: the Admin alice already exists and is kept"; !strings.Contains(r.Output(), want) {
+			t.Errorf("the reinstall with a differing --admin-user doesn't say %q", want)
 		}
 		s := parseKeptAdminSummary(t, r.Output())
 		assertFirewallLine(t, r.Output(), "ufw active: allows SSH 22, 80, 443, 8443; added 80, 443, 8443")

@@ -113,6 +113,44 @@ func TestAppsAndDeploymentsSurviveARestart(t *testing.T) {
 	}
 }
 
+func TestStartupRecoversDeploymentsBeforeTheCertificateAndSessionPruning(t *testing.T) {
+	env := serveEnv(t)
+	first := startServe(t, env)
+	code, body := apiCall(t, first, http.MethodPost, "/api/v1/apps", appJSON)
+	if code != http.StatusCreated {
+		t.Fatalf("create app = %d %s", code, body)
+	}
+	var app struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &app); err != nil {
+		t.Fatal(err)
+	}
+	stopServe(t, first)
+	// A deployment the previous run stopped in the middle of building.
+	if _, err := adminDB(t, env).Exec(`INSERT INTO deployments (id, app_id, ref, status, created_at)
+		VALUES ('dep1', ?, 'main', 'building', '2026-11-08T09:00:00.000000000Z')`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	second := startServe(t, env)
+	second.addr(t, "dashboard")
+
+	out := second.stdout.String()
+	steps := []string{`msg="deployment interrupted by restart"`, `msg="tls certificate"`, `msg="pruned expired sessions"`, `msg=listening`}
+	at := -1
+	for _, step := range steps {
+		i := strings.Index(out, step)
+		if i < 0 {
+			t.Fatalf("startup never logged %s; output:\n%s", step, out)
+		}
+		if i < at {
+			t.Errorf("startup logged %s too early, want the order %q; output:\n%s", step, steps, out)
+		}
+		at = i
+	}
+}
+
 func TestDomainsThatDifferOnlyInCaseConflict(t *testing.T) {
 	s := startServe(t, serveEnv(t))
 	if code, body := apiCall(t, s, http.MethodPost, "/api/v1/apps", appJSON); code != http.StatusCreated {

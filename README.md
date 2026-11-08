@@ -24,8 +24,8 @@ curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install
 
 | Flag | |
 |---|---|
-| `--admin-user NAME` | The Admin's username. Asked for on the terminal when missing; with no terminal, the install stops and names the flag. |
-| `--dashboard-port N` | The Dashboard's HTTPS port, default `8443`. Ports below 1024 (80 and 443 among them) and the ports SSH listens on are refused. When the default is taken and the flag wasn't given, the installer names what holds it and asks on the terminal, suggesting the next free port; with no terminal, it stops and names the flag. It never picks a port by itself. |
+| `--admin-user NAME` | The Admin's username. Asked for on the terminal when missing; with no terminal, the install stops and names the flag. When an Admin already exists it is kept, and a differing `--admin-user` is ignored with a warning saying so. |
+| `--dashboard-port N` | The Dashboard's HTTPS port, default `8443`. Ports below 1024 (80 and 443 among them), the ports SSH listens on and the app proxy's port (`PANTALAN_PROXY_ADDR` in the env file, `80` when unset) are refused. When the default is taken and the flag wasn't given, the installer names what holds it and asks on the terminal, suggesting the next free port; with no terminal, it stops and names the flag. It never picks a port by itself. |
 | `--version vX.Y.Z` | Install that release instead of the one the script came with. |
 | `--no-firewall` | Leave the firewall entirely alone, on this run and every re-run (stored as `PANTALAN_FIREWALL=off`). |
 
@@ -37,11 +37,12 @@ the Dashboard port, run the installer again (without the flag) instead of
 restarting, so its firewall rule moves too.
 
 Running the command is the consent: there's no "continue?" prompt. The
-installer first checks the host without changing anything (root, the
-distro and architecture, systemd, Docker, and that ports 80, 443 and the
+installer first checks this Node without changing anything (root, the
+distro and architecture, systemd, Docker, and that the app proxy's port
+(80, unless `PANTALAN_PROXY_ADDR` in the env file moves it), 443 and the
 Dashboard port are free), then downloads the release binary and verifies it
 against the release's `SHA256SUMS`, and checks the Admin username with it.
-Only then does it change the host:
+Only then does it change the Node:
 
 - installs `git` and `ca-certificates`, and Docker CE from Docker's apt
   repository when no Docker is installed (with `"live-restore": true`, so
@@ -81,7 +82,7 @@ the same command again.
 **The `docker` group is effectively root.** The service runs as `pantalan`
 in a hardened unit (`ProtectSystem=strict`, `NoNewPrivileges`, only
 `CAP_NET_BIND_SERVICE`), but anything that can talk to Docker can get root
-on the host, so that hardening is defence in depth, not a boundary.
+on the Node, so that hardening is defence in depth, not a boundary.
 
 ### Firewall
 
@@ -94,9 +95,9 @@ throttled). SSH ports are everything sshd and `ssh.socket` listen on,
 every `Port` in `sshd -T` and the port your session came in on, all
 allowed before ufw is enabled, so enabling it doesn't lock you out. It
 never runs `ufw disable` or `ufw reset`, never edits `/etc/default/ufw` and
-adds no `DOCKER-USER` rules. What it does depends on the host:
+adds no `DOCKER-USER` rules. What it does depends on the Node:
 
-| Host | What happens |
+| Node | What happens |
 |---|---|
 | ufw inactive | Rules added, ufw enabled. A re-run enables it again if you disabled it by hand. |
 | ufw already active | Rules added only. Your rules and default policies are left as they are (a rule of yours for the same port stands in for Pantalan's); a default incoming policy other than deny or reject gets a warning. |
@@ -114,7 +115,9 @@ Two things are outside ufw's reach:
   of ufw, so a container published on `0.0.0.0` (Docker's default) is
   reachable from anywhere whatever ufw says. Pantalan's own app containers
   publish on `127.0.0.1` only; the summary warns about any running
-  container that doesn't.
+  container that doesn't, whatever the firewall mode (Docker forwards those
+  ports ahead of firewalld or an nftables ruleset too, and with
+  `--no-firewall` nothing filters them).
 - **Cloud security groups are separate.** A provider's firewall in front of
   the server knows nothing of ufw: open 80, 443 and the Dashboard port
   there too.
@@ -235,7 +238,12 @@ two binaries.
 
 - Go 1.26+
 - Docker
-- git (and `nixpacks` if you use `build_type: nixpacks`)
+- git
+
+Apps build from the Dockerfile at the root of their repository. Nixpacks
+isn't part of a Node: the installer doesn't install it, so an app with
+`build_type: nixpacks` fails to build with "nixpacks not installed on this
+Node".
 
 ## Run locally
 
@@ -371,7 +379,7 @@ one. Run these on the server:
 
 ```sh
 sudo pantalan admin create --username alice   # prints the password; refuses if an Admin exists
-sudo pantalan admin show                      # prints the username; exits 3 when there is no Admin
+sudo pantalan admin show                      # prints the username; exits 3 when there is no Admin; only reads
 sudo pantalan admin reset-password            # prints a new password
 ```
 

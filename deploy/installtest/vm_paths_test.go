@@ -114,7 +114,7 @@ func TestVMInstallRebootUpgradeUninstallPurge(t *testing.T) {
 	})
 }
 
-// IPV6=no in /etc/default/ufw on a host with a global IPv6 address: ufw
+// IPV6=no in /etc/default/ufw on a Node with a global IPv6 address: ufw
 // would come up IPv4-only, and an SSH session over IPv6 would drop, so the
 // rules are staged and ufw is left off. The address is a documentation
 // prefix added by hand, the way a provider's static IPv6 config adds one;
@@ -141,7 +141,7 @@ func TestVMIPv6NoWithAGlobalAddressStagesTheFirewall(t *testing.T) {
 			t.Fatalf("install exited %d, want 0: a staged firewall is still a working install", r.Code)
 		}
 		s := parseSummary(t, r.Output())
-		assertFirewallLine(t, r.Output(), "ufw NOT enabled (IPV6=no in /etc/default/ufw on a host with a global IPv6 address): rules are staged; check SSH, then run: ufw --force enable")
+		assertFirewallLine(t, r.Output(), "ufw NOT enabled (IPV6=no in /etc/default/ufw on a Node with a global IPv6 address): rules are staged; check SSH, then run: ufw --force enable")
 		assertInstalled(t, n, installed{
 			Version:       tag,
 			DashboardPort: 8443,

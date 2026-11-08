@@ -16,10 +16,13 @@ Inside, the code follows ports & adapters (hexagonal):
                  │                                                       │
   HTTP ──► httpapi ──► service (use cases) ◄── ports.go: interfaces      │
      └───► dashboard ───────┘                                            │
-                          │                                              │
-                          ▼ calls ports, never adapters                  │
-     store/sqlite   source(git)   build   runtime/docker  health  proxy  │
-     (adapters: each implements one interface from service/ports.go)     │
+             │            │                                              │
+             │            ▼ calls ports, never adapters                  │
+             │  store/sqlite  source(git)  build  runtime/docker  health │
+             │  proxy (adapters: each implements one service/ports.go    │
+             │  interface)                                               │
+             └──► nodeinfo (read-only Node information, through the      │
+                  dashboard's own Host, Docker and Events interfaces)    │
                  └───────────────────────────────────────────────────────┘
 ```
 
@@ -27,6 +30,17 @@ Dependency rule: `domain` imports nothing internal. `service` imports only
 `domain`. Adapters import `service` and `domain`. Only `cmd/pantalan` imports
 everything. This keeps the deploy pipeline testable with fakes
 (`service/deployer_test.go`) and lets each adapter be replaced on its own.
+
+One exception, on purpose: the Node overview's reads skip the service
+layer. `internal/dashboard` declares the small interfaces it reads through
+(`Host`, `Docker`, `Events`) and imports `internal/nodeinfo` for their
+value types (`Snapshot`, `DockerSummary`, `EventLog`, ...); `cmd/pantalan`
+wires the `nodeinfo` implementations in, and the dashboard never builds
+one. There is no use case between the two: no rule, no state and no
+write, only data to render, so a service port would be a pass-through
+that re-declares every `nodeinfo` type. If a read ever grows a rule (an
+alert, a decision a deployment acts on), it moves into `service` behind
+a port.
 
 ## Deploy pipeline
 
@@ -56,6 +70,10 @@ the queue starts, so a restart never leaves a deployment stuck:
   (`Runtime.Upstream`, i.e. `docker port`), saved if it changed, and its
   route restored. If Docker can't say, the stored upstream is kept.
 
+Only then does `serve` ensure the TLS certificate, prune expired sessions
+and start the daily maintenance tick, and last start the Node sampler, the
+queue and the listeners.
+
 ## Dashboard listener
 
 One HTTPS listener on `PANTALAN_DASHBOARD_ADDR` (default `:8443`) serves the
@@ -84,7 +102,9 @@ and serves `web/static` (CSS, `app.js` and htmx 2.0.11, vendored as one
 minified file with its licence). Both are embedded with `go:embed`; there is
 no Node toolchain and no build step. `dashboard.New` parses every template
 once, so a broken template fails startup. The handlers call the service
-layer directly, never `/api/v1`.
+layer directly, never `/api/v1`, except for the Node overview's reads,
+which go to `internal/nodeinfo` through the dashboard's own interfaces
+(see the dependency rule above).
 
 Auth surfaces on the one listener:
 
@@ -157,7 +177,11 @@ The Dashboard's home page shows the Node's health, read by
   inclusive, so a replay that starts with the ring's last event proves
   the gap was covered; one that doesn't (the buffer moved past it, or
   dockerd restarted) puts a "stream reconnected" marker before the next
-  event.
+  event. A drop before the ring holds any event leaves nothing to check
+  the replay against, so the next event always gets the marker. A
+  `/events` request that gets no response headers within 5 s is given up
+  and retried like a drop; once the headers arrive the stream has no
+  timeout.
 
 The page:
 
@@ -212,7 +236,10 @@ host (`classify_firewall`: mode from `PANTALAN_FIREWALL`, other firewall
 managers, an active ufw, risks that make it stage rather than enable, and
 the SSH ports as a union of sources) and `configure_firewall` reconciles
 the `pantalan`-commented rules and adds `pantalan-ssh` ones. Nothing on the
-host changes before the packages step; each step converges, so a re-run
+host changes before the packages step: collecting inputs asks the
+downloaded binary's `admin show` whether an Admin exists, and `show` opens
+the database read-only (`sqlite.OpenReadOnly`: no migration, no snapshot).
+Each step converges, so a re-run
 resumes, repairs or upgrades. Preflight's `compare_installed_version` puts
 the target against the installed `pantalan version` with `sort -V`: newer
 is an upgrade (the summary opens with `Upgraded vA → vB`), the same a
@@ -267,7 +294,7 @@ uploads and publishes last.
 | `internal/password` | Argon2id hashing of the Admin password into a PHC string |
 | `internal/store/sqlite` | App, deployment, Admin and session repositories in SQLite, plus the schema migrations |
 | `internal/source` | Git checkout |
-| `internal/build` | Dockerfile and Nixpacks builders |
+| `internal/build` | Dockerfile builder; the Nixpacks builder fails with "nixpacks not installed on this Node" unless a hand-built setup has nixpacks on the PATH |
 | `internal/runtime/docker` | Container lifecycle through the docker CLI |
 | `internal/health` | HTTP readiness probe |
 | `internal/proxy` | Host-based reverse proxy |

@@ -102,9 +102,11 @@ type AdminRepository interface {
 
 // SessionRepository stores Dashboard sessions by the hash of their token.
 type SessionRepository interface {
-	// CreateSession stores s and then deletes the oldest sessions beyond
-	// the newest keep, in one transaction.
-	CreateSession(ctx context.Context, s domain.Session, keep int) error
+	// CreateSession stores s, only while the Admin's password hash is
+	// still passwordHash, and then deletes the oldest sessions beyond the
+	// newest keep, in one transaction. It returns domain.ErrConflict when
+	// the hash has changed meanwhile (a password reset won the race).
+	CreateSession(ctx context.Context, s domain.Session, keep int, passwordHash string) error
 	// GetSession returns domain.ErrNotFound when there is no such session.
 	GetSession(ctx context.Context, tokenHash string) (domain.Session, error)
 	TouchSession(ctx context.Context, tokenHash string, at time.Time) error

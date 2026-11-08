@@ -33,7 +33,8 @@ func adminCmd(ctx context.Context, inv invocation) int {
 		if len(args) != 0 {
 			return adminUsage(inv.stdio.Err)
 		}
-		return withAdmins(ctx, inv, func(admins *service.AdminService) int {
+		// Read-only: the installer asks this before it changes the host.
+		return withAdminsReadOnly(ctx, inv, func(admins *service.AdminService) int {
 			admin, err := admins.Get(ctx)
 			if err != nil {
 				return failAdmin(inv, err)
@@ -100,6 +101,21 @@ func withAdmins(ctx context.Context, inv invocation, f func(*service.AdminServic
 	store, err := sqlite.Open(ctx, dataDir)
 	if err != nil {
 		return fail(inv, err)
+	}
+	defer store.Close()
+	return f(service.NewAdminService(store, password.Hasher{}))
+}
+
+// withAdminsReadOnly is withAdmins on a database opened only to read: it
+// isn't created, migrated or snapshotted. A missing database has no Admin.
+func withAdminsReadOnly(ctx context.Context, inv invocation, f func(*service.AdminService) int) int {
+	dataDir := config.DataDir(inv.getenv)
+	if err := becomeDataDirOwner(dataDir); err != nil {
+		return fail(inv, err)
+	}
+	store, err := sqlite.OpenReadOnly(ctx, dataDir)
+	if err != nil {
+		return failAdmin(inv, err)
 	}
 	defer store.Close()
 	return f(service.NewAdminService(store, password.Hasher{}))

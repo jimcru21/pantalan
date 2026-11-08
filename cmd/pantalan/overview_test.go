@@ -72,13 +72,13 @@ func newFakeProc(t *testing.T) *fakeProc {
 	return fp
 }
 
-// node is a test Node whose host is this fixture.
-func (fp *fakeProc) node(t *testing.T) Node {
-	node := testNode(t)
-	node.ProcRoot = fp.root
-	node.Statfs = fp.statfs
-	node.SampleTicks = fp.ticks
-	return node
+// world is a test world whose Node's /proc and disks are this fixture.
+func (fp *fakeProc) world(t *testing.T) World {
+	world := testWorld(t)
+	world.ProcRoot = fp.root
+	world.Statfs = fp.statfs
+	world.SampleTicks = fp.ticks
+	return world
 }
 
 // set changes the fixture. The sampler sees it on its next sample.
@@ -178,9 +178,9 @@ func serveOverview(t *testing.T, fp *fakeProc) (*running, *browser) {
 
 // serveNodeOverview is serveOverview on a Node the test made, whose
 // Docker it set up (or left unreachable).
-func serveNodeOverview(t *testing.T, fp *fakeProc, node Node) (*running, *browser) {
+func serveNodeOverview(t *testing.T, fp *fakeProc, world World) (*running, *browser) {
 	t.Helper()
-	s := startServeOn(t, serveEnv(t), node)
+	s := startServeOn(t, serveEnv(t), world)
 	b := signedIn(t, s)
 	deadline := time.Now().Add(5 * time.Second)
 	for !strings.Contains(b.get("/").body, html.EscapeString(fp.state.Hostname)) {
@@ -393,9 +393,9 @@ func TestEachPolledRegionIsItsOwnFragmentThatKeepsPolling(t *testing.T) {
 func TestAFragmentWithoutALiveSessionGets401AndHXRedirectToLogin(t *testing.T) {
 	clock := newFakeClock()
 	fp := newFakeProc(t)
-	node := fp.node(t)
-	node.Clock = clock.Now
-	s := startServeOn(t, serveEnv(t), node)
+	world := fp.world(t)
+	world.Clock = clock.Now
+	s := startServeOn(t, serveEnv(t), world)
 	expired := signedIn(t, s)
 	anon := newBrowser(t, s)
 	clock.advance(2 * time.Hour) // past the idle hour
@@ -467,7 +467,7 @@ func TestAFailingHostReadTurnsTheDotAmberRatherThanShowStaleData(t *testing.T) {
 	fp.sample(b)
 
 	m := statusDot.FindStringSubmatch(b.fragment("/fragments/topbar").body)
-	if m == nil || m[1] != "warn" || !strings.Contains(html.UnescapeString(m[2]), "Can't read the host") {
+	if m == nil || m[1] != "warn" || !strings.Contains(html.UnescapeString(m[2]), "Can't read the Node") {
 		t.Errorf("status dot after a failed read = %q, want amber with a can't-read reason", m)
 	}
 }

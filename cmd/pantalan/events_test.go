@@ -118,11 +118,11 @@ func (f *fakeBackoff) next(t *testing.T) time.Duration {
 func serveWithEvents(t *testing.T) (*browser, *fakeEngine, *fakeBackoff) {
 	t.Helper()
 	fp := newFakeProc(t)
-	node := fp.node(t)
+	world := fp.world(t)
 	backoff := newFakeBackoff()
-	node.EventsBackoff = backoff.after
-	fe := newFakeEngine(t, node.DockerSocket)
-	_, b := serveNodeOverview(t, fp, node)
+	world.EventsBackoff = backoff.after
+	fe := newFakeEngine(t, world.DockerSocket)
+	_, b := serveNodeOverview(t, fp, world)
 	fe.waitForStreams(t, 1)
 	return b, fe, backoff
 }
@@ -253,6 +253,27 @@ func TestAGapTheDaemonsBufferNoLongerCoversShowsTheReconnectedMarker(t *testing.
 	want = append([]string{"09:00:09 db start postgres:17", reconnected}, want...)
 	if rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
 		t.Errorf("after the daemon restarted the events are\n%q\nwant\n%q", rows, want)
+	}
+}
+
+func TestADropBeforeAnyEventShowsTheReconnectedMarker(t *testing.T) {
+	b, fe, backoff := serveWithEvents(t)
+
+	// dockerd restarts before any event reached the tab, losing its
+	// buffer: with no event to check the replay against, nothing proves
+	// the gap was backfilled.
+	fe.close()
+	fe.emit(containerEvent(time.Now(), "start", "c9", "lost", "busybox"))
+	fe.set(func(*engineState) { fe.events = nil })
+	fe.open()
+	backoff.next(t)
+	fe.waitForStreams(t, 2)
+	next := time.Now()
+	fe.emit(containerEvent(next, "start", "c1", "db", "postgres:17"))
+
+	want := []string{next.UTC().Format("15:04:05") + " db start postgres:17", reconnected}
+	if rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
+		t.Errorf("after a drop before any event the events are\n%q\nwant\n%q", rows, want)
 	}
 }
 
