@@ -235,7 +235,12 @@ two binaries.
 
 - Go 1.26+
 - Docker
-- git (and `nixpacks` if you use `build_type: nixpacks`)
+- git
+
+Apps build from the Dockerfile at the root of their repository. Nixpacks
+isn't part of a Node: the installer doesn't install it, so an app with
+`build_type: nixpacks` fails to build with "nixpacks not installed on this
+Node".
 
 ## Run locally
 

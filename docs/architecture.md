@@ -267,7 +267,7 @@ uploads and publishes last.
 | `internal/password` | Argon2id hashing of the Admin password into a PHC string |
 | `internal/store/sqlite` | App, deployment, Admin and session repositories in SQLite, plus the schema migrations |
 | `internal/source` | Git checkout |
-| `internal/build` | Dockerfile and Nixpacks builders |
+| `internal/build` | Dockerfile builder; the Nixpacks builder fails with "nixpacks not installed on this Node" unless a hand-built setup has nixpacks on the PATH |
 | `internal/runtime/docker` | Container lifecycle through the docker CLI |
 | `internal/health` | HTTP readiness probe |
 | `internal/proxy` | Host-based reverse proxy |
