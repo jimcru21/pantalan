@@ -49,7 +49,7 @@ at `POST /webhooks/github` and use `PANTALAN_WEBHOOK_SECRET` as its secret.
 | `PANTALAN_ADMIN_TOKEN` | *(required)* | Bearer token for `/api` |
 | `PANTALAN_API_ADDR` | `:3000` | Dashboard + API |
 | `PANTALAN_PROXY_ADDR` | `:80` | Public app traffic |
-| `PANTALAN_DATA_DIR` | `/var/lib/pantalan` | Build checkouts and logs |
+| `PANTALAN_DATA_DIR` | `/var/lib/pantalan` | The database (`pantalan.db`), build checkouts and logs |
 | `PANTALAN_WEBHOOK_SECRET` | *(empty: webhooks off)* | GitHub HMAC secret |
 | `PANTALAN_WORKERS` | `2` | Concurrent deployments |
 
@@ -60,7 +60,7 @@ cmd/pantalan/            entrypoint + wiring
 internal/domain/        entities and rules
 internal/service/       use cases + port interfaces
 internal/httpapi/       REST API, webhooks, middleware
-internal/store/memory/  in-memory repositories
+internal/store/sqlite/  SQLite repositories + migrations
 internal/source/        git
 internal/build/         dockerfile, nixpacks
 internal/runtime/docker container lifecycle

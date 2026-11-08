@@ -19,7 +19,7 @@ import (
 	"github.com/pantalan/pantalan/internal/runtime/docker"
 	"github.com/pantalan/pantalan/internal/service"
 	"github.com/pantalan/pantalan/internal/source"
-	"github.com/pantalan/pantalan/internal/store/memory"
+	"github.com/pantalan/pantalan/internal/store/sqlite"
 	"github.com/pantalan/pantalan/web"
 )
 
@@ -45,11 +45,16 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string) er
 		return err
 	}
 
+	store, err := sqlite.Open(ctx, cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 
 	// Wiring: this is the only place that knows which adapter backs which port.
-	store := memory.New()
 	router := proxy.New(log)
 	jobs := queue.New(100)
 	deployer := service.NewDeployer(service.DeployerDeps{

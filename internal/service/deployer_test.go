@@ -10,7 +10,7 @@ import (
 
 	"github.com/pantalan/pantalan/internal/domain"
 	"github.com/pantalan/pantalan/internal/service"
-	"github.com/pantalan/pantalan/internal/store/memory"
+	"github.com/pantalan/pantalan/internal/store/sqlite"
 )
 
 func TestDeploySwitchesTrafficAndRetiresPrevious(t *testing.T) {
@@ -80,7 +80,7 @@ func TestStartRejectsFlagLikeRef(t *testing.T) {
 }
 
 type harness struct {
-	store    *memory.Store
+	store    *sqlite.Store
 	apps     *service.AppService
 	deployer *service.Deployer
 	runtime  *fakeRuntime
@@ -91,7 +91,7 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{
-		store:   memory.New(),
+		store:   openStore(t),
 		runtime: &fakeRuntime{},
 		health:  &fakeHealth{unhealthy: map[string]bool{}},
 		router:  &fakeRouter{routes: map[string]string{}},
@@ -110,6 +110,17 @@ func newHarness(t *testing.T) *harness {
 		Log:         slog.New(slog.DiscardHandler),
 	})
 	return h
+}
+
+// openStore opens the real SQLite store in a temp data dir.
+func openStore(t *testing.T) *sqlite.Store {
+	t.Helper()
+	store, err := sqlite.Open(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
 }
 
 func (h *harness) createApp(t *testing.T) domain.App {
