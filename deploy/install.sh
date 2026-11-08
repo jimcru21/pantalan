@@ -669,6 +669,7 @@ classify_firewall() {
 		return 0
 	fi
 	detect_ssh_ports
+	check_published_containers
 	if ufw_active; then
 		# The operator's firewall: rules are added to it, and nothing of
 		# theirs (rules, policies) is touched.
@@ -737,6 +738,18 @@ nftables_conf_is_stock() {
 
 ufw_active() {
 	command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active$'
+}
+
+# check_published_containers warns about running containers that publish
+# ports on every address: Docker forwards those itself, past ufw, so they
+# are reachable whatever ufw says. Pantalan's own apps publish on 127.0.0.1.
+check_published_containers() {
+	docker_responds || return 0
+	cp_published=$(docker ps --format '{{.Names}} ({{.Ports}})' | grep -E '(0\.0\.0\.0|\[::\]|:::):[0-9]' | paste -s -d ';' - | sed 's/;/; /g') || :
+	[ -n "$cp_published" ] || return 0
+	FW_WARNINGS="${FW_WARNINGS}these running containers publish ports on all addresses, which bypass ufw: $cp_published
+"
+	warn "these running containers publish ports on all addresses, which bypass ufw: $cp_published"
 }
 
 # check_ufw_policy warns when an active ufw lets in what no rule allows.
@@ -1002,6 +1015,9 @@ print_summary() {
 	say "  Admin Token     in $ENV_FILE (PANTALAN_ADMIN_TOKEN)"
 	say "  Lost password   sudo pantalan admin reset-password"
 	say "  Firewall        $FW_LINE"
+	case $FW_ACTION in
+	enable | add | stage) say "                  Docker-published container ports bypass ufw; Pantalan's apps publish on 127.0.0.1 only." ;;
+	esac
 	printf '%s' "$FW_WARNINGS" | while IFS= read -r ps_warning; do
 		say "                  Warning: $ps_warning"
 	done

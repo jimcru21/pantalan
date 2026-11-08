@@ -3,6 +3,7 @@
 package installtest
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -27,6 +28,9 @@ func TestFreshInstallFromBareWithNoTTY(t *testing.T) {
 			t.Errorf("the summary's Admin is %q, want alice", s.Admin)
 		}
 		assertFirewallLine(t, r.Output(), "ufw enabled: allows SSH 22, 80, 443, 8443")
+		if !strings.Contains(r.Output(), "Docker-published container ports bypass ufw") {
+			t.Errorf("the summary doesn't say that Docker-published ports bypass ufw")
+		}
 		if !strings.Contains(r.Output(), "Behind NAT?") {
 			t.Errorf("the summary doesn't flag the private address %s with Behind NAT?", n.Addr())
 		}
@@ -61,12 +65,20 @@ func TestFreshInstallKeepsAnAcceptableDocker(t *testing.T) {
 	forEachDistro(t, func(t *testing.T, d Distro) {
 		n := substrate.Boot(t, d, DockerOK)
 		dockerBefore := sh(t, n, "dpkg-query -W docker-ce; ls /etc/docker 2>&1")
+		// Someone else's container, published on every address the way
+		// Docker does by default: it bypasses ufw, so the summary warns.
+		// Its image is just sleep and the libraries it needs.
+		sh(t, n, `tar -chf - /usr/bin/sleep $(ldd /usr/bin/sleep | grep -o '/[^ ]*') 2>/dev/null | docker import - published:local >/dev/null
+			docker run --detach --name published-web --publish 8081:80 published:local /usr/bin/sleep infinity >/dev/null`)
 
 		r := installer{}.run(t, n, "--admin-user", "alice")
 		if r.Code != 0 {
 			t.Fatalf("install exited %d", r.Code)
 		}
 		s := parseSummary(t, r.Output())
+		if !regexp.MustCompile(`(?m)^ +Warning: .*bypass ufw.*: published-web \(0\.0\.0\.0:8081->80/tcp`).MatchString(r.Output()) {
+			t.Errorf("the summary doesn't warn that published-web's 0.0.0.0:8081 bypasses ufw")
+		}
 		assertInstalled(t, n, installed{
 			Version:       tag,
 			DashboardPort: 8443,
