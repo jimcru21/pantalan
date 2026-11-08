@@ -661,6 +661,13 @@ classify_firewall() {
 		say "Firewall: off (PANTALAN_FIREWALL=off): left alone."
 		return 0
 	fi
+	FW_REASON=$(other_firewall_manager)
+	if [ -n "$FW_REASON" ]; then
+		# Two managers would fight over the same ruleset.
+		FW_ACTION=skip
+		warn "$FW_REASON, so Pantalan leaves ufw alone: open $(comma_list "80 443 $DASHBOARD_PORT") in it"
+		return 0
+	fi
 	detect_ssh_ports
 	if ufw_active; then
 		# The operator's firewall: rules are added to it, and nothing of
@@ -707,6 +714,25 @@ docker_nftables() {
 	grep -Eq '"firewall-backend"[[:space:]]*:[[:space:]]*"nftables"' /etc/docker/daemon.json 2>/dev/null && return 0
 	docker_responds || return 1
 	[ "$(docker info --format '{{with .FirewallBackend}}{{.Driver}}{{end}}' 2>/dev/null)" = nftables ]
+}
+
+# other_firewall_manager: what other than ufw manages this host's firewall,
+# if anything. nftables.service counts only with a ruleset of the
+# operator's: Docker CE pulls in the nftables package, which on Debian and
+# Ubuntu enables the service with its stock accept-everything ruleset.
+other_firewall_manager() {
+	if systemctl is-active --quiet firewalld.service 2>/dev/null; then
+		printf '%s\n' "firewalld is active"
+	elif systemctl is-enabled --quiet nftables.service 2>/dev/null && ! nftables_conf_is_stock; then
+		printf '%s\n' "nftables.service is enabled with its own ruleset"
+	fi
+}
+
+# nftables_conf_is_stock: is /etc/nftables.conf the one the nftables
+# package shipped?
+nftables_conf_is_stock() {
+	ns_shipped=$(dpkg-query -W -f='${Conffiles}\n' nftables 2>/dev/null | awk '$1 == "/etc/nftables.conf" { print $2 }')
+	[ -n "$ns_shipped" ] && [ "$(md5sum </etc/nftables.conf 2>/dev/null | cut -d ' ' -f 1)" = "$ns_shipped" ]
 }
 
 ufw_active() {
@@ -836,12 +862,15 @@ ufw_has_rule() {
 }
 
 configure_firewall() {
-	if [ "$FW_ACTION" = off ]; then
+	cf_targets=$(port_set "80 443 $DASHBOARD_PORT")
+	case $FW_ACTION in
+	off | skip)
 		FW_LINE="off (PANTALAN_FIREWALL=off)"
+		[ "$FW_ACTION" = off ] || FW_LINE="skipped: $FW_REASON; open $(comma_list "$cf_targets") in it"
 		say "Firewall: $FW_LINE"
 		return 0
-	fi
-	cf_targets=$(port_set "80 443 $DASHBOARD_PORT")
+		;;
+	esac
 	# Rules from an earlier run make this an upgrade or repair, whose
 	# summary says what changed.
 	cf_ours=$(port_set "$(ufw_rules pantalan)")

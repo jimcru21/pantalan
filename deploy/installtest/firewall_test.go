@@ -205,6 +205,55 @@ func TestRiskyHostsGetTheFirewallStaged(t *testing.T) {
 	}
 }
 
+// Another firewall manager means ufw is skipped entirely: not installed, no
+// rules, and the operator is told which ports to open. nftables on Debian,
+// firewalld on Ubuntu; x64 only.
+func TestAnotherFirewallManagerSkipsUfw(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		onlyOn(t, d, "debian-12", "ubuntu-26.04")
+		if nodeArch != "amd64" {
+			t.Skip("this path runs on amd64 only")
+		}
+		n := substrate.Boot(t, d, DockerOK)
+		var reason, open string
+		if strings.HasPrefix(d.Name, "debian") {
+			// The operator's own ruleset (the package's stock one, which
+			// Docker CE's dependencies enable, doesn't count).
+			sh(t, n, `command -v nft >/dev/null || { apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends nftables; } >/dev/null
+				printf 'table inet operator {\n\tchain input {\n\t\ttype filter hook input priority filter; policy accept;\n\t}\n}\n' > /etc/nftables.conf
+				systemctl enable --now --quiet nftables.service`)
+			reason = "nftables.service is enabled with its own ruleset"
+		} else {
+			sh(t, n, `{ apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends firewalld; } >/dev/null
+				firewall-cmd --state`)
+			reason = "firewalld is active"
+			open = "firewall-cmd --add-port=80/tcp --add-port=443/tcp --add-port=8443/tcp"
+		}
+
+		r := installer{}.run(t, n, "--admin-user", "alice")
+		if r.Code != 0 {
+			t.Fatalf("install exited %d, want 0: a skipped firewall is still a working install", r.Code)
+		}
+		s := parseSummary(t, r.Output())
+		assertFirewallLine(t, r.Output(), "skipped: "+reason+"; open 80, 443, 8443 in it")
+		if !strings.Contains(r.Output(), "warning: "+reason) {
+			t.Errorf("the installer didn't warn that %s", reason)
+		}
+		if open != "" {
+			sh(t, n, open) // what the operator does next
+		}
+		assertInstalled(t, n, installed{
+			Version:       tag,
+			DashboardPort: 8443,
+			Fingerprint:   s.Fingerprint,
+			AdminUser:     "alice",
+			AdminPassword: s.AdminPassword,
+			Firewall:      firewall{State: noUfw},
+		})
+	})
+}
+
 // onlyOn skips the test unless d is one of names.
 func onlyOn(t *testing.T, d Distro, names ...string) {
 	t.Helper()
