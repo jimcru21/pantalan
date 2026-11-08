@@ -228,6 +228,14 @@ release built from the working tree, and check the result from outside the
 Node with shared post-install assertions. `ci.yml` runs it on Debian 12/13
 and Ubuntu 24.04/26.04, on amd64 and arm64.
 
+Releases come from `release.yml` on a `vX.Y.Z` tag push, any other tag
+failing first. It runs `ci.yml` as its gate, builds the assets with
+`deploy/release.sh` (the same script the harness builds its fake release
+with) in a job with read-only access, and hands them as a workflow artifact
+to the one job with write access, which runs no repository code: it checks
+the assets, attests the binaries' provenance, creates a draft release,
+uploads and publishes last.
+
 ## Packages
 
 | Path | Role |
