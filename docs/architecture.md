@@ -161,7 +161,11 @@ The Dashboard's home page shows the Node's health, read by
   inclusive, so a replay that starts with the ring's last event proves
   the gap was covered; one that doesn't (the buffer moved past it, or
   dockerd restarted) puts a "stream reconnected" marker before the next
-  event.
+  event. A drop before the ring holds any event leaves nothing to check
+  the replay against, so the next event always gets the marker. A
+  `/events` request that gets no response headers within 5 s is given up
+  and retried like a drop; once the headers arrive the stream has no
+  timeout.
 
 The page:
 

@@ -256,6 +256,27 @@ func TestAGapTheDaemonsBufferNoLongerCoversShowsTheReconnectedMarker(t *testing.
 	}
 }
 
+func TestADropBeforeAnyEventShowsTheReconnectedMarker(t *testing.T) {
+	b, fe, backoff := serveWithEvents(t)
+
+	// dockerd restarts before any event reached the tab, losing its
+	// buffer: with no event to check the replay against, nothing proves
+	// the gap was backfilled.
+	fe.close()
+	fe.emit(containerEvent(time.Now(), "start", "c9", "lost", "busybox"))
+	fe.set(func(*engineState) { fe.events = nil })
+	fe.open()
+	backoff.next(t)
+	fe.waitForStreams(t, 2)
+	next := time.Now()
+	fe.emit(containerEvent(next, "start", "c1", "db", "postgres:17"))
+
+	want := []string{next.UTC().Format("15:04:05") + " db start postgres:17", reconnected}
+	if rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
+		t.Errorf("after a drop before any event the events are\n%q\nwant\n%q", rows, want)
+	}
+}
+
 func TestTheEventsTabKeepsOnlyTheLast100Events(t *testing.T) {
 	fp := newFakeProc(t)
 	_, b, fe := serveWithEngine(t, fp)
