@@ -116,6 +116,25 @@ func TestRefusesWithoutRootBeforeAnyChange(t *testing.T) {
 	})
 }
 
+// Run from a downloaded file, as the README shows, the advice names that
+// file rather than the curl pipe.
+func TestRefusesWithoutRootNamingTheDownloadedFile(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		onlyOn(t, d, "debian-13")
+		n := substrate.Boot(t, d, Bare)
+		before := hostState(t, n)
+
+		r := installer{asUser: "65534:65534", downloaded: "/tmp/install.sh"}.run(t, n, "--admin-user", "alice")
+
+		assertFailedNaming(t, r, "root", "sudo sh /tmp/install.sh --admin-user alice")
+		if strings.Contains(r.Output(), "curl") {
+			t.Errorf("run from a file, the advice still pipes curl:\n%s", r.Output())
+		}
+		assertUntouched(t, n, before)
+	})
+}
+
 func TestMissingAdminUserWithNoTTYNamesTheFlag(t *testing.T) {
 	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d Distro) {
