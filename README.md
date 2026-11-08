@@ -269,6 +269,28 @@ Node".
 
 ## Run locally
 
+### Set up a fresh VPS for development
+
+[dev/setup-vps.sh](dev/setup-vps.sh) gets a fresh Debian or Ubuntu server
+(amd64 or arm64) ready for both ways of developing below. It installs Go
+(the newest patch release of the version in `go.mod`, checksum-verified,
+in `/usr/local/go`), Docker CE with the buildx and Compose plugins from
+Docker's apt repository, git, make, gcc (for `go test -race`), shellcheck,
+jq and the GitHub CLI. It also adds you to the `docker` group. Run it as
+your normal user with sudo, so that user is the one it sets up:
+
+```sh
+curl -fL --max-time 120 -o setup-vps.sh https://raw.githubusercontent.com/jimcru21/pantalan/main/dev/setup-vps.sh
+sudo sh setup-vps.sh --clone ~/pantalan
+```
+
+or `sudo sh dev/setup-vps.sh` from a checkout. `--user NAME` sets up a
+user other than the one who ran sudo, and `--go-version 1.26.1` pins a Go
+release. Run it again any time: it moves Go to the newest patch release
+and leaves everything else as it is. It never touches the firewall, and it
+refuses to replace a Docker that isn't Docker CE (`docker.io`, snap).
+Then log out and back in so the `docker` group and Go's `PATH` apply.
+
 ### Develop with Docker
 
 The easiest way: all you need is Docker with Compose (no Go, git or
