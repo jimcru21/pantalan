@@ -11,4 +11,13 @@
 // They need Docker on the machine running them and network access to the
 // distro and Docker apt repositories. See substrate_test.go for the seam
 // between the tests and where Nodes come from.
+//
+// The VM tier runs the paths only VMs can show on KVM VMs from the
+// distros' cloud images (vm_test.go, vm_paths_test.go); without KVM they
+// skip:
+//
+//	make installtest-vm
+//
+// The VM substrate's pure parts (vmspec_test.go) carry no build tag, so
+// their unit tests run in `make check`.
 package installtest
