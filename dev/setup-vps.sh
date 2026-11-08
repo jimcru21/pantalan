@@ -18,12 +18,27 @@
 #   gh        the GitHub CLI, from GitHub's apt repository (the issue
 #             tracker, PRs)
 #
-# Every step converges, so running it again repairs or upgrades: Go moves to
-# the newest patch release, the rest is left as it is. It never touches the
-# firewall, and never removes a Docker it didn't install.
+# and, for the developer (in their home, unless --no-agent-tools), the tools
+# Claude Code works on the repo with:
+#
+#   Claude Code  the native installer, in ~/.local/bin (updates itself)
+#   colgrep      LightOn's semantic code search, in ~/.cargo/bin, with its
+#                Claude Code hooks
+#   semble       MinishLab's code search, with uv, as a Claude Code MCP
+#                server and sub-agent
+#   skills       Matt Pocock's skills, from a checkout of the newest release
+#                of github.com/mattpocock/skills, linked into
+#                ~/.claude/skills (not the Claude Code plugin, which lags
+#                behind the releases); docs/agents already holds their
+#                per-repo setup
+#
+# Every step converges, so running it again repairs or upgrades: Go, colgrep
+# semble and the skills move to their newest releases, the rest is left as it is. It
+# never touches the firewall, and never removes a Docker it didn't install.
 set -eu
 
 REPO_URL=https://github.com/jimcru21/pantalan
+SKILLS_URL=https://github.com/mattpocock/skills
 # The Go minor version used when there's no go.mod to read it from.
 DEFAULT_GO_MINOR=1.26
 GO_ROOT=/usr/local/go
@@ -33,6 +48,7 @@ KEYRINGS=/etc/apt/keyrings
 OPT_USER=
 OPT_CLONE=
 OPT_GO_VERSION=
+OPT_NO_AGENT_TOOLS=
 
 # What the steps found out.
 DEV_USER=
@@ -43,6 +59,7 @@ OS_NAME=
 ARCH=
 TMP_DIR=
 STEP=checks
+AGENT_WARNINGS=  # the agent tools' integrations that failed, for the summary
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -64,7 +81,8 @@ step() {
 usage() {
 	cat <<EOF
 Set up this Debian or Ubuntu server for Pantalan development: Go, Docker
-CE (with Compose), git, make, gcc, shellcheck, jq and the GitHub CLI.
+CE (with Compose), git, make, gcc, shellcheck, jq and the GitHub CLI, plus
+Claude Code with colgrep, semble and Matt Pocock's skills.
 
   sudo sh setup-vps.sh [options]
 
@@ -74,6 +92,7 @@ Options:
   --clone DIR         also clone $REPO_URL into DIR
   --go-version X.Y.Z  install this Go release instead of the newest patch
                       release of the go.mod's minor version
+  --no-agent-tools    skip Claude Code, colgrep, semble and the skills
   -h, --help          show this help
 EOF
 }
@@ -115,6 +134,36 @@ as_dev() {
 	fi
 }
 
+# dev_sh SCRIPT [ARG...]: runs SCRIPT with sh as the developer, in their
+# home, with the PATH their login shell gets and no terminal to prompt on.
+# The ARGs are SCRIPT's $1, $2, ...
+dev_sh() {
+	ds_script=$1
+	shift
+	ds_path=$DEV_HOME/.local/bin:$DEV_HOME/.cargo/bin:$GO_ROOT/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+	if [ "$DEV_USER" = root ]; then
+		(cd "$DEV_HOME" && env HOME="$DEV_HOME" PATH="$ds_path" sh -c "$ds_script" sh "$@") </dev/null
+	else
+		(cd "$DEV_HOME" && runuser -u "$DEV_USER" -- env HOME="$DEV_HOME" USER="$DEV_USER" \
+			LOGNAME="$DEV_USER" PATH="$ds_path" sh -c "$ds_script" sh "$@") </dev/null
+	fi
+}
+
+# agent_try WHAT SCRIPT: dev_sh SCRIPT, where a failure is a warning in the
+# summary rather than the end of the run: these integrations depend on
+# third-party installers that can change under us.
+agent_try() {
+	at_code=0
+	dev_sh "$2" >"$TMP_DIR/agent.out" 2>&1 || at_code=$?
+	if [ "$at_code" -ne 0 ]; then
+		tail -n 15 "$TMP_DIR/agent.out" >&2
+		warn "$1 failed (exit $at_code)"
+		AGENT_WARNINGS="$AGENT_WARNINGS
+  - $1 failed; as $DEV_USER, run: $2"
+		return 1
+	fi
+}
+
 docker_responds() { docker version --format '{{.Server.Version}}' >/dev/null 2>&1; }
 
 on_exit() {
@@ -142,6 +191,10 @@ parse_args() {
 			[ $# -ge 2 ] || die "--clone needs a directory"
 			OPT_CLONE=$2
 			shift 2
+			;;
+		--no-agent-tools)
+			OPT_NO_AGENT_TOOLS=1
+			shift
 			;;
 		--go-version)
 			[ $# -ge 2 ] || die "--go-version needs a version, like 1.26.1"
@@ -298,22 +351,30 @@ install_go() {
 		tar -C "$(dirname "$GO_ROOT")" -xzf "$TMP_DIR/$ig_file"
 	fi
 
-	# Login shells get go, and what `go install` puts in ~/go/bin.
-	cat >/etc/profile.d/go.sh <<'EOF'
+	install_profile
+	say "$("$GO_ROOT/bin/go" version)"
+}
+
+# install_profile puts go, what `go install` builds (~/go/bin), and the agent
+# tools (~/.local/bin, ~/.cargo/bin) on login shells' PATH.
+install_profile() {
+	cat >/etc/profile.d/pantalan-dev.sh <<'EOF'
 # Written by Pantalan's dev/setup-vps.sh.
-case ":$PATH:" in
-*:/usr/local/go/bin:*) ;;
-*) PATH=$PATH:/usr/local/go/bin:$HOME/go/bin ;;
-esac
+for _pantalan_dir in /usr/local/go/bin "$HOME/go/bin" "$HOME/.local/bin" "$HOME/.cargo/bin"; do
+	case ":$PATH:" in
+	*":$_pantalan_dir:"*) ;;
+	*) PATH=$PATH:$_pantalan_dir ;;
+	esac
+done
+unset _pantalan_dir
 export PATH
 EOF
 	# Non-login shells (a new terminal tab, tmux) on Debian and Ubuntu read
 	# ~/.bashrc only.
-	ig_rc=$DEV_HOME/.bashrc
-	if [ -f "$ig_rc" ] && ! grep -q '/etc/profile.d/go.sh' "$ig_rc"; then
-		printf '\n# Go, added by Pantalan dev/setup-vps.sh\n[ -r /etc/profile.d/go.sh ] && . /etc/profile.d/go.sh\n' >>"$ig_rc"
+	ip_rc=$DEV_HOME/.bashrc
+	if [ -f "$ip_rc" ] && ! grep -q '/etc/profile.d/pantalan-dev.sh' "$ip_rc"; then
+		printf '\n# Go and the agent tools, added by Pantalan dev/setup-vps.sh\n[ -r /etc/profile.d/pantalan-dev.sh ] && . /etc/profile.d/pantalan-dev.sh\n' >>"$ip_rc"
 	fi
-	say "$("$GO_ROOT/bin/go" version)"
 }
 
 # install_docker follows https://docs.docker.com/engine/install/debian/ (and
@@ -370,6 +431,96 @@ install_gh() {
 	say "$(gh --version | head -n 1)"
 }
 
+# install_agent_tools installs, as the developer, Claude Code and the tools
+# it searches and plans with, from each project's documented installer:
+# https://code.claude.com/docs/en/setup, https://github.com/lightonai/next-plaid/tree/main/colgrep,
+# https://github.com/MinishLab/semble and https://github.com/mattpocock/skills.
+# The binaries are required; their Claude Code integrations only warn.
+install_agent_tools() {
+	[ -z "$OPT_NO_AGENT_TOOLS" ] || return 0
+	step "agent tools"
+
+	if [ -x "$DEV_HOME/.local/bin/claude" ]; then
+		say "Claude Code is already installed; it updates itself."
+	else
+		say "Installing Claude Code"
+		quietly dev_sh 'curl -fsSL https://claude.ai/install.sh | bash'
+	fi
+	say "Claude Code $(dev_sh 'claude --version' 2>/dev/null | head -n 1)"
+
+	# colgrep's installer always fetches the latest release. Its
+	# --install-agent (a ~2.5 GB local model) is left for the developer.
+	say "Installing colgrep"
+	quietly dev_sh "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/lightonai/next-plaid/releases/latest/download/colgrep-installer.sh | sh"
+	agent_try "colgrep's Claude Code hooks" 'colgrep --install-claude-code' || :
+	say "$(dev_sh 'colgrep --version' 2>/dev/null | head -n 1)"
+
+	if [ ! -x "$DEV_HOME/.local/bin/uv" ]; then
+		say "Installing uv (for semble)"
+		quietly dev_sh 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+	fi
+	say "Installing semble"
+	if dev_sh 'uv tool list' 2>/dev/null | grep -q '^semble '; then
+		quietly dev_sh 'uv tool upgrade semble'
+	else
+		quietly dev_sh 'uv tool install semble'
+	fi
+	# Re-run after every upgrade: it pins the MCP server to the installed
+	# version.
+	agent_try "semble's Claude Code MCP server and sub-agent" 'semble install --agent claude --type mcp subagent --yes' || :
+	say "$(dev_sh 'uv tool list' 2>/dev/null | grep '^semble ')"
+
+	install_skills
+}
+
+# install_skills checks out the newest release tag of Matt Pocock's skills
+# and links the skills that release publishes (the plugin manifest's list,
+# which leaves out in-progress/ and misc/) into ~/.claude/skills, where
+# Claude Code finds them in every project. The plugin in Claude Code's
+# official marketplace trails the releases, so it isn't used.
+install_skills() {
+	is_dir=$DEV_HOME/.local/share/mattpocock-skills
+	is_tag=$(git -c versionsort.suffix=- ls-remote --tags --refs --sort=-v:refname "$SKILLS_URL" 'v*' |
+		sed -n '1s#.*refs/tags/##p') || is_tag=
+	[ -n "$is_tag" ] || die "couldn't find a release tag in $SKILLS_URL"
+	if [ -d "$is_dir/.git" ]; then
+		quietly dev_sh 'git -C "$1" fetch --quiet --tags --force origin && git -C "$1" checkout --quiet --force --detach "refs/tags/$2"' "$is_dir" "$is_tag"
+	else
+		quietly dev_sh 'mkdir -p "$(dirname "$1")" && git -c advice.detachedHead=false clone --quiet --branch "$2" "$3.git" "$1"' "$is_dir" "$is_tag" "$SKILLS_URL"
+	fi
+	# Links into the checkout that this release no longer lists are
+	# dropped; a skill of the developer's own with the same name is kept.
+	is_kept=$(dev_sh '
+		set -eu
+		dir=$1
+		skills=$HOME/.claude/skills
+		mkdir -p "$skills"
+		for link in "$skills"/*; do
+			[ -L "$link" ] || continue
+			case $(readlink "$link") in "$dir"/*) rm -f "$link" ;; esac
+		done
+		jq -r ".skills[]" "$dir/.claude-plugin/plugin.json" | while IFS= read -r path; do
+			target=$dir/${path#./}
+			name=${path##*/}
+			[ -f "$target/SKILL.md" ] || continue
+			if [ -e "$skills/$name" ] || [ -L "$skills/$name" ]; then
+				echo "$skills/$name"
+				continue
+			fi
+			ln -s "$target" "$skills/$name"
+		done' "$is_dir") || die "couldn't link Matt Pocock's skills into $DEV_HOME/.claude/skills"
+	for is_path in $is_kept; do
+		warn "$is_path isn't a link to Matt Pocock's skills, so it's kept and that skill isn't linked"
+	done
+	is_count=$(dev_sh 'find "$HOME/.claude/skills" -maxdepth 1 -type l -lname "$1/*" | wc -l' "$is_dir")
+	say "Matt Pocock's skills $is_tag: $is_count linked into $DEV_HOME/.claude/skills."
+	if dev_sh 'claude plugin list' 2>/dev/null | grep -q 'mattpocock-skills'; then
+		warn "the mattpocock-skills plugin is installed too, so Claude Code sees every skill twice"
+		AGENT_WARNINGS="$AGENT_WARNINGS
+  - the mattpocock-skills plugin duplicates the linked skills; as $DEV_USER, run: claude plugin uninstall mattpocock-skills"
+	fi
+}
+
 summary() {
 	STEP=summary
 	sm_dir=${OPT_CLONE:-}
@@ -380,10 +531,18 @@ summary() {
 
 Done. This server has Go, Docker CE with Compose, git, make, gcc,
 shellcheck, jq and gh.
+EOF
+	if [ -z "$OPT_NO_AGENT_TOOLS" ]; then
+		say "$DEV_USER has Claude Code, colgrep, semble and Matt Pocock's skills."
+		if [ -n "$AGENT_WARNINGS" ]; then
+			say "Some Claude Code integrations didn't install:$AGENT_WARNINGS"
+		fi
+	fi
+	cat <<EOF
 
 Next, as $DEV_USER:
 
-  1. Log out and back in, so the docker group and Go's PATH apply.
+  1. Log out and back in, so the docker group and the new PATH apply.
 EOF
 	if [ -n "$sm_dir" ]; then
 		say "  2. cd $sm_dir"
@@ -392,6 +551,11 @@ EOF
 	fi
 	cat <<EOF
   3. Sign in to GitHub for the issue tracker and PRs: gh auth login
+EOF
+	if [ -z "$OPT_NO_AGENT_TOOLS" ]; then
+		say "     and to Claude Code: run claude in the checkout and follow the prompts"
+	fi
+	cat <<EOF
   4. Start developing, either way:
        docker compose up    the dev stack: rebuilds on every change
        make check           vet, race tests and gofmt on the host
@@ -418,6 +582,7 @@ main() {
 	install_go
 	install_docker
 	install_gh
+	install_agent_tools
 	summary
 }
 
