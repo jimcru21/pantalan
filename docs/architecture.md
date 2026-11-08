@@ -116,6 +116,27 @@ Auth surfaces on the one listener:
   stamp, such as `go run`) a digest of the files. Pages, fragments and
   redirects are `no-store`.
 
+## Installer
+
+`deploy/install.sh` is a POSIX `sh` script (`set -eu`, ShellCheck-clean,
+run by dash on the supported distros) shipped as a release asset, with
+`DEFAULT_VERSION=@VERSION@` replaced by the tag at release time. Every
+function is defined before `main "$@"`, the last line, and `main` runs one
+function per step: preflight (read-only), download and verify, collect
+inputs, packages, files, Admin, service, then the summary. Nothing on the
+host changes before the packages step; each step converges, so a re-run
+resumes. Output goes through `tee` into `/var/log/pantalan-install.log`
+except the Admin password, which is printed after the log is closed.
+`PANTALAN_RELEASE_BASE_URL` (test-only) points downloads at a fake release.
+
+`deploy/installtest` (build tag `installtest`) tests it end to end: Go tests
+drive a `Substrate` (privileged systemd containers on PRs; VMs later) that
+boots a fresh Node per path from per-distro images in
+`deploy/installtest/images/`, run the script as `curl | sh` against a fake
+release built from the working tree, and check the result from outside the
+Node with shared post-install assertions. `ci.yml` runs it on Debian 12/13
+and Ubuntu 24.04/26.04, on amd64 and arm64.
+
 ## Packages
 
 | Path | Role |
@@ -187,5 +208,4 @@ internal/databases/       managed Postgres/MySQL/Redis templates
 internal/backup/          scheduled dumps to S3-compatible storage
 internal/auth/            more users, roles, scoped API keys
 internal/events/          pub/sub for live logs and status over SSE
-deploy/install.sh         curl | sh installer + systemd unit
 ```
