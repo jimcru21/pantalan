@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,6 +16,21 @@ import (
 // Host is the Node's host health; nodeinfo.Sampler provides it.
 type Host interface {
 	Snapshot() nodeinfo.Snapshot
+}
+
+// Docker is the Node's Docker, read through the Engine API;
+// nodeinfo.Docker provides it.
+type Docker interface {
+	// Summary is an error when Docker is unreachable.
+	Summary(ctx context.Context) (nodeinfo.DockerSummary, error)
+	// Stats are the running containers' CPU and memory, by ID, through
+	// the API version a Summary negotiated.
+	Stats(ctx context.Context, apiVersion string, ids []string) map[string]nodeinfo.ContainerStats
+	Images(ctx context.Context, apiVersion string) ([]nodeinfo.Image, error)
+	Version(ctx context.Context, apiVersion string) (nodeinfo.DockerVersion, error)
+	// DiskUsage is system/df, which is slow: only the Docker tab asks,
+	// and the answer is shared for nodeinfo.DiskUsageTTL.
+	DiskUsage(ctx context.Context, apiVersion string) (nodeinfo.DiskUsage, error)
 }
 
 // overviewData is the dot of the Node overview and of each of its
@@ -30,8 +47,8 @@ type overviewData struct {
 // status is the top bar's dot: its colour and the reasons for it, which
 // its tooltip lists.
 type status struct {
-	// Level is the dot's CSS class: "ok" (green), "warn" (amber), "off"
-	// (grey, no data yet); app.css also has "down" (red) for Docker.
+	// Level is the dot's CSS class: "ok" (green), "warn" (amber), "down"
+	// (red, Docker unreachable) or "off" (grey, no host data yet).
 	Level   string
 	Reasons []string
 }
@@ -39,43 +56,83 @@ type status struct {
 // Tooltip is the reasons, one per line.
 func (s status) Tooltip() string { return strings.Join(s.Reasons, "\n") }
 
-// warn turns the dot amber for reason.
+// warn turns the dot amber for reason, unless it is red.
 func (s *status) warn(reason string) {
-	s.Level = "warn"
+	if s.Level != "down" {
+		s.Level = "warn"
+	}
 	s.Reasons = append(s.Reasons, reason)
 }
 
-// hostStatus is the status the host alone gives: amber when disk or
-// memory runs under 10 % free, or when the latest read failed (readErr)
-// and s is an older sample. The thresholds are fixed in v1. The Docker
-// ticket adds red for Docker unreachable and its own amber reasons.
-func hostStatus(s nodeinfo.Sample, readErr error) status {
+// hostStatus is the status the host gives: amber when a disk the band
+// shows or memory runs under 10 % free, or when the latest read failed
+// (readErr) and s is an older sample. The thresholds are fixed in v1.
+func hostStatus(s nodeinfo.Sample, readErr error, disks []nodeinfo.Disk) status {
 	st := status{Level: "ok"}
 	if readErr != nil {
 		st.warn("Can't read the host, so this is older data: " + readErr.Error())
 	}
-	if underTenth(s.Disk.Free, s.Disk.Total) {
-		st.warn("Disk " + s.Disk.Path + " has under 10% free")
+	for _, disk := range disks {
+		if underTenth(disk.Free, disk.Total) {
+			st.warn("Disk " + disk.Path + " has under 10% free")
+		}
 	}
 	if underTenth(s.Memory.Available, s.Memory.Total) {
 		st.warn("Memory has under 10% available")
 	}
-	if len(st.Reasons) == 0 {
-		st.Reasons = []string{"Healthy"}
-	}
 	return st
+}
+
+// addDocker adds Docker's reasons: red, first, when it is unreachable,
+// which beats amber; amber for a container that is unhealthy or
+// restarting and for each warning Docker reports.
+func (s *status) addDocker(n node) {
+	if n.dockerErr != nil {
+		s.Level = "down"
+		s.Reasons = append([]string{"Docker unreachable: " + n.dockerErr.Error()}, s.Reasons...)
+		return
+	}
+	for _, c := range n.docker.Containers {
+		switch {
+		case c.State == "restarting":
+			s.warn("Container " + c.Name() + " is restarting")
+		case c.HealthStatus() == "unhealthy":
+			s.warn("Container " + c.Name() + " is unhealthy")
+		}
+	}
+	for _, w := range n.docker.Info.Warnings {
+		s.warn("Docker: " + w)
+	}
+}
+
+// healthy fills in the reason for a dot nothing is wrong with.
+func (s *status) healthy() {
+	if len(s.Reasons) == 0 {
+		s.Reasons = []string{"Healthy"}
+	}
 }
 
 // underTenth reports part < 10 % of whole, in integers so that exactly
 // 10 % is not under.
 func underTenth(part, whole uint64) bool { return part*10 < whole }
 
-// statBand is the row of tiles under the top bar. The Docker ticket adds
-// its tiles next to the host ones.
+// statBand is the row of tiles under the top bar: the host's, then
+// Docker's.
 type statBand struct {
 	CPU    cpuTile
 	Memory memoryTile
-	Disk   diskTile
+	// Disks are Docker's root dir and, when it is on another filesystem,
+	// /; just / while Docker is unreachable.
+	Disks  []diskTile
+	Docker dockerTiles
+}
+
+// dockerTiles are the Containers and Docker tiles.
+type dockerTiles struct {
+	// OK is false while Docker is unreachable; the tiles say so then.
+	OK                        bool
+	Running, Total, Unhealthy int
+	Version                   string
 }
 
 type cpuTile struct {
@@ -124,25 +181,77 @@ type topBar struct {
 	Load     string // "0.42 0.38 0.31"
 }
 
+// node is what one request reads of the Node: the sampler's snapshot and
+// a Docker summary.
+type node struct {
+	host   nodeinfo.Snapshot
+	docker nodeinfo.DockerSummary
+	// dockerErr is why Docker couldn't be read: it is unreachable.
+	dockerErr error
+}
+
+func (d *Dashboard) readNode(ctx context.Context) node {
+	var n node
+	if d.deps.Host != nil {
+		n.host = d.deps.Host.Snapshot()
+	}
+	if d.deps.Docker == nil {
+		n.dockerErr = errors.New("no Docker configured")
+	} else {
+		n.docker, n.dockerErr = d.deps.Docker.Summary(ctx)
+	}
+	return n
+}
+
+// disks are the filesystems the band shows: Docker's root dir, plus /
+// when that is another filesystem; just / when Docker's is unknown.
+func (n node) disks(root nodeinfo.Disk) []nodeinfo.Disk {
+	if n.dockerErr != nil || n.docker.RootDiskErr != nil {
+		return []nodeinfo.Disk{root}
+	}
+	if n.docker.RootDisk.SameFilesystem(root) {
+		return []nodeinfo.Disk{n.docker.RootDisk}
+	}
+	return []nodeinfo.Disk{n.docker.RootDisk, root}
+}
+
+// overviewPage is the Node overview's first load: the polled regions,
+// with the Containers tab open.
+type overviewPage struct {
+	overviewData
+	Containers containersTab
+}
+
+func (d *Dashboard) overviewPage(r *http.Request) (any, error) {
+	n := d.readNode(r.Context())
+	return overviewPage{overviewData: d.overview(r, n), Containers: d.containersTab(r.Context(), n)}, nil
+}
+
+// overviewData is the dot of the top bar and band fragments.
 func (d *Dashboard) overviewData(r *http.Request) (any, error) {
+	return d.overview(r, d.readNode(r.Context())), nil
+}
+
+func (d *Dashboard) overview(r *http.Request, n node) overviewData {
 	data := overviewData{Top: topBar{
 		Status: status{Level: "off", Reasons: []string{"No host information yet"}},
 		IP:     localIP(r),
 		Arch:   runtime.GOARCH,
 	}}
-	if d.deps.Host == nil {
-		return data, nil
-	}
-	snap := d.deps.Host.Snapshot()
+	data.Band.Docker = dockerBand(n)
+	snap := n.host
 	if snap.Err != nil {
 		data.HostErr = snap.Err.Error()
 	}
 	latest, ok := snap.Latest()
 	if !ok {
-		return data, nil
+		return data
 	}
 	data.HostOK = true
-	data.Top.Status = hostStatus(latest, snap.Err)
+	disks := n.disks(latest.Disk)
+	data.Top.Status = hostStatus(latest, snap.Err, disks)
+	data.Top.Status.addDocker(n)
+	data.Top.Status.healthy()
 	data.Top.Hostname = latest.Hostname
 	data.Top.OS = latest.OS
 	data.Top.Uptime = formatUptime(latest.Uptime)
@@ -169,14 +278,31 @@ func (d *Dashboard) overviewData(r *http.Request) (any, error) {
 	if used := mem.SwapUsed(); used > 0 {
 		data.Band.Memory.Swap = formatBytesOf(used, mem.SwapTotal)
 	}
-	disk := latest.Disk
-	data.Band.Disk = diskTile{
-		Path:        disk.Path,
-		Free:        formatBytes(disk.Free),
-		Total:       formatBytes(disk.Total),
-		UsedPercent: share(disk.Total-min(disk.Free, disk.Total), disk.Total),
+	for _, disk := range disks {
+		data.Band.Disks = append(data.Band.Disks, diskTile{
+			Path:        disk.Path,
+			Free:        formatBytes(disk.Free),
+			Total:       formatBytes(disk.Total),
+			UsedPercent: share(disk.Total-min(disk.Free, disk.Total), disk.Total),
+		})
 	}
-	return data, nil
+	return data
+}
+
+func dockerBand(n node) dockerTiles {
+	if n.dockerErr != nil {
+		return dockerTiles{}
+	}
+	t := dockerTiles{OK: true, Total: len(n.docker.Containers), Version: n.docker.Info.ServerVersion}
+	for _, c := range n.docker.Containers {
+		if c.Running() {
+			t.Running++
+		}
+		if c.HealthStatus() == "unhealthy" {
+			t.Unhealthy++
+		}
+	}
+	return t
 }
 
 // share is part as a percentage of whole, 0 when whole is.

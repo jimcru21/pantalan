@@ -31,8 +31,9 @@ type Node struct {
 	// SampleTicks makes the Node sampler read the host; nil means every
 	// nodeinfo.SampleInterval. Tests send on it to take a sample now.
 	SampleTicks <-chan time.Time
-	// Clock is the time Dashboard sessions are timed by; nil means
-	// time.Now. Tests move it forward instead of waiting.
+	// Clock is the time Dashboard sessions and the Docker tab's shared
+	// system/df are timed by; nil means time.Now. Tests move it forward
+	// instead of waiting.
 	Clock func() time.Time
 }
 

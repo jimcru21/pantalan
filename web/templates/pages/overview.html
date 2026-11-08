@@ -10,7 +10,128 @@
 <main class="page">
   <h1 class="sr-only">Node overview</h1>
   {{template "band" .}}
+  {{template "containers" .Containers}}
 </main>
+{{end}}
+
+{{/* The tabs. Each tab is a block and fragment that renders the whole
+     tabs section, its tab bar included, so a tab button swaps the section
+     for the tab it names, and only the open tab polls. Data: the tab's
+     own struct, whose .Nav is a dashboard.tabNav. */}}
+{{define "tabnav"}}
+<div class="tabbar" role="tablist" aria-label="Node overview tabs">
+  {{$active := .Active}}
+  {{range .Tabs}}
+  <button type="button" role="tab" class="tab{{if eq .Name $active}} on{{end}}" aria-selected="{{eq .Name $active}}" hx-get="/fragments/{{.Name}}" hx-target="#tabs" hx-swap="outerHTML">{{.Label}}</button>
+  {{end}}
+</div>
+{{end}}
+
+{{/* The one card every tab shows while Docker is unreachable. Data: the
+     error. */}}
+{{define "dockerdown"}}
+<div class="panel empty" role="alert">
+  <p><b>Docker unreachable</b></p>
+  <p class="muted">{{.}}</p>
+  <p class="muted">Check the daemon on the Node with <code>systemctl status docker</code>.</p>
+</div>
+{{end}}
+
+{{define "containers"}}
+<section class="tabs" id="tabs" hx-get="/fragments/containers" hx-trigger="every 5s" hx-swap="outerHTML">
+  {{template "tabnav" .Nav}}
+  <div role="tabpanel" aria-label="Containers">
+  {{with .DockerErr}}{{template "dockerdown" .}}{{else}}
+  <div class="panel table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Image</th><th>State</th><th>Ports</th><th>Uptime</th><th class="num">CPU</th><th class="num">Memory</th></tr></thead>
+      <tbody>
+        {{range .Rows}}
+        <tr>
+          <td><b>{{.Name}}</b>{{with .App}} <span class="badge" title="Pantalan app">{{.}}</span>{{end}}</td>
+          <td class="mono">{{.Image}}</td>
+          <td{{if .Bad}} class="bad"{{end}}>{{.State}}</td>
+          <td class="mono">{{.Ports}}</td>
+          <td>{{.Uptime}}</td>
+          <td class="num">{{.CPU}}</td>
+          <td class="num">{{.Memory}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="7" class="muted">No containers on this Node.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+  </div>
+</section>
+{{end}}
+
+{{define "images"}}
+<section class="tabs" id="tabs" hx-get="/fragments/images" hx-trigger="every 30s" hx-swap="outerHTML">
+  {{template "tabnav" .Nav}}
+  <div role="tabpanel" aria-label="Images">
+  {{with .DockerErr}}{{template "dockerdown" .}}{{else}}
+  <div class="panel table-wrap">
+    <table>
+      <thead><tr><th>Repository:tag</th><th class="num">Size</th><th>Created</th><th>In use</th></tr></thead>
+      <tbody>
+        {{range .Rows}}
+        <tr>
+          <td class="mono">{{.Tags}}</td>
+          <td class="num">{{.Size}}</td>
+          <td>{{.Created}}</td>
+          <td>{{if .InUse}}In use{{else}}<span class="muted">Unused</span>{{end}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="4" class="muted">No images on this Node.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+  </div>
+</section>
+{{end}}
+
+{{/* The Docker tab doesn't poll: it loads when opened and on Refresh.
+     system/df is shared server-side for a minute. */}}
+{{define "docker"}}
+<section class="tabs" id="tabs">
+  {{template "tabnav" .Nav}}
+  <div role="tabpanel" aria-label="Docker">
+  {{with .DockerErr}}{{template "dockerdown" .}}{{else}}
+  <div class="panel engine">
+    <div class="panel-head">
+      <h2>Engine</h2>
+      <button type="button" class="btn ghost" hx-get="/fragments/docker" hx-target="#tabs" hx-swap="outerHTML">Refresh</button>
+    </div>
+    <dl class="facts">
+      <dt>Version</dt><dd>{{.Version}}</dd>
+      <dt>API version</dt><dd>{{.APIVersion}} <span class="muted">daemon accepts {{.DaemonAPI}}</span></dd>
+      <dt>Storage driver</dt><dd>{{.Driver}}</dd>
+      <dt>Cgroup</dt><dd>{{.Cgroup}}</dd>
+      <dt>Root dir</dt><dd class="mono">{{.RootDir}}</dd>
+      <dt>Warnings</dt>
+      <dd>{{with .Warnings}}<ul class="warnings">{{range .}}<li>{{.}}</li>{{end}}</ul>{{else}}None{{end}}</dd>
+    </dl>
+  </div>
+  <div class="panel table-wrap">
+    <div class="panel-head"><h2>Disk usage</h2>{{with .DiskUsageAt}}<span class="muted">as of {{.}}</span>{{end}}</div>
+    {{with .DiskUsageErr}}<p class="alert">{{.}}</p>{{else}}
+    <table>
+      <thead><tr><th>Kind</th><th class="num">Total</th><th class="num">Active</th><th class="num">Size</th><th class="num">Reclaimable</th></tr></thead>
+      <tbody>
+        {{range .DiskUsage}}
+        <tr><td>{{.Kind}}</td><td class="num">{{.Total}}</td><td class="num">{{.Active}}</td><td class="num">{{.Size}}</td><td class="num">{{.Reclaimable}}</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{end}}
+  </div>
+  {{end}}
+  </div>
+</section>
 {{end}}
 
 {{define "topbar"}}
@@ -52,7 +173,7 @@
     {{template "sparkline" .Spark}}
   </div>
   {{end}}
-  {{with .Band.Disk}}
+  {{range .Band.Disks}}
   <div class="stat">
     <span class="k">Disk {{.Path}}</span>
     <span class="v">{{.Free}} <small>free</small></span>
@@ -64,6 +185,21 @@
   <div class="stat wide">
     <span class="k">Host</span>
     <span class="sub">Unavailable{{with .HostErr}}: {{.}}{{end}}</span>
+  </div>
+  {{end}}
+  {{with .Band.Docker}}
+  <div class="stat">
+    <span class="k">Containers</span>
+    {{if .OK}}
+    <span class="v">{{.Running}}/{{.Total}} <small>running</small></span>
+    {{if .Unhealthy}}<span class="sub bad">{{.Unhealthy}} unhealthy</span>{{end}}
+    {{else}}
+    <span class="sub bad">Docker unreachable</span>
+    {{end}}
+  </div>
+  <div class="stat">
+    <span class="k">Docker</span>
+    {{if .OK}}<span class="v">{{.Version}}</span>{{else}}<span class="sub bad">Docker unreachable</span>{{end}}
   </div>
   {{end}}
 </section>
