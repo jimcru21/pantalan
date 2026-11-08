@@ -114,16 +114,25 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 		sampler.Run(ctx, node.SampleTicks)
 		close(samplerDone)
 	}()
+	dockerAPI := nodeinfo.NewDocker(node.DockerSocket, node.Statfs, node.now)
+	events := nodeinfo.NewEventStream(dockerAPI, log)
+	eventsDone := make(chan struct{})
+	go func() {
+		events.Run(ctx, node.EventsBackoff)
+		close(eventsDone)
+	}()
 	defer func() {
 		stop()
 		<-samplerDone
+		<-eventsDone
 	}()
 
 	apps := service.NewAppService(store)
 	dash, err := dashboard.New(dashboard.Deps{
 		Auth:         service.NewAuthService(store, store, password.Hasher{}, node.now),
 		Host:         sampler,
-		Docker:       nodeinfo.NewDocker(node.DockerSocket, node.Statfs, node.now),
+		Docker:       dockerAPI,
+		Events:       events,
 		Apps:         apps,
 		Templates:    web.Templates(),
 		Static:       web.Static(),

@@ -35,6 +35,9 @@ type Deps struct {
 	// Docker is the Node's Docker for the Node overview; nil shows it as
 	// unreachable.
 	Docker Docker
+	// Events is Docker's recent container events for the Events tab; nil
+	// shows none.
+	Events Events
 	// Apps names the apps whose containers the Containers tab badges.
 	Apps Apps
 	// Templates and Static are web.Templates() and web.Static().
@@ -102,6 +105,7 @@ func New(deps Deps) (*Dashboard, error) {
 				{name: "containers", data: d.containersData},
 				{name: "images", data: d.imagesData},
 				{name: "docker", data: d.dockerData},
+				{name: "events", data: d.eventsData},
 			},
 		},
 	}

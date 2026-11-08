@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -92,6 +94,53 @@ type fakeEngine struct {
 	// statsGate, when set, holds each stats request until it is closed.
 	statsGate                  chan struct{}
 	statsInFlight, maxInFlight int
+
+	// events is the daemon's event buffer, oldest first: the last
+	// eventBuffer events, which a stream's since= replays from.
+	events      []bufferedEvent
+	nextSeq     int
+	eventBuffer int
+	// eventsChanged is closed and replaced by emit, waking the streams.
+	eventsChanged chan struct{}
+	// streamsDone is closed and replaced to end every open stream.
+	streamsDone chan struct{}
+	// eventsSince is the since= of each /events request, in order; ""
+	// when there was none.
+	eventsSince []string
+}
+
+// engineEvent is one message of the /events stream.
+type engineEvent struct {
+	Type     string      `json:"Type"`
+	Action   string      `json:"Action"`
+	Actor    engineActor `json:"Actor"`
+	Scope    string      `json:"scope"`
+	Time     int64       `json:"time"`
+	TimeNano int64       `json:"timeNano"`
+}
+
+type engineActor struct {
+	ID         string            `json:"ID"`
+	Attributes map[string]string `json:"Attributes"`
+}
+
+type bufferedEvent struct {
+	seq int
+	ev  engineEvent
+}
+
+// containerEvent is a container event at at; attrs are more attribute
+// key, value pairs.
+func containerEvent(at time.Time, action, id, name, image string, attrs ...string) engineEvent {
+	a := map[string]string{"name": name, "image": image}
+	for i := 0; i+1 < len(attrs); i += 2 {
+		a[attrs[i]] = attrs[i+1]
+	}
+	return engineEvent{
+		Type: "container", Action: action, Scope: "local",
+		Actor: engineActor{ID: id, Attributes: a},
+		Time:  at.Unix(), TimeNano: at.UnixNano(),
+	}
 }
 
 func defaultEngineState() engineState {
@@ -124,7 +173,10 @@ func defaultEngineState() engineState {
 // newFakeEngine serves the default fixture on socket until the test ends.
 func newFakeEngine(t *testing.T, socket string) *fakeEngine {
 	t.Helper()
-	fe := &fakeEngine{t: t, socket: socket, state: defaultEngineState(), calls: map[string]int{}}
+	fe := &fakeEngine{
+		t: t, socket: socket, state: defaultEngineState(), calls: map[string]int{},
+		eventBuffer: 256, eventsChanged: make(chan struct{}), streamsDone: make(chan struct{}),
+	}
 	fe.open()
 	t.Cleanup(fe.close)
 	return fe
@@ -155,6 +207,7 @@ func (fe *fakeEngine) open() {
 
 // close stops the Engine: the socket is gone, as when Docker is down.
 func (fe *fakeEngine) close() {
+	fe.dropEvents()
 	fe.mu.Lock()
 	srv := fe.srv
 	fe.srv = nil
@@ -224,6 +277,8 @@ func (fe *fakeEngine) serve(w http.ResponseWriter, r *http.Request) {
 	case "/system/df":
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(s.DiskUsage))
+	case "/events":
+		fe.serveEvents(w, r)
 	default:
 		http.Error(w, `{"message":"page not found"}`, http.StatusNotFound)
 	}
@@ -268,6 +323,135 @@ func (fe *fakeEngine) serveStats(w http.ResponseWriter, r *http.Request, id stri
 		"precpu_stats": map[string]any{"cpu_usage": map[string]any{"total_usage": 0}},
 		"memory_stats": map[string]any{"usage": st.MemUsage, "limit": st.MemLimit, "stats": st.MemStats},
 	})
+}
+
+// emit puts events in the daemon's buffer, which keeps the last
+// eventBuffer, and sends them down every open stream they match.
+func (fe *fakeEngine) emit(events ...engineEvent) {
+	fe.mu.Lock()
+	defer fe.mu.Unlock()
+	for _, ev := range events {
+		fe.events = append(fe.events, bufferedEvent{seq: fe.nextSeq, ev: ev})
+		fe.nextSeq++
+	}
+	if n := len(fe.events) - fe.eventBuffer; n > 0 {
+		fe.events = append(fe.events[:0], fe.events[n:]...)
+	}
+	close(fe.eventsChanged)
+	fe.eventsChanged = make(chan struct{})
+}
+
+// dropEvents ends every open /events stream; the Engine stays up.
+func (fe *fakeEngine) dropEvents() {
+	fe.mu.Lock()
+	defer fe.mu.Unlock()
+	close(fe.streamsDone)
+	fe.streamsDone = make(chan struct{})
+}
+
+// streams is the since= of each /events request so far.
+func (fe *fakeEngine) streams() []string {
+	fe.mu.Lock()
+	defer fe.mu.Unlock()
+	return slices.Clone(fe.eventsSince)
+}
+
+// waitForStreams waits until n /events requests have come in and
+// returns their since= values.
+func (fe *fakeEngine) waitForStreams(t *testing.T, n int) []string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got := fe.streams(); len(got) >= n {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d /events requests, want %d", len(fe.streams()), n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// serveEvents streams events as NDJSON the way dockerd does: the buffered
+// ones from since= (inclusive) first, then each one as it's emitted, with
+// the type and event filters applied.
+func (fe *fakeEngine) serveEvents(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	var filters map[string]map[string]bool
+	if err := json.Unmarshal([]byte(q.Get("filters")), &filters); err != nil || len(filters["type"]) != 1 || !filters["type"]["container"] {
+		http.Error(w, `{"message":"want filters type=container"}`, http.StatusBadRequest)
+		return
+	}
+	match := func(ev engineEvent) bool {
+		if len(filters["event"]) == 0 {
+			return true
+		}
+		// dockerd matches health_status and exec_* by prefix.
+		for want := range filters["event"] {
+			if ev.Action == want || strings.HasPrefix(ev.Action, want+":") {
+				return true
+			}
+		}
+		return false
+	}
+	since := q.Get("since")
+	var sinceNano int64
+	if since != "" {
+		sec, frac, _ := strings.Cut(since, ".")
+		s, err1 := strconv.ParseInt(sec, 10, 64)
+		ns, err2 := strconv.ParseInt((frac + "000000000")[:9], 10, 64)
+		if err1 != nil || err2 != nil {
+			http.Error(w, `{"message":"bad since"}`, http.StatusBadRequest)
+			return
+		}
+		sinceNano = s*1e9 + ns
+	}
+
+	fe.mu.Lock()
+	fe.eventsSince = append(fe.eventsSince, since)
+	var replay []engineEvent
+	if since != "" {
+		for _, b := range fe.events {
+			if b.ev.TimeNano >= sinceNano && match(b.ev) {
+				replay = append(replay, b.ev)
+			}
+		}
+	}
+	next := fe.nextSeq
+	done := fe.streamsDone
+	fe.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+	flusher := w.(http.Flusher)
+	for _, ev := range replay {
+		enc.Encode(ev)
+	}
+	flusher.Flush()
+	for {
+		fe.mu.Lock()
+		var fresh []engineEvent
+		for _, b := range fe.events {
+			if b.seq >= next && match(b.ev) {
+				fresh = append(fresh, b.ev)
+			}
+		}
+		next = fe.nextSeq
+		changed := fe.eventsChanged
+		fe.mu.Unlock()
+		for _, ev := range fresh {
+			enc.Encode(ev)
+		}
+		flusher.Flush()
+		select {
+		case <-changed:
+		case <-done:
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

@@ -28,6 +28,7 @@ var tabs = []struct{ Name, Label string }{
 	{"containers", "Containers"},
 	{"images", "Images"},
 	{"docker", "Docker"},
+	{"events", "Events"},
 }
 
 // tabNav is the tab bar with Active marked.

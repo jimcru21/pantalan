@@ -409,8 +409,8 @@ func TestWithDockerDownTheHostTilesStillRenderAndDockerShowsUnreachable(t *testi
 		if cards != 1 || !strings.Contains(text(got.body), "Docker unreachable") || !strings.Contains(got.body, "<code>systemctl status docker</code>") {
 			t.Errorf("GET %s with Docker down has %d error cards, want one with the systemctl hint:\n%s", path, cards, text(got.body))
 		}
-		if _, all := openTab(t, got.body); len(all) != 3 {
-			t.Errorf("GET %s with Docker down offers tabs %q, want all three", path, all)
+		if _, all := openTab(t, got.body); len(all) != 4 {
+			t.Errorf("GET %s with Docker down offers tabs %q, want all four", path, all)
 		}
 	}
 
