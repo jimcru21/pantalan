@@ -10,18 +10,28 @@ import (
 	"github.com/pantalan/pantalan/internal/domain"
 )
 
-// CreateSession stores sess and then deletes the oldest sessions beyond
-// the newest keep, in one transaction. Sessions created at the same time
-// are ordered by insertion.
-func (s *Store) CreateSession(ctx context.Context, sess domain.Session, keep int) error {
+// CreateSession stores sess, only while the Admin's password hash is
+// still passwordHash, and then deletes the oldest sessions beyond the
+// newest keep, in one transaction. Sessions created at the same time are
+// ordered by insertion. The check and the insert share the transaction's
+// write lock, so a password reset commits either before (and the session
+// is refused with domain.ErrConflict) or after (and deletes it).
+func (s *Store) CreateSession(ctx context.Context, sess domain.Session, keep int, passwordHash string) error {
 	tx, err := s.db.BeginTx(ctx, nil) // BEGIN IMMEDIATE (see dsn)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO sessions (token_hash, created_at, last_seen_at) VALUES (?, ?, ?)`,
-		sess.TokenHash, formatTime(sess.CreatedAt), formatTime(sess.LastSeenAt)); err != nil {
+	res, err := tx.ExecContext(ctx, `INSERT INTO sessions (token_hash, created_at, last_seen_at)
+		SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM admin WHERE id = 1 AND password_hash = ?)`,
+		sess.TokenHash, formatTime(sess.CreatedAt), formatTime(sess.LastSeenAt), passwordHash)
+	if err != nil {
 		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return fmt.Errorf("%w: the password changed", domain.ErrConflict)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE rowid NOT IN
 		(SELECT rowid FROM sessions ORDER BY created_at DESC, rowid DESC LIMIT ?)`, keep); err != nil {

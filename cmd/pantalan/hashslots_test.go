@@ -237,3 +237,26 @@ func TestALoginThatWaitsOverFiveSecondsForAHashSlotGets503(t *testing.T) {
 		t.Errorf("login with the right password after 4 failures = %d, want 303; body:\n%s", got.StatusCode, got.body)
 	}
 }
+
+func TestASignInCheckedAgainstTheOldPasswordGetsNoSessionWhenAResetLandsMeanwhile(t *testing.T) {
+	s, hasher, _, pw := serveGated(t)
+
+	login := loginAsync(t, s, "alice", pw)
+	hasher.waitEntered(t, 1) // checking pw against the hash read before the reset
+	reset := runCLI(t, t.Context(), s.env, "admin", "reset-password")
+	if reset.code != 0 {
+		t.Fatalf("admin reset-password exit code = %d (stderr %q)", reset.code, reset.stderr)
+	}
+	hasher.letOneThrough(t)
+
+	if got := <-login; got.StatusCode != http.StatusUnauthorized {
+		t.Errorf("login with the password reset while it was checked = %d, want 401; body:\n%s", got.StatusCode, got.body)
+	}
+	var sessions int
+	if err := adminDB(t, s.env).QueryRow(`SELECT count(*) FROM sessions`).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 0 {
+		t.Errorf("%d sessions stored after the reset, want 0", sessions)
+	}
+}
