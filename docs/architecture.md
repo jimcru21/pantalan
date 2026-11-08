@@ -41,6 +41,26 @@ everything. This keeps the deploy pipeline testable with fakes
 Deployments of the same app are serialised. Different apps build in parallel,
 up to `PANTALAN_WORKERS` at a time.
 
+## Dashboard listener
+
+One HTTPS listener on `PANTALAN_DASHBOARD_ADDR` (default `:8443`) serves the
+Dashboard, `/api/v1`, `/webhooks/github` and `/healthz`. The app proxy keeps
+its own plain-HTTP listener on `PANTALAN_PROXY_ADDR` (`:80`), and an unknown
+host there, the Node's bare IP included, gets a 404.
+
+- `dashtls.RedirectPlainHTTP` peeks at each connection's first byte: a TLS
+  handshake (`0x16`) goes on to `http.Server.ServeTLS`, anything else is
+  answered with a 308 to `https://<host>:<port><path>`. No HSTS.
+- The certificate is a self-signed ECDSA P-256 leaf in `$DATA/tls/`
+  (`cert.pem`, `key.pem` at `0600`), written atomically. `serve` generates it
+  when missing and serves it through `GetCertificate` from an atomic
+  pointer, so renewal (checked at startup and daily, with fewer than 30 days
+  left) swaps it without a restart. `pantalan tls regenerate` only rewrites
+  the files; the service picks them up on restart.
+- The fingerprint (`SHA256:AB:CD:…` over the DER) is how the Admin tells the
+  real certificate from a man in the middle: `pantalan tls fingerprint`, and
+  the service log at startup and renewal.
+
 ## Packages
 
 | Path | Role |
@@ -49,6 +69,7 @@ up to `PANTALAN_WORKERS` at a time.
 | `internal/domain` | Entities (`App`, `Deployment`), validation, sentinel errors |
 | `internal/service` | Use cases (`AppService`, `Deployer`) and the port interfaces |
 | `internal/httpapi` | REST API, GitHub webhook, auth middleware |
+| `internal/dashtls` | Dashboard certificate (generate, load, renew) and the listener that redirects plain HTTP |
 | `internal/store/sqlite` | App and deployment repositories in SQLite, plus the schema migrations |
 | `internal/source` | Git checkout |
 | `internal/build` | Dockerfile and Nixpacks builders |
@@ -93,7 +114,9 @@ them for design:
 - Containers publish on `127.0.0.1:<ephemeral>`. That port can change if
   Docker restarts the container. The production fix is a shared Docker network
   with the proxy reaching containers by name.
-- There is no TLS yet (add ACME through autocert or certmagic in `proxy`).
+- Apps behind the proxy get no TLS yet (add ACME through autocert or
+  certmagic in `proxy`). The Dashboard listener is HTTPS-only with a
+  self-signed certificate; see "Dashboard listener" above.
 - Auth is a single admin bearer token.
 - Env values are stored in plaintext. Encrypt them at rest before real use.
 

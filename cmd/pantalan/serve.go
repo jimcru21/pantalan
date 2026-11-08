@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"net"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/pantalan/pantalan/internal/build"
 	"github.com/pantalan/pantalan/internal/config"
+	"github.com/pantalan/pantalan/internal/dashtls"
 	"github.com/pantalan/pantalan/internal/domain"
 	"github.com/pantalan/pantalan/internal/health"
 	"github.com/pantalan/pantalan/internal/httpapi"
@@ -51,8 +53,28 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string) er
 	}
 	defer store.Close()
 
+	certs, generated, err := dashtls.Open(tlsDir(cfg.DataDir), time.Now())
+	if err != nil {
+		return err
+	}
+	renewCertificate(log, certs)
+	cert := certs.Current()
+	log.Info("tls certificate", "fingerprint", cert.Fingerprint(), "expires", cert.Leaf().NotAfter, "generated", generated)
+
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
+	go func() {
+		daily := time.NewTicker(24 * time.Hour)
+		defer daily.Stop()
+		for {
+			select {
+			case <-daily.C:
+				renewCertificate(log, certs)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	// Wiring: this is the only place that knows which adapter backs which port.
 	router := proxy.New(log)
@@ -90,12 +112,19 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string) er
 	})
 
 	servers := []struct {
-		name string
-		addr string
-		srv  *http.Server
+		name  string
+		addr  string
+		srv   *http.Server
+		serve func(*http.Server, net.Listener) error
 	}{
-		{"api", cfg.APIAddr, &http.Server{Handler: api, ReadHeaderTimeout: 10 * time.Second}},
-		{"proxy", cfg.ProxyAddr, &http.Server{Handler: router, ReadHeaderTimeout: 10 * time.Second}},
+		{"dashboard", cfg.DashboardAddr, &http.Server{
+			Handler:           api,
+			ReadHeaderTimeout: 10 * time.Second,
+			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: certs.GetCertificate},
+		}, func(srv *http.Server, ln net.Listener) error {
+			return srv.ServeTLS(dashtls.RedirectPlainHTTP(ln), "", "")
+		}},
+		{"proxy", cfg.ProxyAddr, &http.Server{Handler: router, ReadHeaderTimeout: 10 * time.Second}, (*http.Server).Serve},
 	}
 	listeners := make([]net.Listener, len(servers))
 	for i, s := range servers {
@@ -113,7 +142,7 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string) er
 		ln := listeners[i]
 		log.Info("listening", "server", s.name, "addr", ln.Addr().String())
 		go func() {
-			if err := s.srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+			if err := s.serve(s.srv, ln); !errors.Is(err, http.ErrServerClosed) {
 				serveErr <- err
 			}
 		}()
