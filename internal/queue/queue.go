@@ -1,7 +1,7 @@
 // Package queue runs deployment jobs on a fixed pool of in-process workers.
 //
-// Jobs live only in memory. With a persistent store, re-enqueue deployments
-// still marked "queued" at startup so a restart does not drop them.
+// Jobs live only in memory; the store is the record. At startup the Deployer
+// re-enqueues deployments still marked "queued", so a restart drops nothing.
 package queue
 
 import (

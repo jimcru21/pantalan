@@ -106,7 +106,7 @@ func (d *Deployer) run(ctx context.Context, app domain.App, dep *domain.Deployme
 		return fmt.Errorf("no builder for build type %q", app.BuildType)
 	}
 
-	dir := filepath.Join(d.deps.DataDir, "builds", dep.ID)
+	dir := d.buildDir(dep.ID)
 	defer func() {
 		if err := os.RemoveAll(dir); err != nil {
 			d.deps.Log.Warn("remove build dir", "dir", dir, "err", err)
@@ -133,7 +133,7 @@ func (d *Deployer) run(ctx context.Context, app domain.App, dep *domain.Deployme
 		return err
 	}
 	ctr, err := d.deps.Runtime.Start(ctx, ContainerSpec{
-		Name:   fmt.Sprintf("pantalan-%s-%s", app.ID, dep.ID),
+		Name:   containerName(app.ID, dep.ID),
 		Image:  dep.Image,
 		Port:   app.Port,
 		Env:    app.Env,
@@ -163,26 +163,6 @@ func (d *Deployer) run(ctx context.Context, app domain.App, dep *domain.Deployme
 
 	if hasPrevious {
 		d.retire(ctx, previous)
-	}
-	return nil
-}
-
-// RestoreRoutes points the router at every app's live deployment. Call it at
-// startup: routes are held in memory, deployments in the store.
-func (d *Deployer) RestoreRoutes(ctx context.Context) error {
-	apps, err := d.deps.Apps.ListApps(ctx)
-	if err != nil {
-		return fmt.Errorf("list apps: %w", err)
-	}
-	for _, app := range apps {
-		dep, err := d.deps.Deployments.LiveDeployment(ctx, app.ID)
-		if errors.Is(err, domain.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("live deployment for %s: %w", app.ID, err)
-		}
-		d.deps.Router.SetRoute(app.Domain, dep.Upstream)
 	}
 	return nil
 }
@@ -257,6 +237,18 @@ func (d *Deployer) lockApp(appID string) (unlock func()) {
 	d.mu.Unlock()
 	l.Lock()
 	return l.Unlock
+}
+
+// buildDir is the scratch checkout of a deployment, removed when its run ends.
+func (d *Deployer) buildDir(deploymentID string) string {
+	return filepath.Join(d.deps.DataDir, "builds", deploymentID)
+}
+
+// containerName is the Docker name of a deployment's container. It is known
+// before the container exists, so cleanup can find a container whose ID was
+// never recorded.
+func containerName(appID, deploymentID string) string {
+	return fmt.Sprintf("pantalan-%s-%s", appID, deploymentID)
 }
 
 func (d *Deployer) logPath(deploymentID string) string {

@@ -41,6 +41,20 @@ everything. This keeps the deploy pipeline testable with fakes
 Deployments of the same app are serialised. Different apps build in parallel,
 up to `PANTALAN_WORKERS` at a time.
 
+### Startup recovery
+
+`Deployer.Recover` runs once at startup, after the store is open and before
+the queue starts, so a restart never leaves a deployment stuck:
+
+- **building** and **starting** deployments are marked **failed** with
+  `interrupted by restart`; the container is removed (by its
+  `pantalan-<app>-<deployment>` name, since the ID is recorded only once the
+  run finishes) and `$DATA/builds/<id>` is deleted.
+- **queued** deployments are re-enqueued, oldest `created_at` first.
+- Each **live** deployment's upstream is re-read from Docker
+  (`Runtime.Upstream`, i.e. `docker port`), saved if it changed, and its
+  route restored. If Docker can't say, the stored upstream is kept.
+
 ## Dashboard listener
 
 One HTTPS listener on `PANTALAN_DASHBOARD_ADDR` (default `:8443`) serves the
@@ -111,11 +125,10 @@ host there, the Node's bare IP included, gets a 404.
 These are in the scaffold on purpose and are listed here so nobody mistakes
 them for design:
 
-- Apps and deployments survive a restart, but a deployment that was queued
-  or mid-build when the service stopped is not picked up again.
 - Containers publish on `127.0.0.1:<ephemeral>`. That port can change if
-  Docker restarts the container. The production fix is a shared Docker network
-  with the proxy reaching containers by name.
+  Docker restarts the container; upstreams are refreshed only at startup.
+  The production fix is a shared Docker network with the proxy reaching
+  containers by name.
 - Apps behind the proxy get no TLS yet (add ACME through autocert or
   certmagic in `proxy`). The Dashboard listener is HTTPS-only with a
   self-signed certificate; see "Dashboard listener" above.

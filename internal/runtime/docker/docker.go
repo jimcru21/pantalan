@@ -51,17 +51,29 @@ func (r *Runtime) Start(ctx context.Context, spec service.ContainerSpec) (servic
 		return service.Container{}, err
 	}
 
-	out, err := execx.Output(exec.CommandContext(ctx, r.bin, "port", id, fmt.Sprintf("%d/tcp", spec.Port)))
+	upstream, err := r.Upstream(ctx, id, spec.Port)
 	if err != nil {
-		err = fmt.Errorf("look up published port: %w", err)
 		if rmErr := r.Remove(context.WithoutCancel(ctx), id); rmErr != nil {
 			err = errors.Join(err, rmErr)
 		}
 		return service.Container{}, err
 	}
+	return service.Container{ID: id, Upstream: upstream}, nil
+}
+
+// Upstream asks Docker where the container's port is published now. Docker
+// picks a new ephemeral port whenever it restarts the container.
+func (r *Runtime) Upstream(ctx context.Context, containerID string, port int) (string, error) {
+	out, err := execx.Output(exec.CommandContext(ctx, r.bin, "port", containerID, fmt.Sprintf("%d/tcp", port)))
+	if err != nil {
+		return "", fmt.Errorf("look up published port: %w", err)
+	}
 	// `docker port` prints one line per address family; the first is IPv4.
 	upstream, _, _ := strings.Cut(out, "\n")
-	return service.Container{ID: id, Upstream: strings.TrimSpace(upstream)}, nil
+	if upstream = strings.TrimSpace(upstream); upstream == "" {
+		return "", fmt.Errorf("container %s publishes no %d/tcp", containerID, port)
+	}
+	return upstream, nil
 }
 
 func (r *Runtime) Remove(ctx context.Context, containerID string) error {

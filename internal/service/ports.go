@@ -57,7 +57,11 @@ type Container struct {
 
 type Runtime interface {
 	Start(ctx context.Context, spec ContainerSpec) (Container, error)
+	// Remove force-removes a container, given its ID or its name.
 	Remove(ctx context.Context, containerID string) error
+	// Upstream returns the host:port the container's port is published on
+	// now. It changes when Docker restarts the container.
+	Upstream(ctx context.Context, containerID string, port int) (string, error)
 }
 
 type HealthChecker interface {

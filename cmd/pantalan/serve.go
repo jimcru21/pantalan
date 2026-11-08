@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -94,8 +95,10 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string) er
 		DataDir:   cfg.DataDir,
 		Log:       log,
 	})
-	if err := deployer.RestoreRoutes(ctx); err != nil {
-		return err
+	// Before the queue runs, so re-queued deployments keep their order and
+	// nothing new starts while interrupted ones are cleaned up.
+	if err := deployer.Recover(ctx); err != nil {
+		return fmt.Errorf("startup recovery: %w", err)
 	}
 
 	ui, err := web.Handler()
