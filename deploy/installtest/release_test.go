@@ -5,8 +5,6 @@ package installtest
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 )
@@ -97,7 +94,8 @@ func startReleaseServer(root, listenIP string) (*releaseServer, string, error) {
 func (s *releaseServer) Close() { s.srv.Close() }
 
 // buildRelease builds the release assets for tag into dir from a copy of the
-// working tree committed and tagged in a scratch repo under src.
+// working tree committed and tagged in a scratch repo under src, with
+// deploy/release.sh.
 func buildRelease(src, dir, tag string) error {
 	repo, err := repoRoot()
 	if err != nil {
@@ -122,40 +120,9 @@ func buildRelease(src, dir, tag string) error {
 			return err
 		}
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	var assets []string
-	for _, arch := range arches {
-		asset := "pantalan_" + tag + "_linux_" + arch
-		_, err := run(ctx, src, []string{"CGO_ENABLED=0", "GOOS=linux", "GOARCH=" + arch},
-			"go", "build", "-trimpath", "-ldflags=-s -w", "-o", filepath.Join(dir, asset), "./cmd/pantalan")
-		if err != nil {
-			return err
-		}
-		assets = append(assets, asset)
-	}
-	// The same check release.yml makes: the binary knows its own tag.
-	if runtime.GOOS == "linux" {
-		out, err := run(ctx, src, nil, filepath.Join(dir, "pantalan_"+tag+"_linux_"+runtime.GOARCH), "version")
-		if err != nil {
-			return err
-		}
-		if got := strings.TrimSpace(out); got != tag {
-			return fmt.Errorf("the release binary says its version is %q, want %q (does git see a clean tagged checkout?)", got, tag)
-		}
-	}
-	script, err := os.ReadFile(filepath.Join(src, "deploy", "install.sh"))
-	if err != nil {
-		return err
-	}
-	if n := bytes.Count(script, []byte("@VERSION@")); n != 1 {
-		return fmt.Errorf("install.sh has %d @VERSION@ placeholders, want exactly 1", n)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "install.sh"), bytes.ReplaceAll(script, []byte("@VERSION@"), []byte(tag)), 0o644); err != nil {
-		return err
-	}
-	return writeSums(dir, append(assets, "install.sh"))
+	// The script release.yml builds the real release with.
+	_, err = run(ctx, src, nil, "sh", "deploy/release.sh", "build", tag, dir)
+	return err
 }
 
 // corruptRelease copies the release at good to dir, then alters the Node's
@@ -174,21 +141,6 @@ func corruptRelease(good, dir, tag string) error {
 		return err
 	}
 	return f.Close()
-}
-
-// writeSums writes SHA256SUMS in sha256sum's own format, bare file names.
-func writeSums(dir string, names []string) error {
-	slices.Sort(names)
-	var b strings.Builder
-	for _, name := range names {
-		content, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			return err
-		}
-		sum := sha256.Sum256(content)
-		fmt.Fprintf(&b, "%s  %s\n", hex.EncodeToString(sum[:]), name)
-	}
-	return os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(b.String()), 0o644)
 }
 
 // repoRoot is the root of the repository the harness lives in.
