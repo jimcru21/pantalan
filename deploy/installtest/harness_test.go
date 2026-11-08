@@ -16,7 +16,11 @@ import (
 var (
 	substrate Substrate
 	release   *releaseServer
-	tag       string // the version the fake release serves
+	tag       string // the version the fake release serves (N)
+	// newerTag is the release after tag (N+1), for the upgrade and
+	// downgrade paths; empty when only one release is served (see
+	// startReleaseServer).
+	newerTag string
 )
 
 func TestMain(m *testing.M) {
@@ -34,14 +38,19 @@ func TestMain(m *testing.M) {
 		}
 		defer os.RemoveAll(root)
 		start := time.Now()
-		release, tag, err = startReleaseServer(root, substrate.HostAddr())
+		var tags []string
+		release, tags, err = startReleaseServer(root, substrate.HostAddr())
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "installtest: fake release:", err)
 			return 1
 		}
 		defer release.Close()
-		fmt.Fprintf(os.Stderr, "installtest: fake release %s for %s ready at %s in %s\n",
-			tag, strings.Join(arches, "+"), release.addr, time.Since(start).Round(time.Second))
+		tag = tags[0]
+		if len(tags) > 1 {
+			newerTag = tags[1]
+		}
+		fmt.Fprintf(os.Stderr, "installtest: fake releases %s for %s ready at %s in %s\n",
+			strings.Join(tags, ", "), strings.Join(arches, "+"), release.addr, time.Since(start).Round(time.Second))
 		return m.Run()
 	}())
 }
@@ -91,6 +100,9 @@ type installer struct {
 	// typed runs it at a terminal (script(1)'s pty) where the operator has
 	// typed these lines in advance; prompts read them in order.
 	typed []string
+	// release is whose install.sh runs, and so the version it installs by
+	// default; empty means tag.
+	release string
 }
 
 // run runs the installer on n with flags and returns how it ended. The
@@ -102,13 +114,17 @@ func (in installer) run(t *testing.T, n Node, flags ...string) Result {
 		origin = goodOrigin
 	}
 	base := release.baseURL(origin)
+	version := in.release
+	if version == "" {
+		version = tag
+	}
 	shell := "sh"
 	if in.asUser != "" {
 		uid, gid, _ := strings.Cut(in.asUser, ":")
 		shell = "setpriv --reuid=" + uid + " --regid=" + gid + " --clear-groups sh"
 	}
 	script := fmt.Sprintf(`curl -fsSL %s | %s -s --%s`,
-		shellQuote(base+"/"+tag+"/install.sh"), shell, quoteAll(flags))
+		shellQuote(base+"/"+version+"/install.sh"), shell, quoteAll(flags))
 	var stdin string
 	if in.typed != nil {
 		// stdout and stderr both arrive on stdout, through the pty.

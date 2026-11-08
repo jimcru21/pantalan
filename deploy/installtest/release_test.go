@@ -30,10 +30,14 @@ const (
 	corruptOrigin = "corrupt" // the Node's binary altered after SHA256SUMS was written
 )
 
-// testTag is the version the release under test is built as. Go stamps it
-// into the binary from the tag on a clean checkout, the way release.yml's
-// builds get theirs.
-const testTag = "v0.0.1"
+// The working tree is built as two releases, N and N+1, the second tagged
+// on an empty commit after the first, so upgrades and downgrades can be
+// tested. Go stamps each tag into its binary from the tag on a clean
+// checkout, the way release.yml's builds get theirs.
+const (
+	testTag = "v0.0.1" // N: what every path installs unless it says otherwise
+	nextTag = "v0.0.2" // N+1
+)
 
 var arches = []string{"amd64", "arm64"}
 
@@ -53,34 +57,35 @@ func (s *releaseServer) baseURL(origin string) string {
 }
 
 // startReleaseServer prepares every origin under root and serves it on
-// listenIP, the address Nodes reach the test machine on.
+// listenIP, the address Nodes reach the test machine on. It returns the
+// tags the good origin serves, oldest first.
 //
-// The release is built from the working tree, uncommitted changes
-// included, unless INSTALLTEST_RELEASE_DIR names a directory that already
-// holds the assets for INSTALLTEST_RELEASE_TAG (the VM tier and the release
-// gate test the exact artifacts release.yml built).
-func startReleaseServer(root, listenIP string) (*releaseServer, string, error) {
-	tag := testTag
-	good := filepath.Join(root, goodOrigin, tag)
+// The releases N and N+1 are built from the working tree, uncommitted
+// changes included, unless INSTALLTEST_RELEASE_DIR names a directory that
+// already holds the assets for INSTALLTEST_RELEASE_TAG (the VM tier and the
+// release gate test the exact artifacts release.yml built), which is then
+// the only release served.
+func startReleaseServer(root, listenIP string) (*releaseServer, []string, error) {
+	tags := []string{testTag, nextTag}
 	if dir := os.Getenv("INSTALLTEST_RELEASE_DIR"); dir != "" {
-		tag = os.Getenv("INSTALLTEST_RELEASE_TAG")
-		if tag == "" {
-			return nil, "", errors.New("INSTALLTEST_RELEASE_DIR needs INSTALLTEST_RELEASE_TAG")
+		tags = []string{os.Getenv("INSTALLTEST_RELEASE_TAG")}
+		if tags[0] == "" {
+			return nil, nil, errors.New("INSTALLTEST_RELEASE_DIR needs INSTALLTEST_RELEASE_TAG")
 		}
-		good = filepath.Join(root, goodOrigin, tag)
-		if err := copyDir(dir, good); err != nil {
-			return nil, "", err
+		if err := copyDir(dir, filepath.Join(root, goodOrigin, tags[0])); err != nil {
+			return nil, nil, err
 		}
-	} else if err := buildRelease(filepath.Join(root, "src"), good, tag); err != nil {
-		return nil, "", err
+	} else if err := buildReleases(filepath.Join(root, "src"), filepath.Join(root, goodOrigin), tags); err != nil {
+		return nil, nil, err
 	}
-	if err := corruptRelease(good, filepath.Join(root, corruptOrigin, tag), tag); err != nil {
-		return nil, "", err
+	good := filepath.Join(root, goodOrigin, tags[0])
+	if err := corruptRelease(good, filepath.Join(root, corruptOrigin, tags[0]), tags[0]); err != nil {
+		return nil, nil, err
 	}
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(listenIP, "0"))
 	if err != nil {
-		return nil, "", fmt.Errorf("release server: %w", err)
+		return nil, nil, fmt.Errorf("release server: %w", err)
 	}
 	s := &releaseServer{
 		root: root,
@@ -88,15 +93,16 @@ func startReleaseServer(root, listenIP string) (*releaseServer, string, error) {
 		srv:  &http.Server{Handler: http.FileServer(http.Dir(root)), ReadHeaderTimeout: 10 * time.Second},
 	}
 	go s.srv.Serve(ln)
-	return s, tag, nil
+	return s, tags, nil
 }
 
 func (s *releaseServer) Close() { s.srv.Close() }
 
-// buildRelease builds the release assets for tag into dir from a copy of the
-// working tree committed and tagged in a scratch repo under src, with
-// deploy/release.sh.
-func buildRelease(src, dir, tag string) error {
+// buildReleases builds the release assets for each of tags into dir/<tag>
+// from a copy of the working tree committed in a scratch repo under src,
+// with deploy/release.sh. Each tag goes on an empty commit after the
+// previous one's, so the releases differ only in their version.
+func buildReleases(src, dir string, tags []string) error {
 	repo, err := repoRoot()
 	if err != nil {
 		return err
@@ -113,16 +119,26 @@ func buildRelease(src, dir, tag string) error {
 		}, args...)...)
 		return err
 	}
-	for _, args := range [][]string{
-		{"init", "--quiet"}, {"add", "--all"}, {"commit", "--quiet", "--message", "release " + tag}, {"tag", tag},
-	} {
-		if err := git(args...); err != nil {
+	if err := git("init", "--quiet"); err != nil {
+		return err
+	}
+	if err := git("add", "--all"); err != nil {
+		return err
+	}
+	for _, tag := range tags {
+		for _, args := range [][]string{
+			{"commit", "--quiet", "--allow-empty", "--message", "release " + tag}, {"tag", tag},
+		} {
+			if err := git(args...); err != nil {
+				return err
+			}
+		}
+		// The script release.yml builds the real release with.
+		if _, err := run(ctx, src, nil, "sh", "deploy/release.sh", "build", tag, filepath.Join(dir, tag)); err != nil {
 			return err
 		}
 	}
-	// The script release.yml builds the real release with.
-	_, err = run(ctx, src, nil, "sh", "deploy/release.sh", "build", tag, dir)
-	return err
+	return nil
 }
 
 // corruptRelease copies the release at good to dir, then alters the Node's
