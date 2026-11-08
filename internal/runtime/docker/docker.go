@@ -1,8 +1,9 @@
 // Package docker runs app containers through the docker CLI.
 //
 // The CLI keeps the binary dependency-free and matches what an operator would
-// type when debugging. Switch to the Docker Engine SDK when you need event
-// streams or stats.
+// type when debugging. Container lifecycle stays here in v1; the Node
+// overview's reads (stats, events, disk usage) go through the Engine API in
+// internal/nodeinfo instead.
 package docker
 
 import (

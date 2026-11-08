@@ -32,6 +32,11 @@ type Deps struct {
 	// Host is the Node's host health for the Node overview; nil shows it
 	// as unavailable.
 	Host Host
+	// Docker is the Node's Docker for the Node overview; nil shows it as
+	// unreachable.
+	Docker Docker
+	// Apps names the apps whose containers the Containers tab badges.
+	Apps Apps
 	// Templates and Static are web.Templates() and web.Static().
 	Templates fs.FS
 	Static    fs.FS
@@ -90,8 +95,14 @@ func New(deps Deps) (*Dashboard, error) {
 	// The sidebar, in order. Add a page here and in templates/pages/.
 	d.pages = []page{
 		{
-			name: "overview", path: "/", label: "Node overview", icon: "overview", data: d.overviewData,
-			fragments: []fragment{{name: "topbar"}, {name: "band"}},
+			name: "overview", path: "/", label: "Node overview", icon: "overview", data: d.overviewPage,
+			fragments: []fragment{
+				{name: "topbar", data: d.overviewData},
+				{name: "band", data: d.overviewData},
+				{name: "containers", data: d.containersData},
+				{name: "images", data: d.imagesData},
+				{name: "docker", data: d.dockerData},
+			},
 		},
 	}
 

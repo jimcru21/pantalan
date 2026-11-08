@@ -119,9 +119,12 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 		<-samplerDone
 	}()
 
+	apps := service.NewAppService(store)
 	dash, err := dashboard.New(dashboard.Deps{
 		Auth:         service.NewAuthService(store, store, password.Hasher{}, node.now),
 		Host:         sampler,
+		Docker:       nodeinfo.NewDocker(node.DockerSocket, node.Statfs, node.now),
+		Apps:         apps,
 		Templates:    web.Templates(),
 		Static:       web.Static(),
 		AssetVersion: assetVersion(bin, web.Static()),
@@ -132,7 +135,7 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 		return err
 	}
 	api := httpapi.NewHandler(httpapi.Deps{
-		Apps:          service.NewAppService(store),
+		Apps:          apps,
 		Deployer:      deployer,
 		AdminToken:    cfg.AdminToken,
 		WebhookSecret: cfg.WebhookSecret,
