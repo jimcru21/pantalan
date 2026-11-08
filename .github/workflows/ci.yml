@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # release.yml runs this whole workflow as its gate.
+  workflow_call:
 
 permissions:
   contents: read
