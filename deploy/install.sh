@@ -48,6 +48,7 @@ STEP=checks
 TMP_DIR=
 TEE_PID=
 VERSION=
+UPGRADED_FROM=       # the older version installed before, on an upgrade
 ARCH=
 OS_ID=
 OS_CODENAME=
@@ -279,6 +280,7 @@ preflight() {
 	check_systemd
 	check_tools
 	resolve_version
+	compare_installed_version
 	resolve_dashboard_port
 	classify_docker
 	check_port 80 "the app proxy needs it"
@@ -326,13 +328,64 @@ resolve_version() {
 	die "--version must be a release tag like v1.2.3, not $OPT_VERSION"
 }
 
+# compare_installed_version: a newer VERSION than the installed binary's is
+# an upgrade, the same one a repair; an older one is refused, since the
+# newer binary may have migrated the database to a schema the older one
+# doesn't know. With no binary installed (a first install, or after
+# --uninstall) there is nothing to compare.
+compare_installed_version() {
+	[ -x "$BIN" ] || return 0
+	cv_installed=$("$BIN" version 2>/dev/null) || cv_installed="nothing: it fails to run"
+	if ! is_release_tag "$cv_installed"; then
+		warn "the installed $BIN reports $cv_installed, not a release version; replacing it with $VERSION"
+		return 0
+	fi
+	if [ "$cv_installed" = "$VERSION" ]; then
+		say "Pantalan $VERSION is installed: repairing anything missing."
+		return 0
+	fi
+	cv_newest=$(printf '%s\n%s\n' "$cv_installed" "$VERSION" | sort -V | tail -n 1)
+	if [ "$cv_newest" = "$VERSION" ]; then
+		UPGRADED_FROM=$cv_installed
+		say "Pantalan $cv_installed is installed: upgrading to $VERSION."
+		return 0
+	fi
+	refuse_downgrade "$cv_installed"
+}
+
+# refuse_downgrade INSTALLED: stops, saying how to roll back by hand from a
+# snapshot. Each migration snapshots the database first as
+# pantalan.db.bak-<schema version>; the binary refuses a newer schema.
+refuse_downgrade() {
+	rd_snapshots=
+	for rd_path in "$DATA_DIR"/pantalan.db.bak-*; do
+		[ ! -e "$rd_path" ] || rd_snapshots="${rd_snapshots:+$rd_snapshots, }${rd_path##*/}"
+	done
+	{
+		say "pantalan-install: Pantalan $1 is installed, and $VERSION is older. Nothing was changed."
+		say "The installer doesn't downgrade: $1 may have moved pantalan.db to a schema $VERSION doesn't know."
+		say "To roll back to $VERSION, remove $1 (data and config stay), restore the pantalan.db.bak-<version>"
+		say "snapshot taken when $DATA_DIR/pantalan.db was migrated (here: ${rd_snapshots:-none}), then install $VERSION:"
+		say ""
+		say "  curl -fsSL $INSTALL_URL | sudo sh -s -- --uninstall"
+		say "  sudo install -m 0600 -o $SERVICE_USER -g $SERVICE_USER $DATA_DIR/pantalan.db.bak-<version> $DATA_DIR/pantalan.db"
+		say "  sudo rm -f $DATA_DIR/pantalan.db-wal $DATA_DIR/pantalan.db-shm"
+		say "  curl -fsSL $INSTALL_URL | sudo sh -s -- --version $VERSION"
+		say ""
+		say "No snapshot means pantalan.db was never upgraded in place: skip the two middle lines"
+		say "($VERSION refuses a schema it doesn't know rather than damage it). Restoring a snapshot"
+		say "loses what changed after it was taken. See $REPO_URL#rolling-back"
+	} >&2
+	exit 1
+}
+
 resolve_dashboard_port() {
 	# An installed Node's port is the one its env file says; a flag that
 	# disagrees stops the run instead of silently losing to it.
 	rd_stored=$(env_setting PANTALAN_DASHBOARD_ADDR)
 	rd_stored_port=${rd_stored##*:}
 	if [ -n "$OPT_DASHBOARD_PORT" ] && [ -n "$rd_stored" ] && [ "$OPT_DASHBOARD_PORT" != "$rd_stored_port" ]; then
-		die "--dashboard-port $OPT_DASHBOARD_PORT disagrees with PANTALAN_DASHBOARD_ADDR=$rd_stored in $ENV_FILE. Nothing was changed. To move the Dashboard, edit pantalan.env, then run this again without --dashboard-port."
+		die "--dashboard-port $OPT_DASHBOARD_PORT disagrees with PANTALAN_DASHBOARD_ADDR=$rd_stored in $ENV_FILE, and a re-run never overwrites your settings. Nothing was changed. To change it, edit $ENV_FILE, then systemctl restart pantalan (or run this again without --dashboard-port, which restarts it and moves the firewall rule too)."
 	fi
 	DASHBOARD_PORT=${OPT_DASHBOARD_PORT:-${rd_stored_port:-$DEFAULT_DASHBOARD_PORT}}
 	case $DASHBOARD_PORT in
@@ -1002,7 +1055,11 @@ is_private_ip() {
 print_summary() {
 	ps_ip=$(default_ip)
 	say ""
-	say "Pantalan $VERSION is running on this Node."
+	if [ -n "$UPGRADED_FROM" ]; then
+		say "Upgraded $UPGRADED_FROM → $VERSION"
+	else
+		say "Pantalan $VERSION is running on this Node."
+	fi
 	say ""
 	say "  Dashboard       https://${ps_ip:-<this server>}:$DASHBOARD_PORT"
 	if [ -n "$ps_ip" ] && is_private_ip "$ps_ip"; then

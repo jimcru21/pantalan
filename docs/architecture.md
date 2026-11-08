@@ -213,7 +213,11 @@ managers, an active ufw, risks that make it stage rather than enable, and
 the SSH ports as a union of sources) and `configure_firewall` reconciles
 the `pantalan`-commented rules and adds `pantalan-ssh` ones. Nothing on the
 host changes before the packages step; each step converges, so a re-run
-resumes. Output goes through `tee` into `/var/log/pantalan-install.log`
+resumes, repairs or upgrades. Preflight's `compare_installed_version` puts
+the target against the installed `pantalan version` with `sort -V`: newer
+is an upgrade (the summary opens with `Upgraded vA → vB`), the same a
+repair, and older is refused with how to restore a `pantalan.db.bak-*`
+snapshot. Output goes through `tee` into `/var/log/pantalan-install.log`
 except the Admin password, which is printed after the log is closed.
 `PANTALAN_RELEASE_BASE_URL` (test-only) points downloads at a fake release.
 
