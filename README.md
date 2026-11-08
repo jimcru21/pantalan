@@ -102,6 +102,33 @@ to type `purge` on the terminal. With no terminal it refuses unless you add
 Neither ever removes Docker, ufw or git, which other things on the server may
 use. The install log, `/var/log/pantalan-install.log`, stays too.
 
+### Verify a release
+
+The installer checks the binary it downloads against the release's
+`SHA256SUMS`, which ships in the same release. To check a release out of
+band, with the [GitHub CLI](https://cli.github.com/), download its assets
+and verify them against GitHub's signed attestations:
+
+```sh
+gh release download v1.2.3 --repo jimcru21/pantalan
+sha256sum -c SHA256SUMS
+
+# The asset is the one published in release v1.2.3 (releases are immutable:
+# once published, neither the assets nor the tag can change).
+gh release verify-asset v1.2.3 pantalan_v1.2.3_linux_amd64 --repo jimcru21/pantalan
+
+# The binary was built by this repository's release workflow, from the tag.
+gh attestation verify pantalan_v1.2.3_linux_amd64 --repo jimcru21/pantalan \
+  --signer-workflow jimcru21/pantalan/.github/workflows/release.yml \
+  --source-ref refs/tags/v1.2.3
+```
+
+Each release has four assets: `pantalan_vX.Y.Z_linux_amd64`,
+`pantalan_vX.Y.Z_linux_arm64`, `install.sh` (with that version built in) and
+`SHA256SUMS` over the other three. `gh release verify-asset` works for all
+of them; the build provenance that `gh attestation verify` checks covers the
+two binaries.
+
 ## Requirements for building from source
 
 - Go 1.26+
@@ -126,6 +153,18 @@ distro and Docker apt repositories, and takes a minute or two per distro.
 make shellcheck                                 # lint the script (needs shellcheck)
 make installtest                                # all four distros, on this machine's arch
 INSTALLTEST_DISTROS=debian-12 make installtest  # one distro
+```
+
+### Release
+
+Push a `vX.Y.Z` tag. `.github/workflows/release.yml` refuses any other tag
+(no pre-releases), runs the same checks as a PR, builds the assets with
+`deploy/release.sh`, attests the binaries' provenance, and creates a draft
+release, uploads every asset and publishes it last, with generated notes.
+To build the same assets locally, from a clean checkout of the tag:
+
+```sh
+deploy/release.sh build v1.2.3 /tmp/pantalan-v1.2.3
 ```
 
 ## Try it
@@ -255,6 +294,7 @@ keeps them in `/etc/pantalan/pantalan.env`; after editing it, run
 ```
 cmd/pantalan/            entrypoint + wiring
 deploy/install.sh       the installer (a release asset)
+deploy/release.sh       builds the release assets (used by release.yml)
 deploy/installtest/     installer harness (build tag installtest)
 internal/domain/        entities and rules
 internal/service/       use cases + port interfaces

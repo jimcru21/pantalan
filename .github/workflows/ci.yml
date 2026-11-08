@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # release.yml runs this whole workflow as its gate.
+  workflow_call:
 
 permissions:
   contents: read
@@ -49,7 +51,7 @@ jobs:
           persist-credentials: false
 
       # shellcheck ships with the hosted Ubuntu image.
-      - name: ShellCheck deploy/install.sh
+      - name: ShellCheck the installer and release scripts
         run: |
           shellcheck --version
           make shellcheck
