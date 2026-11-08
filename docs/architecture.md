@@ -234,18 +234,24 @@ rules and keep the `pantalan-ssh` ones. Docker, ufw and git are never
 removed.
 
 `deploy/installtest` (build tag `installtest`) tests it end to end: Go tests
-drive a `Substrate` (privileged systemd containers on PRs; VMs later) that
-boots a fresh Node per path from per-distro images in
-`deploy/installtest/images/`, run the script as `curl | sh` against a fake
-release built from the working tree, and check the result from outside the
-Node with shared post-install assertions. `ci.yml` runs it on Debian 12/13
-and Ubuntu 24.04/26.04, on amd64 and arm64.
+drive a `Substrate` that boots a fresh Node per path, run the script as
+`curl | sh` against a fake release built from the working tree, and check
+the result from outside the Node with shared post-install assertions.
+`ci.yml` runs it on every PR in privileged systemd containers (per-distro
+images in `deploy/installtest/images/`) on Debian 12/13 and Ubuntu
+24.04/26.04, on amd64 and arm64. `installer-vm.yml` runs the VM-only paths
+(reboot, `IPV6=no` staging, snap Docker, `ssh.socket`, upgrade from the
+previous published release, and the install → reboot → upgrade →
+`--uninstall` → `--purge` sequence) on x64 KVM VMs from the official cloud
+images, reached over SSH on libvirt's `virbr0`: nightly, by hand, and as
+`release.yml`'s gate on the exact assets it built.
 
 Releases come from `release.yml` on a `vX.Y.Z` tag push, any other tag
 failing first. It runs `ci.yml` as its gate, builds the assets with
 `deploy/release.sh` (the same script the harness builds its fake release
-with) in a job with read-only access, and hands them as a workflow artifact
-to the one job with write access, which runs no repository code: it checks
+with) in a job with read-only access, runs the VM tier on them, and hands
+them as a workflow artifact to the one job with write access (which needs
+the VM tier, so a failed gate leaves no draft), which runs no repository code: it checks
 the assets, attests the binaries' provenance, creates a draft release,
 uploads and publishes last.
 
