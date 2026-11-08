@@ -9,9 +9,9 @@ import (
 )
 
 // A Substrate is where fresh Nodes come from: privileged systemd containers
-// on every PR (container_test.go), cloud-image VMs on the VM tier. Tests only
-// ever talk to a Node through this interface, so a path written once runs on
-// either.
+// on every PR (container_test.go), cloud-image VMs on the VM tier
+// (vm_test.go, INSTALLTEST_SUBSTRATE=vm). Tests only ever talk to a Node
+// through this interface, so a path written once runs on either.
 type Substrate interface {
 	// Boot starts a fresh Node of distro d from the image variant v and
 	// removes it when t ends. Every installer path gets its own Node.
@@ -28,6 +28,13 @@ type Node interface {
 	// Addr is the Node's IP address as seen from outside it, from the
 	// machine running the tests.
 	Addr() string
+}
+
+// A Rebooter is a Node that really reboots: a VM, not a container (which
+// has no real boot). The reboot paths skip on Nodes that aren't one.
+type Rebooter interface {
+	// Reboot reboots the Node and returns once it's back up.
+	Reboot(t *testing.T)
 }
 
 // Cmd is a shell script for Node.Run.

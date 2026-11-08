@@ -258,12 +258,27 @@ make installtest                                # all four distros, on this mach
 INSTALLTEST_DISTROS=debian-12 make installtest  # one distro
 ```
 
+The VM tier runs the paths containers can't (a real reboot, a global
+IPv6 address with ufw's `IPV6=no`, snap Docker on Ubuntu 24.04,
+`ssh.socket`, the upgrade from the previous published release) on KVM
+VMs booted from each distro's official x64 cloud image.
+`.github/workflows/installer-vm.yml` runs it nightly, by hand, and as the
+release gate. Locally it needs x64 Linux with `/dev/kvm`, libvirt's
+default network, `virt-install`, `qemu-img` and `cloud-localds`; without
+them every path skips:
+
+```sh
+INSTALLTEST_VM_DIR=/var/lib/libvirt/images/pantalan-installtest make installtest-vm
+```
+
 ### Release
 
 Push a `vX.Y.Z` tag. `.github/workflows/release.yml` refuses any other tag
 (no pre-releases), runs the same checks as a PR, builds the assets with
-`deploy/release.sh`, attests the binaries' provenance, and creates a draft
-release, uploads every asset and publishes it last, with generated notes.
+`deploy/release.sh`, runs the installer's VM tier on exactly those assets,
+attests the binaries' provenance, and creates a draft release, uploads
+every asset and publishes it last, with generated notes. If the VM tier
+fails, no draft is created.
 To build the same assets locally, from a clean checkout of the tag:
 
 ```sh

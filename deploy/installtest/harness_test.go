@@ -21,25 +21,51 @@ var (
 	// downgrade paths; empty when only one release is served (see
 	// startReleaseServer).
 	newerTag string
+	// previousTag is the newest published release older than tag, which
+	// the VM tier upgrades from; empty (with noPreviousReason saying why)
+	// while none is known.
+	previousTag, noPreviousReason string
 )
 
 func TestMain(m *testing.M) {
 	os.Exit(func() int {
-		c, err := newContainers()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "installtest:", err)
+		switch name := os.Getenv("INSTALLTEST_SUBSTRATE"); name {
+		case "", "containers":
+			c, err := newContainers()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "installtest:", err)
+				return 1
+			}
+			substrate = c
+		case "vm":
+			v := newVMs()
+			substrate = v
+			if v.unavailable != "" {
+				if os.Getenv("INSTALLTEST_VM_REQUIRED") != "" {
+					fmt.Fprintln(os.Stderr, "installtest: INSTALLTEST_VM_REQUIRED is set, but the VM tier can't run here:", v.unavailable)
+					return 1
+				}
+				// Every Boot skips, so no release is needed.
+				fmt.Fprintln(os.Stderr, "installtest: the VM tier can't run here, so its paths skip:", v.unavailable)
+				return m.Run()
+			}
+		default:
+			fmt.Fprintf(os.Stderr, "installtest: INSTALLTEST_SUBSTRATE=%s: want containers or vm\n", name)
 			return 1
 		}
-		substrate = c
 		root, err := os.MkdirTemp("", "pantalan-installtest-")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "installtest:", err)
 			return 1
 		}
 		defer os.RemoveAll(root)
+		// INSTALLTEST_PUBLISHED_TAGS lists the published releases
+		// (space-separated; CI asks GitHub). The fake releases are tagged
+		// after the newest of them, so there's one to upgrade from.
+		published, publishedKnown := os.LookupEnv("INSTALLTEST_PUBLISHED_TAGS")
 		start := time.Now()
 		var tags []string
-		release, tags, err = startReleaseServer(root, substrate.HostAddr())
+		release, tags, err = startReleaseServer(root, substrate.HostAddr(), fakeReleaseTags(strings.Fields(published)))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "installtest: fake release:", err)
 			return 1
@@ -48,6 +74,13 @@ func TestMain(m *testing.M) {
 		tag = tags[0]
 		if len(tags) > 1 {
 			newerTag = tags[1]
+		}
+		previousTag = previousRelease(strings.Fields(published), tag)
+		switch {
+		case !publishedKnown:
+			noPreviousReason = "INSTALLTEST_PUBLISHED_TAGS is unset, so no published release is known to upgrade from"
+		case previousTag == "":
+			noPreviousReason = "no release older than " + tag + " is published yet"
 		}
 		fmt.Fprintf(os.Stderr, "installtest: fake releases %s for %s ready at %s in %s\n",
 			strings.Join(tags, ", "), strings.Join(arches, "+"), release.addr, time.Since(start).Round(time.Second))
@@ -103,6 +136,9 @@ type installer struct {
 	// release is whose install.sh runs, and so the version it installs by
 	// default; empty means tag.
 	release string
+	// published runs this published release's install.sh from GitHub
+	// instead, with no base-URL override: exactly what an operator ran.
+	published string
 }
 
 // run runs the installer on n with flags and returns how it ended. The
@@ -123,8 +159,11 @@ func (in installer) run(t *testing.T, n Node, flags ...string) Result {
 		uid, gid, _ := strings.Cut(in.asUser, ":")
 		shell = "setpriv --reuid=" + uid + " --regid=" + gid + " --clear-groups sh"
 	}
-	script := fmt.Sprintf(`curl -fsSL %s | %s -s --%s`,
-		shellQuote(base+"/"+version+"/install.sh"), shell, quoteAll(flags))
+	url, env := base+"/"+version+"/install.sh", []string{"PANTALAN_RELEASE_BASE_URL=" + base}
+	if in.published != "" {
+		url, env = publishedReleases+"/"+in.published+"/install.sh", nil
+	}
+	script := fmt.Sprintf(`curl -fsSL %s | %s -s --%s`, shellQuote(url), shell, quoteAll(flags))
 	var stdin string
 	if in.typed != nil {
 		// stdout and stderr both arrive on stdout, through the pty.
@@ -134,7 +173,7 @@ func (in installer) run(t *testing.T, n Node, flags ...string) Result {
 	start := time.Now()
 	r := n.Run(t, Cmd{
 		Script:  script,
-		Env:     []string{"PANTALAN_RELEASE_BASE_URL=" + base},
+		Env:     env,
 		Stdin:   stdin,
 		Timeout: 12 * time.Minute,
 	})

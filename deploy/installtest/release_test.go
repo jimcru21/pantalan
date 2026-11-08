@@ -30,14 +30,9 @@ const (
 	corruptOrigin = "corrupt" // the Node's binary altered after SHA256SUMS was written
 )
 
-// The working tree is built as two releases, N and N+1, the second tagged
-// on an empty commit after the first, so upgrades and downgrades can be
-// tested. Go stamps each tag into its binary from the tag on a clean
-// checkout, the way release.yml's builds get theirs.
-const (
-	testTag = "v0.0.1" // N: what every path installs unless it says otherwise
-	nextTag = "v0.0.2" // N+1
-)
+// publishedReleases is where the real releases are downloaded from, the
+// installer's default base URL.
+const publishedReleases = "https://github.com/jimcru21/pantalan/releases/download"
 
 var arches = []string{"amd64", "arm64"}
 
@@ -60,13 +55,15 @@ func (s *releaseServer) baseURL(origin string) string {
 // listenIP, the address Nodes reach the test machine on. It returns the
 // tags the good origin serves, oldest first.
 //
-// The releases N and N+1 are built from the working tree, uncommitted
-// changes included, unless INSTALLTEST_RELEASE_DIR names a directory that
-// already holds the assets for INSTALLTEST_RELEASE_TAG (the VM tier and the
-// release gate test the exact artifacts release.yml built), which is then
+// The working tree, uncommitted changes included, is built as the releases
+// tags (N and N+1, see fakeReleaseTags), the second tagged on an empty
+// commit after the first, so upgrades and downgrades can be tested; Go
+// stamps each tag into its binary from the tag on a clean checkout, the way
+// release.yml's builds get theirs. Unless INSTALLTEST_RELEASE_DIR names a
+// directory that already holds the assets for INSTALLTEST_RELEASE_TAG (the
+// release gate tests the exact artifacts release.yml built), which is then
 // the only release served.
-func startReleaseServer(root, listenIP string) (*releaseServer, []string, error) {
-	tags := []string{testTag, nextTag}
+func startReleaseServer(root, listenIP string, tags []string) (*releaseServer, []string, error) {
 	if dir := os.Getenv("INSTALLTEST_RELEASE_DIR"); dir != "" {
 		tags = []string{os.Getenv("INSTALLTEST_RELEASE_TAG")}
 		if tags[0] == "" {

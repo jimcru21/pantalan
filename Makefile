@@ -1,6 +1,6 @@
 BIN := bin/pantalan
 
-.PHONY: build run test vet fmt check shellcheck installtest
+.PHONY: build run test vet fmt check shellcheck installtest installtest-vm
 
 build:
 	go build -o $(BIN) ./cmd/pantalan
@@ -36,3 +36,13 @@ shellcheck:
 # one distro; see deploy/installtest/doc.go.
 installtest:
 	go test -tags installtest -count=1 -v -timeout 30m ./deploy/installtest/
+
+# The VM tier (nightly and the release gate): the VM-only paths, plus the
+# ssh.socket path, on KVM VMs from the distros' cloud images. Needs x64,
+# /dev/kvm, libvirt's default network, virt-install, qemu-img and
+# cloud-localds (see .github/workflows/installer-vm.yml); without them every
+# path skips, unless INSTALLTEST_VM_REQUIRED is set.
+INSTALLTEST_VM_PATHS = ^(TestVM.*|TestSSHSocketOnAnotherPortIsAllowed)$$
+installtest-vm:
+	INSTALLTEST_SUBSTRATE=vm go test -tags installtest -count=1 -v -timeout 38m \
+		-run '$(INSTALLTEST_VM_PATHS)' ./deploy/installtest/

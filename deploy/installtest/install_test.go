@@ -11,53 +11,60 @@ import (
 func TestFreshInstallFromBareWithNoTTY(t *testing.T) {
 	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d Distro) {
-		n := substrate.Boot(t, d, Bare)
-
-		r := installer{}.run(t, n, "--admin-user", "alice")
-		if r.Code != 0 {
-			t.Fatalf("install exited %d", r.Code)
-		}
-		s := parseSummary(t, r.Output())
-		if s.Version != tag {
-			t.Errorf("the summary says %s, want %s", s.Version, tag)
-		}
-		if want := "https://" + n.Addr() + ":8443"; s.DashboardURL != want {
-			t.Errorf("the summary's Dashboard is %s, want the default-route address %s", s.DashboardURL, want)
-		}
-		if s.Admin != "alice" {
-			t.Errorf("the summary's Admin is %q, want alice", s.Admin)
-		}
-		assertFirewallLine(t, r.Output(), "ufw enabled: allows SSH 22, 80, 443, 8443")
-		if !strings.Contains(r.Output(), "Docker-published container ports bypass ufw") {
-			t.Errorf("the summary doesn't say that Docker-published ports bypass ufw")
-		}
-		if !strings.Contains(r.Output(), "Behind NAT?") {
-			t.Errorf("the summary doesn't flag the private address %s with Behind NAT?", n.Addr())
-		}
-		assertInstalled(t, n, installed{
-			Version:       tag,
-			DashboardPort: 8443,
-			Fingerprint:   s.Fingerprint,
-			AdminUser:     "alice",
-			AdminPassword: s.AdminPassword,
-		})
-
-		log := sh(t, n, "cat /var/log/pantalan-install.log")
-		if strings.Contains(log, s.AdminPassword) {
-			t.Errorf("the install log contains the Admin password")
-		}
-		if !strings.Contains(log, "Admin password: shown on screen only") {
-			t.Errorf("the install log doesn't say the Admin password was shown on screen only")
-		}
-		token := adminTokenLine.FindStringSubmatch(sh(t, n, "cat /etc/pantalan/pantalan.env"))
-		if token != nil && (strings.Contains(r.Output(), token[1]) || strings.Contains(log, token[1])) {
-			t.Errorf("the Admin Token was printed")
-		}
-		if got := sh(t, n, "cat /etc/docker/daemon.json"); !strings.Contains(strings.ReplaceAll(got, " ", ""), `"live-restore":true`) {
-			t.Errorf("the Docker it installed has daemon.json %q, want live-restore on", got)
-		}
-		sh(t, n, "command -v git && dpkg-query -W ca-certificates")
+		freshInstallFromBare(t, substrate.Boot(t, d, Bare))
 	})
+}
+
+// freshInstallFromBare installs on a just-booted Bare Node n with no tty
+// and checks everything a fresh install must leave, SSH from outside
+// included; it returns the summary. The VM tier's sequence starts with it.
+func freshInstallFromBare(t *testing.T, n Node) summary {
+	t.Helper()
+	r := installer{}.run(t, n, "--admin-user", "alice")
+	if r.Code != 0 {
+		t.Fatalf("install exited %d", r.Code)
+	}
+	s := parseSummary(t, r.Output())
+	if s.Version != tag {
+		t.Errorf("the summary says %s, want %s", s.Version, tag)
+	}
+	if want := "https://" + n.Addr() + ":8443"; s.DashboardURL != want {
+		t.Errorf("the summary's Dashboard is %s, want the default-route address %s", s.DashboardURL, want)
+	}
+	if s.Admin != "alice" {
+		t.Errorf("the summary's Admin is %q, want alice", s.Admin)
+	}
+	assertFirewallLine(t, r.Output(), "ufw enabled: allows SSH 22, 80, 443, 8443")
+	if !strings.Contains(r.Output(), "Docker-published container ports bypass ufw") {
+		t.Errorf("the summary doesn't say that Docker-published ports bypass ufw")
+	}
+	if !strings.Contains(r.Output(), "Behind NAT?") {
+		t.Errorf("the summary doesn't flag the private address %s with Behind NAT?", n.Addr())
+	}
+	assertInstalled(t, n, installed{
+		Version:       tag,
+		DashboardPort: 8443,
+		Fingerprint:   s.Fingerprint,
+		AdminUser:     "alice",
+		AdminPassword: s.AdminPassword,
+	})
+
+	log := sh(t, n, "cat /var/log/pantalan-install.log")
+	if strings.Contains(log, s.AdminPassword) {
+		t.Errorf("the install log contains the Admin password")
+	}
+	if !strings.Contains(log, "Admin password: shown on screen only") {
+		t.Errorf("the install log doesn't say the Admin password was shown on screen only")
+	}
+	token := adminTokenLine.FindStringSubmatch(sh(t, n, "cat /etc/pantalan/pantalan.env"))
+	if token != nil && (strings.Contains(r.Output(), token[1]) || strings.Contains(log, token[1])) {
+		t.Errorf("the Admin Token was printed")
+	}
+	if got := sh(t, n, "cat /etc/docker/daemon.json"); !strings.Contains(strings.ReplaceAll(got, " ", ""), `"live-restore":true`) {
+		t.Errorf("the Docker it installed has daemon.json %q, want live-restore on", got)
+	}
+	sh(t, n, "command -v git && dpkg-query -W ca-certificates")
+	return s
 }
 
 func TestFreshInstallKeepsAnAcceptableDocker(t *testing.T) {
