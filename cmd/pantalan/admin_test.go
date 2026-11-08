@@ -107,6 +107,56 @@ func TestAdminShowWithoutAnAdminExits3(t *testing.T) {
 	}
 }
 
+// The installer asks `admin show` before it changes the host, so show must
+// leave the database as it found it: no migration, no snapshot.
+func TestAdminShowReadsAnOlderSchemaWithoutMigratingIt(t *testing.T) {
+	env := adminEnv(t)
+	createAdmin(t, env, "alice")
+	db := filepath.Join(dataDir(t, env), "pantalan.db")
+	older := newestMigration(t) - 1
+	setUserVersion(t, db, older) // as if a release behind wrote it
+
+	got := runCLI(t, t.Context(), env, "admin", "show")
+
+	if got.code != 0 || got.stdout != "alice\n" {
+		t.Errorf("admin show = %d %q (stderr %q), want 0 %q", got.code, got.stdout, got.stderr, "alice\n")
+	}
+	if v := userVersion(t, db); v != older {
+		t.Errorf("user_version after admin show = %d, want it left at %d", v, older)
+	}
+	if snaps, _ := filepath.Glob(db + ".bak-*"); len(snaps) != 0 {
+		t.Errorf("admin show snapshotted the database: %v", snaps)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dataDir(t, env), "*")); len(left) != 1 {
+		t.Errorf("after admin show the data dir holds %q, want only pantalan.db", left)
+	}
+}
+
+func TestAdminShowWithoutADatabaseExits3AndCreatesNothing(t *testing.T) {
+	env := adminEnv(t)
+
+	got := runCLI(t, t.Context(), env, "admin", "show")
+
+	if got.code != 3 {
+		t.Errorf("admin show exit code = %d, want 3 (stderr %q)", got.code, got.stderr)
+	}
+	if entries, _ := os.ReadDir(dataDir(t, env)); len(entries) != 0 {
+		t.Errorf("admin show created %d files in the data dir", len(entries))
+	}
+}
+
+func TestAdminShowRefusesADatabaseNewerThanItKnows(t *testing.T) {
+	env := adminEnv(t)
+	createAdmin(t, env, "alice")
+	setUserVersion(t, filepath.Join(dataDir(t, env), "pantalan.db"), newestMigration(t)+1)
+
+	got := runCLI(t, t.Context(), env, "admin", "show")
+
+	if got.code != 1 || !strings.Contains(got.stderr, "is newer than this pantalan knows") {
+		t.Errorf("admin show = %d (stderr %q), want 1 and the newer-schema refusal", got.code, got.stderr)
+	}
+}
+
 func TestASecondAdminCreateFailsWithoutChangingTheAdmin(t *testing.T) {
 	env := adminEnv(t)
 	pw := createAdmin(t, env, "alice")

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/pantalan/pantalan/internal/domain"
 	"modernc.org/sqlite" // registers the "sqlite" database/sql driver
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -66,6 +67,48 @@ func open(ctx context.Context, dataDir string, migrations fs.FS) (*Store, error)
 	if err := retryBusy(ctx, func() error { return migrate(ctx, db, path, steps) }); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
+	}
+	return &Store{db: db}, nil
+}
+
+// OpenReadOnly opens the database in dataDir only to read it: it creates
+// nothing, never migrates and never snapshots, so asking it a question
+// leaves the file as it was. It reads a schema older than this binary's
+// as it is, and refuses a newer one as Open does. A missing or still empty
+// database is domain.ErrNotFound.
+func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
+	migrations, err := fs.Sub(embedded, "migrations")
+	if err != nil {
+		return nil, err
+	}
+	steps, err := loadMigrations(migrations)
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dataDir, FileName)
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%s: %w", path, domain.ErrNotFound)
+	} else if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Set("mode", "ro")
+	q.Add("_pragma", "busy_timeout(5000)")
+	db, err := sql.Open("sqlite", "file:"+path+"?"+q.Encode())
+	if err != nil {
+		return nil, err
+	}
+	var current int
+	err = retryBusy(ctx, func() (err error) { current, err = userVersion(ctx, db); return err })
+	if err == nil && current == 0 {
+		err = fmt.Errorf("%s has no schema yet: %w", path, domain.ErrNotFound)
+	}
+	if err == nil {
+		err = checkKnown(current, len(steps))
+	}
+	if err != nil {
+		db.Close()
+		return nil, err
 	}
 	return &Store{db: db}, nil
 }
