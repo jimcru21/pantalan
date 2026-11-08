@@ -13,10 +13,12 @@ import (
 
 	"github.com/pantalan/pantalan/internal/build"
 	"github.com/pantalan/pantalan/internal/config"
+	"github.com/pantalan/pantalan/internal/dashboard"
 	"github.com/pantalan/pantalan/internal/dashtls"
 	"github.com/pantalan/pantalan/internal/domain"
 	"github.com/pantalan/pantalan/internal/health"
 	"github.com/pantalan/pantalan/internal/httpapi"
+	"github.com/pantalan/pantalan/internal/password"
 	"github.com/pantalan/pantalan/internal/proxy"
 	"github.com/pantalan/pantalan/internal/queue"
 	"github.com/pantalan/pantalan/internal/runtime/docker"
@@ -32,14 +34,14 @@ func serveCmd(ctx context.Context, inv invocation) int {
 	log := slog.New(slog.NewTextHandler(inv.stdio.Out, nil))
 	bin := buildInfo()
 	log.Info("starting", "version", bin.Version, "revision", bin.Revision, "go", bin.GoVersion)
-	if err := serve(ctx, log, inv.getenv); err != nil {
+	if err := serve(ctx, log, inv.getenv, inv.node, bin); err != nil {
 		log.Error("pantalan exited", "err", err)
 		return 1
 	}
 	return 0
 }
 
-func serve(ctx context.Context, log *slog.Logger, getenv func(string) string) error {
+func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, node Node, bin binary) error {
 	cfg, err := config.Load(getenv)
 	if err != nil {
 		return err
@@ -101,7 +103,18 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string) er
 		return fmt.Errorf("startup recovery: %w", err)
 	}
 
-	ui, err := web.Handler()
+	hostname, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("hostname: %w", err)
+	}
+	dash, err := dashboard.New(dashboard.Deps{
+		Auth:         service.NewAuthService(store, store, password.Hasher{}, node.now),
+		Templates:    web.Templates(),
+		Static:       web.Static(),
+		AssetVersion: assetVersion(bin, web.Static()),
+		Hostname:     hostname,
+		Log:          log,
+	})
 	if err != nil {
 		return err
 	}
@@ -110,7 +123,7 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string) er
 		Deployer:      deployer,
 		AdminToken:    cfg.AdminToken,
 		WebhookSecret: cfg.WebhookSecret,
-		Web:           ui,
+		Dashboard:     dash,
 		Log:           log,
 	})
 

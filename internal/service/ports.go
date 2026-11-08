@@ -91,7 +91,19 @@ type AdminRepository interface {
 	ResetAdminPassword(ctx context.Context, hash string, at time.Time) error
 }
 
-// PasswordHasher turns a password into a self-describing hash string.
+// SessionRepository stores Dashboard sessions by the hash of their token.
+type SessionRepository interface {
+	CreateSession(ctx context.Context, s domain.Session) error
+	// GetSession returns domain.ErrNotFound when there is no such session.
+	GetSession(ctx context.Context, tokenHash string) (domain.Session, error)
+	TouchSession(ctx context.Context, tokenHash string, at time.Time) error
+	// DeleteSession succeeds when the session is already gone.
+	DeleteSession(ctx context.Context, tokenHash string) error
+}
+
+// PasswordHasher turns a password into a self-describing hash string and
+// checks a password against one.
 type PasswordHasher interface {
 	Hash(password string) (string, error)
+	Verify(password, hash string) (bool, error)
 }

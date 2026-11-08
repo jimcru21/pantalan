@@ -1,0 +1,21 @@
+{{/* The Dashboard shell around every page. Data: dashboard.shellData;
+     the page's own data is .Page, and the page fills "main". */}}
+{{define "body"}}
+<div class="shell" data-shell>
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">P</span><span class="label">Pantalan</span></div>
+    <nav class="nav" aria-label="Dashboard">
+      {{range .Nav}}
+      <a href="{{.Href}}" class="nav-item{{if .Active}} on{{end}}" data-tip="{{.Label}}"{{if .Active}} aria-current="page"{{end}}>{{icon .Icon}}<span class="label">{{.Label}}</span></a>
+      {{end}}
+      <form method="post" action="/logout">
+        <button class="nav-item" type="submit" data-tip="Sign out">{{icon "logout"}}<span class="label">Sign out</span></button>
+      </form>
+    </nav>
+    <button class="collapse" type="button" data-collapse aria-label="Collapse sidebar" aria-expanded="true">{{icon "chevron"}}<span class="label">Collapse</span></button>
+  </aside>
+  <div class="content">
+    {{template "main" .Page}}
+  </div>
+</div>
+{{end}}

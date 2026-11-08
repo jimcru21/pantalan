@@ -8,8 +8,11 @@ package password
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"strings"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -35,4 +38,36 @@ func (Hasher) Hash(password string) (string, error) {
 	key := argon2.IDKey([]byte(password), salt, Time, Memory, Threads, KeyLen)
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argon2.Version, Memory, Time, Threads, b64.EncodeToString(salt), b64.EncodeToString(key)), nil
+}
+
+// Verify reports whether password matches phc, a hash made by Hash. It uses
+// the parameters recorded in phc, so hashes made with older parameters
+// still verify. A hash it can't parse is an error, not a mismatch.
+func (Hasher) Verify(password, phc string) (bool, error) {
+	var (
+		version    int
+		memory     uint32
+		iterations uint32
+		threads    uint8
+	)
+	parts := strings.Split(phc, "$")
+	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
+		return false, errors.New("password hash is not an argon2id PHC string")
+	}
+	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || version != argon2.Version {
+		return false, fmt.Errorf("password hash has unsupported argon2 version %q", parts[2])
+	}
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterations, &threads); err != nil || iterations == 0 || threads == 0 {
+		return false, fmt.Errorf("password hash has malformed parameters %q", parts[3])
+	}
+	salt, err := b64.DecodeString(parts[4])
+	if err != nil {
+		return false, fmt.Errorf("password hash salt: %w", err)
+	}
+	want, err := b64.DecodeString(parts[5])
+	if err != nil || len(want) == 0 {
+		return false, errors.New("password hash key is malformed")
+	}
+	got := argon2.IDKey([]byte(password), salt, iterations, memory, threads, uint32(len(want)))
+	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }

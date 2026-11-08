@@ -56,3 +56,10 @@ func NormalizeUsername(name string) (string, error) {
 func isUsernameRune(r rune) bool {
 	return 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '.' || r == '_' || r == '-'
 }
+
+// SameUsername reports whether a submitted username names the Admin whose
+// (normalized) username is stored. Usernames compare case-insensitively.
+func SameUsername(submitted, stored string) bool {
+	name, err := NormalizeUsername(submitted)
+	return err == nil && name == stored
+}
