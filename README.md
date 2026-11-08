@@ -8,19 +8,38 @@ See [docs/architecture.md](docs/architecture.md) for the design.
 ## Install
 
 On a fresh Debian 12, Debian 13, Ubuntu 24.04 LTS or Ubuntu 26.04 LTS
-server (amd64 or arm64), as a user who can `sudo`:
+server (amd64 or arm64), as a user who can `sudo`, download the installer,
+then run it:
 
 ```sh
-curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh
+curl -fL --max-time 120 -o install.sh https://github.com/jimcru21/pantalan/releases/latest/download/install.sh
+sudo sh install.sh
 ```
 
-Flags go after `sh -s --`, for example for cloud-init or CI, where there's no
-terminal to ask on:
+Downloading first is the safer way to run it:
+
+- **A failed download doesn't hang silently.** You see the progress and any
+  error. If GitHub's download servers accept the connection and then send
+  nothing, `--max-time` stops the download instead of waiting forever.
+- **You can read or check it before it runs as root.** To check it against
+  the release's checksums:
+
+  ```sh
+  curl -fL --max-time 120 -O https://github.com/jimcru21/pantalan/releases/latest/download/SHA256SUMS
+  sha256sum -c --ignore-missing SHA256SUMS
+  ```
+
+The installer's own downloads (the binary and `SHA256SUMS`) give up after
+four tries on a server that stops sending, rather than hanging.
+
+Flags go after `install.sh`, for example for cloud-init or CI, where there's
+no terminal to ask on:
 
 ```sh
-curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh \
-  | sudo sh -s -- --admin-user alice --dashboard-port 8443
+sudo sh install.sh --admin-user alice --dashboard-port 8443
 ```
+
+The one-line form `curl -fsSL <url> | sudo sh -s -- [flags]` also works.
 
 | Flag | |
 |---|---|
@@ -154,14 +173,15 @@ The installer doesn't downgrade, because a newer release may have migrated
 the database to a schema the older one doesn't know (an older binary
 refuses such a database rather than damage it). To go back, remove the
 newer binary, restore the snapshot taken when the database was migrated,
-and install the older release:
+and install the older release (with `install.sh` downloaded as in
+[Install](#install)):
 
 ```sh
-curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh -s -- --uninstall
+sudo sh install.sh --uninstall
 sudo ls -l /var/lib/pantalan/   # pick the pantalan.db.bak-<version> taken at the upgrade you're undoing
 sudo install -m 0600 -o pantalan -g pantalan /var/lib/pantalan/pantalan.db.bak-<version> /var/lib/pantalan/pantalan.db
 sudo rm -f /var/lib/pantalan/pantalan.db-wal /var/lib/pantalan/pantalan.db-shm
-curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh -s -- --version v1.2.3
+sudo sh install.sh --version v1.2.3
 ```
 
 `--uninstall` stops the service and removes the binary but keeps the data,
@@ -176,8 +196,10 @@ with the database's error and changes nothing else.
 
 ### Uninstall and purge
 
+With `install.sh` downloaded as in [Install](#install):
+
 ```sh
-curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh -s -- --uninstall
+sudo sh install.sh --uninstall
 ```
 
 `--uninstall` stops and disables the service and removes its unit and
@@ -190,7 +212,7 @@ again brings it all back as it was: the same Admin and password, Admin
 Token, certificate and apps, with no `--admin-user` needed.
 
 ```sh
-curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh -s -- --purge
+sudo sh install.sh --purge
 ```
 
 `--purge` does what `--uninstall` does and also deletes what it keeps: the
