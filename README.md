@@ -223,7 +223,11 @@ sign-in throttling, in one step, and works while the service is running.
 
 Sign in at `https://<node-ip>:8443` with the username and the printed
 password. A session lasts while you use it: it ends after an hour without a
-request, and 24 hours after sign-in in any case. The Admin Token is for
+request, and 24 hours after sign-in in any case. Up to 20 browsers can be
+signed in at once; signing in a 21st ends the oldest session. After five
+failed sign-ins, each further attempt has to wait, starting at a second and
+doubling up to 15 minutes; the login page says how long, and
+`reset-password` clears it. The Admin Token is for
 `/api/v1` only and is refused by the Dashboard; a Dashboard session cookie
 is no credential on `/api/v1`.
 `admin create --username NAME --check` only validates the name and never

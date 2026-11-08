@@ -105,7 +105,20 @@ Auth surfaces on the one listener:
   no expiry: the server ends a session after 1 h idle or 24 h in all.
   `last_seen_at` is rewritten at most once a minute. Nothing is cached in
   memory, so `admin reset-password` (which deletes every session) signs the
-  browser out on its next request.
+  browser out on its next request. At most 20 sessions exist: a new login
+  evicts the oldest. Expired sessions are pruned at startup and on the
+  daily maintenance tick that also checks TLS renewal.
+- Login throttling: one failure counter on the `admin` row, whatever
+  username was submitted (unknown usernames verify against a dummy hash).
+  Five failures are free; then the next attempt waits 1 s after the last
+  failure, doubling to 15 min. An attempt inside the wait gets 429 with
+  `Retry-After` before its password is checked, and isn't counted. A
+  checked attempt is counted before its password is verified (a
+  compare-and-swap on the count), and a success resets it, so racing
+  attempts can't all be checked when a wait ends.
+- At most 2 Argon2id hashes run at once; a login that can't get a slot
+  within 5 s gets 503 and isn't counted. A hash whose PHC parameters differ
+  from the current ones is replaced at the next successful login.
 - Every Dashboard response carries
   `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
   so templates have no inline scripts or `style=` attributes and htmx runs

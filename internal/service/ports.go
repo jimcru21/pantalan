@@ -89,16 +89,30 @@ type AdminRepository interface {
 	// password hash, deletes every session and clears the failure count.
 	// It returns domain.ErrNotFound when there is no Admin.
 	ResetAdminPassword(ctx context.Context, hash string, at time.Time) error
+	// RecordFailedLogin adds one to the failure count and sets its time to
+	// at, only if the count is still seen. It reports whether it did.
+	RecordFailedLogin(ctx context.Context, seen int, at time.Time) (bool, error)
+	// ResetFailedLogins clears the failure count.
+	ResetFailedLogins(ctx context.Context) error
+	// RehashPassword replaces the password hash old with rehashed, the same
+	// password under current parameters. It does nothing when the stored
+	// hash is no longer old (the password was reset meanwhile).
+	RehashPassword(ctx context.Context, old, rehashed string) error
 }
 
 // SessionRepository stores Dashboard sessions by the hash of their token.
 type SessionRepository interface {
-	CreateSession(ctx context.Context, s domain.Session) error
+	// CreateSession stores s and then deletes the oldest sessions beyond
+	// the newest keep, in one transaction.
+	CreateSession(ctx context.Context, s domain.Session, keep int) error
 	// GetSession returns domain.ErrNotFound when there is no such session.
 	GetSession(ctx context.Context, tokenHash string) (domain.Session, error)
 	TouchSession(ctx context.Context, tokenHash string, at time.Time) error
 	// DeleteSession succeeds when the session is already gone.
 	DeleteSession(ctx context.Context, tokenHash string) error
+	// DeleteExpiredSessions deletes the sessions last seen at or before
+	// seenBy or created at or before createdBy, returning how many.
+	DeleteExpiredSessions(ctx context.Context, seenBy, createdBy time.Time) (int, error)
 }
 
 // PasswordHasher turns a password into a self-describing hash string and
@@ -106,4 +120,7 @@ type SessionRepository interface {
 type PasswordHasher interface {
 	Hash(password string) (string, error)
 	Verify(password, hash string) (bool, error)
+	// NeedsRehash reports whether hash was made with other parameters
+	// than Hash uses now.
+	NeedsRehash(hash string) bool
 }
