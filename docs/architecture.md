@@ -144,7 +144,12 @@ run by dash on the supported distros) shipped as a release asset, with
 `DEFAULT_VERSION=@VERSION@` replaced by the tag at release time. Every
 function is defined before `main "$@"`, the last line, and `main` runs one
 function per step: preflight (read-only), download and verify, collect
-inputs, packages, files, Admin, service, then the summary. Nothing on the
+inputs, packages, files, Admin, service, firewall, then the summary. The
+firewall comes last, once the service answers: preflight classifies the
+host (`classify_firewall`: mode from `PANTALAN_FIREWALL`, other firewall
+managers, an active ufw, risks that make it stage rather than enable, and
+the SSH ports as a union of sources) and `configure_firewall` reconciles
+the `pantalan`-commented rules and adds `pantalan-ssh` ones. Nothing on the
 host changes before the packages step; each step converges, so a re-run
 resumes. Output goes through `tee` into `/var/log/pantalan-install.log`
 except the Admin password, which is printed after the log is closed.
@@ -155,7 +160,8 @@ except the Admin password, which is printed after the log is closed.
 (unit, binary), so a reinstall finds the kept database and Admin and asks
 the downloaded binary about them; `--purge` also removes config, data,
 drop-ins, app containers, `pantalan/*` images and the user, after `purge` is
-typed at `/dev/tty` or `--yes` is given. Docker, ufw and git are never
+typed at `/dev/tty` or `--yes` is given. Both delete the `pantalan` ufw
+rules and keep the `pantalan-ssh` ones. Docker, ufw and git are never
 removed.
 
 `deploy/installtest` (build tag `installtest`) tests it end to end: Go tests
