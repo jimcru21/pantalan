@@ -27,6 +27,12 @@ curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install
 | `--admin-user NAME` | The Admin's username. Asked for on the terminal when missing; with no terminal, the install stops and names the flag. |
 | `--dashboard-port N` | The Dashboard's HTTPS port, default `8443`. |
 | `--version vX.Y.Z` | Install that release instead of the one the script came with. |
+| `--no-firewall` | Leave the firewall entirely alone, on this run and every re-run (stored as `PANTALAN_FIREWALL=off`). |
+
+Once installed, the env file holds the settings: a re-run reads the
+Dashboard port and firewall mode from it, and a flag that disagrees with it
+stops the run. To change one, edit `/etc/pantalan/pantalan.env` and run
+the installer again.
 
 Running the command is the consent: there's no "continue?" prompt. The
 installer first checks the host without changing anything (root, the
@@ -55,16 +61,17 @@ Only then does it change the host:
 - creates the Admin with a generated password, starts the service and waits
   for it to answer on HTTPS (printing the service's last 50 log lines if it
   doesn't).
+- last, configures ufw so only SSH, 80, 443 and the Dashboard port are
+  reachable (see [Firewall](#firewall)).
 
 It ends with a summary: the version, the Dashboard URL, the certificate
 fingerprint to compare with your browser's warning, the Admin and the
-one-time Admin password, where the Admin Token is, and how to recover a lost
-password. The Admin Token is never printed. The password is shown only on
-the terminal and kept out of the install log, but an install with no
-terminal (cloud-init, CI) leaves it in that tool's own log: run
-`sudo pantalan admin reset-password` afterwards if that matters. Cloud
-security groups are outside the server: open 80, 443 and the Dashboard port
-there too.
+one-time Admin password, where the Admin Token is, how to recover a lost
+password, and what happened to the firewall. The Admin Token is never
+printed. The password is shown only on the terminal and kept out of the
+install log, but an install with no terminal (cloud-init, CI) leaves it in
+that tool's own log: run `sudo pantalan admin reset-password` afterwards if
+that matters.
 
 If a step fails, the installer names it and the log; fix the cause and run
 the same command again.
@@ -73,6 +80,42 @@ the same command again.
 in a hardened unit (`ProtectSystem=strict`, `NoNewPrivileges`, only
 `CAP_NET_BIND_SERVICE`), but anything that can talk to Docker can get root
 on the host, so that hardening is defence in depth, not a boundary.
+
+### Firewall
+
+The installer allows SSH, 80, 443 and the Dashboard port (TCP, IPv4 and
+IPv6) in ufw, installing ufw if needed. Its rules carry the comment
+`pantalan` (80, 443, the Dashboard port: made to match those on every run,
+so moving the Dashboard moves its rule) or `pantalan-ssh` (one per SSH
+port, only ever added, `allow` rather than `limit` so automation isn't
+throttled). SSH ports are everything sshd and `ssh.socket` listen on,
+every `Port` in `sshd -T` and the port your session came in on, all
+allowed before ufw is enabled, so enabling it doesn't lock you out. It
+never runs `ufw disable` or `ufw reset`, never edits `/etc/default/ufw` and
+adds no `DOCKER-USER` rules. What it does depends on the host:
+
+| Host | What happens |
+|---|---|
+| ufw inactive | Rules added, ufw enabled. A re-run enables it again if you disabled it by hand. |
+| ufw already active | Rules added only. Your rules and default policies are left as they are (a rule of yours for the same port stands in for Pantalan's); a default incoming policy other than deny or reject gets a warning. |
+| firewalld active, or `nftables.service` enabled with your own ruleset | ufw skipped: not installed, no rules. Open 80, 443 and the Dashboard port in that firewall. (The stock `/etc/nftables.conf` that Docker CE's dependencies bring doesn't count.) |
+| `MANAGE_BUILTINS=yes` or `IPV6=no` (with a global IPv6 address) in `/etc/default/ufw`, Docker's nftables firewall backend, or no SSH server found | Rules staged: added, but ufw left off. Check SSH, then run `sudo ufw --force enable`. |
+| `--no-firewall` (`PANTALAN_FIREWALL=off`) | Nothing at all. |
+
+Staged and skipped firewalls still end the install with success, since
+Pantalan is running. `PANTALAN_FIREWALL` is read only by the installer; set
+it to `off` in the env file to stop it managing the firewall.
+
+Two things are outside ufw's reach:
+
+- **Ports Docker publishes bypass ufw.** Docker forwards them itself, ahead
+  of ufw, so a container published on `0.0.0.0` (Docker's default) is
+  reachable from anywhere whatever ufw says. Pantalan's own app containers
+  publish on `127.0.0.1` only; the summary warns about any running
+  container that doesn't.
+- **Cloud security groups are separate.** A provider's firewall in front of
+  the server knows nothing of ufw: open 80, 443 and the Dashboard port
+  there too.
 
 ### Uninstall and purge
 
@@ -98,6 +141,11 @@ drop-ins, `/etc/pantalan/`, `/var/lib/pantalan/`, the app containers, the
 `pantalan/*` images and the `pantalan` user. There's no undo, so it asks you
 to type `purge` on the terminal. With no terminal it refuses unless you add
 `--yes` (`--purge --yes`); `--yes` is accepted only with `--purge`.
+
+Both delete Pantalan's `pantalan` ufw rules. They keep the `pantalan-ssh`
+rules, and ufw as active as it was, because removing an SSH rule from an
+active ufw locks out your next login; the summary lists them and how to
+delete them (`sudo ufw status numbered`, then `sudo ufw delete N`).
 
 Neither ever removes Docker, ufw or git, which other things on the server may
 use. The install log, `/var/log/pantalan-install.log`, stays too.
@@ -288,6 +336,7 @@ keeps them in `/etc/pantalan/pantalan.env`; after editing it, run
 | `PANTALAN_DATA_DIR` | `/var/lib/pantalan` | The database (`pantalan.db`), build checkouts, logs, `tls/` |
 | `PANTALAN_WEBHOOK_SECRET` | *(empty: webhooks off)* | GitHub HMAC secret |
 | `PANTALAN_WORKERS` | `2` | Concurrent deployments |
+| `PANTALAN_FIREWALL` | `ufw` | Installer only, ignored by the service: `off` leaves the firewall alone (see [Firewall](#firewall)) |
 
 ## Layout
 

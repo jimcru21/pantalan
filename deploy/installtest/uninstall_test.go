@@ -4,6 +4,7 @@ package installtest
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,7 @@ func TestUninstallKeepsDataAndAReinstallBringsItBack(t *testing.T) {
 			t.Fatalf("--uninstall exited %d", r.Code)
 		}
 		assertServiceGone(t, n)
+		assertFirewallAfterRemoval(t, n, r, []int{22})
 		for _, path := range []string{"/etc/pantalan/pantalan.env", "/var/lib/pantalan/pantalan.db", "/var/lib/pantalan/tls/key.pem", dropIn} {
 			if n.Run(t, Cmd{Script: "test -e " + path}).Code != 0 {
 				t.Errorf("--uninstall removed %s, want it kept", path)
@@ -46,6 +48,7 @@ func TestUninstallKeepsDataAndAReinstallBringsItBack(t *testing.T) {
 			t.Fatalf("reinstall after --uninstall exited %d", r.Code)
 		}
 		s := parseKeptAdminSummary(t, r.Output())
+		assertFirewallLine(t, r.Output(), "ufw active: allows SSH 22, 80, 443, 8443; added 80, 443, 8443")
 		if s.Fingerprint != first.Fingerprint {
 			t.Errorf("the reinstall's certificate is %s, want the kept %s", s.Fingerprint, first.Fingerprint)
 		}
@@ -88,6 +91,7 @@ func TestPurgeNeedsYesWithNoTTYThenRemovesAllButDocker(t *testing.T) {
 			t.Fatalf("--purge --yes exited %d", r.Code)
 		}
 		assertPurged(t, n, app)
+		assertFirewallAfterRemoval(t, n, r, []int{22})
 		assertDockerStillRuns(t, n)
 		sh(t, n, "command -v git")
 	})
@@ -110,6 +114,7 @@ func TestPurgeAtATerminalNeedsPurgeTyped(t *testing.T) {
 			t.Fatalf("--purge with purge typed exited %d", r.Code)
 		}
 		assertPurged(t, n, app)
+		assertFirewallAfterRemoval(t, n, r, []int{22})
 		assertDockerStillRuns(t, n)
 	})
 }
@@ -198,6 +203,29 @@ func assertServiceGone(t *testing.T, n Node) {
 	}
 	if got := sh(t, n, "ss -Hltn 'sport = :8443'"); got != "" {
 		t.Errorf("something still listens on the Dashboard port: %s", got)
+	}
+}
+
+// assertFirewallAfterRemoval: --uninstall and --purge (run r) delete every
+// `pantalan` rule but keep the `pantalan-ssh` ones (for ports ssh) and ufw
+// itself active, since dropping an SSH rule from an active ufw locks out
+// the next login; and they say how to remove the kept rules.
+func assertFirewallAfterRemoval(t *testing.T, n Node, r Result, ssh []int) {
+	t.Helper()
+	rules := ufwRules(t, n)
+	if len(rules["pantalan"]) != 0 {
+		t.Errorf("ufw still allows %v/tcp with comment pantalan, want none", rules["pantalan"])
+	}
+	if !slices.Equal(rules["pantalan-ssh"], ssh) {
+		t.Errorf("ufw allows %v/tcp with comment pantalan-ssh, want %v kept", rules["pantalan-ssh"], ssh)
+	}
+	if got := ufwStatus(t, n); got != "active" {
+		t.Errorf("ufw is %q after the removal, want still active", got)
+	}
+	for _, want := range []string{"pantalan-ssh", "sudo ufw status numbered", "sudo ufw delete"} {
+		if !strings.Contains(r.Output(), want) {
+			t.Errorf("the removal's output doesn't mention %q about the kept SSH rules", want)
+		}
 	}
 }
 
