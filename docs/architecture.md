@@ -15,6 +15,7 @@ Inside, the code follows ports & adapters (hexagonal):
                  ┌──────────────── cmd/pantalan (wiring) ─────────────────┐
                  │                                                       │
   HTTP ──► httpapi ──► service (use cases) ◄── ports.go: interfaces      │
+     └───► dashboard ───────┘                                            │
                           │                                              │
                           ▼ calls ports, never adapters                  │
      store/sqlite   source(git)   build   runtime/docker  health  proxy  │
@@ -75,17 +76,57 @@ host there, the Node's bare IP included, gets a 404.
   real certificate from a man in the middle: `pantalan tls fingerprint`, and
   the service log at startup and renewal.
 
+## Dashboard
+
+The Dashboard is server-rendered ([ADR 0002](adr/0002-server-rendered-dashboard-with-htmx.md)):
+`internal/dashboard` renders Go `html/template` files from `web/templates`
+and serves `web/static` (CSS, `app.js` and htmx 2.0.11, vendored as one
+minified file with its licence). Both are embedded with `go:embed`; there is
+no Node toolchain and no build step. `dashboard.New` parses every template
+once, so a broken template fails startup. The handlers call the service
+layer directly, never `/api/v1`.
+
+Auth surfaces on the one listener:
+
+| Route | Credential |
+|---|---|
+| Dashboard pages, `POST /login`, `POST /logout` | session cookie only, behind `http.CrossOriginProtection`; a request with an `Authorization` header gets 401 |
+| `/api/v1/…` | Admin Token (bearer) only; cookies are ignored |
+| `/webhooks/github` | HMAC signature |
+| `/healthz` | none |
+
+- Login and logout are plain `<form method="post">` answered with 303
+  redirects. A wrong username and a wrong password get the same 401 and
+  message. With no Admin, the login card shows the `admin create` command
+  instead of the form, and `POST /login` gets 403.
+- `service.AuthService` issues a `crypto/rand.Text()` token per login and
+  stores only its SHA-256 hex in `sessions`. The cookie is
+  `__Host-pantalan_session; Path=/; Secure; HttpOnly; SameSite=Strict`, with
+  no expiry: the server ends a session after 1 h idle or 24 h in all.
+  `last_seen_at` is rewritten at most once a minute. Nothing is cached in
+  memory, so `admin reset-password` (which deletes every session) signs the
+  browser out on its next request.
+- Every Dashboard response carries
+  `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
+  so templates have no inline scripts or `style=` attributes and htmx runs
+  with `allowEval=false` and `includeIndicatorStyles=false`.
+- Static files live under `/static/<version>/` with
+  `Cache-Control: public, max-age=31536000, immutable`. `<version>` is the
+  release tag, else the short VCS revision, else (binaries with no VCS
+  stamp, such as `go run`) a digest of the files. Pages, fragments and
+  redirects are `no-store`.
+
 ## Packages
 
 | Path | Role |
 |---|---|
 | `cmd/pantalan` | Entrypoint, config and dependency wiring |
 | `internal/domain` | Entities (`App`, `Deployment`, `Admin`), validation, sentinel errors |
-| `internal/service` | Use cases (`AppService`, `AdminService`, `Deployer`) and the port interfaces |
-| `internal/httpapi` | REST API, GitHub webhook, auth middleware |
+| `internal/service` | Use cases (`AppService`, `AdminService`, `AuthService`, `Deployer`) and the port interfaces |
+| `internal/httpapi` | REST API (Admin Token), GitHub webhook, `/healthz`; mounts the Dashboard at `/` |
 | `internal/dashtls` | Dashboard certificate (generate, load, renew) and the listener that redirects plain HTTP |
 | `internal/password` | Argon2id hashing of the Admin password into a PHC string |
-| `internal/store/sqlite` | App, deployment and Admin repositories and the sessions table in SQLite, plus the schema migrations |
+| `internal/store/sqlite` | App, deployment, Admin and session repositories in SQLite, plus the schema migrations |
 | `internal/source` | Git checkout |
 | `internal/build` | Dockerfile and Nixpacks builders |
 | `internal/runtime/docker` | Container lifecycle through the docker CLI |
@@ -93,7 +134,8 @@ host there, the Node's bare IP included, gets a 404.
 | `internal/proxy` | Host-based reverse proxy |
 | `internal/queue` | In-process job queue |
 | `internal/execx` | Shared helpers for running external commands |
-| `web` | Dashboard, embedded into the binary from `web/dist` |
+| `internal/dashboard` | Dashboard handlers: login, logout, session middleware, pages; security and cache headers |
+| `web` | Dashboard assets only (templates and static files), embedded into the binary |
 
 ## Decisions
 
@@ -132,7 +174,7 @@ them for design:
 - Apps behind the proxy get no TLS yet (add ACME through autocert or
   certmagic in `proxy`). The Dashboard listener is HTTPS-only with a
   self-signed certificate; see "Dashboard listener" above.
-- Auth is a single admin bearer token.
+- One Admin and one shared Admin Token: no other users, roles or scoped API keys.
 - Env values are stored in plaintext. Encrypt them at rest before real use.
 
 ## Where it grows
@@ -143,8 +185,7 @@ internal/proxy/acme.go    automatic HTTPS
 internal/compose/         docker-compose stacks
 internal/databases/       managed Postgres/MySQL/Redis templates
 internal/backup/          scheduled dumps to S3-compatible storage
-internal/auth/            users, sessions, scoped API keys
+internal/auth/            more users, roles, scoped API keys
 internal/events/          pub/sub for live logs and status over SSE
-web/src/                  dashboard frontend source (builds to web/dist)
 deploy/install.sh         curl | sh installer + systemd unit
 ```

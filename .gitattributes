@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Vendored, minified third-party code (see web/static/vendor).
+web/static/vendor/** linguist-vendored

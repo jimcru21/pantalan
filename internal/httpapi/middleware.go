@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// requireToken allows requests carrying "Authorization: Bearer <token>".
-// TODO: replace with user accounts + scoped API keys.
+// requireToken allows requests carrying "Authorization: Bearer <token>",
+// the Admin Token. Cookies play no part.
 func requireToken(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")

@@ -110,6 +110,12 @@ sudo pantalan admin reset-password            # prints a new password
 
 `reset-password` also signs out every Dashboard session and clears the
 sign-in throttling, in one step, and works while the service is running.
+
+Sign in at `https://<node-ip>:8443` with the username and the printed
+password. A session lasts while you use it: it ends after an hour without a
+request, and 24 hours after sign-in in any case. The Admin Token is for
+`/api/v1` only and is refused by the Dashboard; a Dashboard session cookie
+is no credential on `/api/v1`.
 `admin create --username NAME --check` only validates the name and never
 touches the database. Usernames are 1 to 32 characters of `a-z`, `0-9`, `.`,
 `_` and `-`, starting with a letter, and are lowercased. The Admin can't be
@@ -134,6 +140,7 @@ internal/domain/        entities and rules
 internal/service/       use cases + port interfaces
 internal/httpapi/       REST API, webhooks, middleware
 internal/dashtls/       Dashboard certificate + HTTPS listener
+internal/dashboard/     Dashboard login, sessions and pages (html/template + htmx)
 internal/store/sqlite/  SQLite repositories + migrations
 internal/source/        git
 internal/build/         dockerfile, nixpacks
@@ -141,6 +148,6 @@ internal/runtime/docker container lifecycle
 internal/health/        readiness probe
 internal/proxy/         reverse proxy
 internal/queue/         deploy job queue
-web/                    embedded dashboard
+web/                    Dashboard templates and static files, embedded (no build step)
 docs/                   architecture notes
 ```

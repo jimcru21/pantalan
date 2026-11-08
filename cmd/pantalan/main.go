@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/pantalan/pantalan/internal/config"
 )
@@ -25,6 +26,17 @@ type Stdio struct {
 type Node struct {
 	ProcRoot     string // usually /proc
 	DockerSocket string // the Docker Engine API unix socket
+	// Clock is the time Dashboard sessions are timed by; nil means
+	// time.Now. Tests move it forward instead of waiting.
+	Clock func() time.Time
+}
+
+// now is the Node's clock.
+func (n Node) now() time.Time {
+	if n.Clock == nil {
+		return time.Now()
+	}
+	return n.Clock()
 }
 
 func main() {
@@ -32,6 +44,7 @@ func main() {
 	code := run(ctx, os.Args[1:], os.Environ(), Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}, Node{
 		ProcRoot:     "/proc",
 		DockerSocket: "/var/run/docker.sock",
+		Clock:        time.Now,
 	})
 	stop()
 	os.Exit(code)
