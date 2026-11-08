@@ -16,10 +16,13 @@ Inside, the code follows ports & adapters (hexagonal):
                  │                                                       │
   HTTP ──► httpapi ──► service (use cases) ◄── ports.go: interfaces      │
      └───► dashboard ───────┘                                            │
-                          │                                              │
-                          ▼ calls ports, never adapters                  │
-     store/sqlite   source(git)   build   runtime/docker  health  proxy  │
-     (adapters: each implements one interface from service/ports.go)     │
+             │            │                                              │
+             │            ▼ calls ports, never adapters                  │
+             │  store/sqlite  source(git)  build  runtime/docker  health │
+             │  proxy (adapters: each implements one service/ports.go    │
+             │  interface)                                               │
+             └──► nodeinfo (read-only Node information, through the      │
+                  dashboard's own Host, Docker and Events interfaces)    │
                  └───────────────────────────────────────────────────────┘
 ```
 
@@ -27,6 +30,17 @@ Dependency rule: `domain` imports nothing internal. `service` imports only
 `domain`. Adapters import `service` and `domain`. Only `cmd/pantalan` imports
 everything. This keeps the deploy pipeline testable with fakes
 (`service/deployer_test.go`) and lets each adapter be replaced on its own.
+
+One exception, on purpose: the Node overview's reads skip the service
+layer. `internal/dashboard` declares the small interfaces it reads through
+(`Host`, `Docker`, `Events`) and imports `internal/nodeinfo` for their
+value types (`Snapshot`, `DockerSummary`, `EventLog`, ...); `cmd/pantalan`
+wires the `nodeinfo` implementations in, and the dashboard never builds
+one. There is no use case between the two: no rule, no state and no
+write, only data to render, so a service port would be a pass-through
+that re-declares every `nodeinfo` type. If a read ever grows a rule (an
+alert, a decision a deployment acts on), it moves into `service` behind
+a port.
 
 ## Deploy pipeline
 
@@ -88,7 +102,9 @@ and serves `web/static` (CSS, `app.js` and htmx 2.0.11, vendored as one
 minified file with its licence). Both are embedded with `go:embed`; there is
 no Node toolchain and no build step. `dashboard.New` parses every template
 once, so a broken template fails startup. The handlers call the service
-layer directly, never `/api/v1`.
+layer directly, never `/api/v1`, except for the Node overview's reads,
+which go to `internal/nodeinfo` through the dashboard's own interfaces
+(see the dependency rule above).
 
 Auth surfaces on the one listener:
 
