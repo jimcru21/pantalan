@@ -45,8 +45,10 @@ func TestMain(m *testing.M) {
 					fmt.Fprintln(os.Stderr, "installtest: INSTALLTEST_VM_REQUIRED is set, but the VM tier can't run here:", v.unavailable)
 					return 1
 				}
-				// Every Boot skips, so no release is needed.
+				// Every Boot skips, so no release is needed. Paths that
+				// skip before booting say why too.
 				fmt.Fprintln(os.Stderr, "installtest: the VM tier can't run here, so its paths skip:", v.unavailable)
+				noPreviousReason = "VM tier unavailable: " + v.unavailable
 				return m.Run()
 			}
 		default:
