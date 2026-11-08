@@ -61,6 +61,7 @@ func run(ctx context.Context, args, env []string, stdio Stdio, node Node) int {
 
 // commands are the subcommands, by name.
 var commands = map[string]command{
+	"admin":   {run: adminCmd}, // opens the data dir itself, except for `create --check`
 	"serve":   {opensDataDir: true, run: serveCmd},
 	"tls":     {opensDataDir: true, run: tlsCmd},
 	"version": {run: versionCmd},
@@ -69,7 +70,8 @@ var commands = map[string]command{
 type command struct {
 	// opensDataDir makes run switch to the data directory owner first when
 	// running as root (ADR 0001). Set it on every command that touches
-	// $PANTALAN_DATA_DIR.
+	// $PANTALAN_DATA_DIR. A command that opens it only sometimes calls
+	// becomeDataDirOwner itself, just before it does.
 	opensDataDir bool
 	run          func(context.Context, invocation) int
 }
@@ -97,6 +99,7 @@ func lookupIn(env []string) func(string) string {
 const usageText = `Usage: pantalan <command>
 
 Commands:
+  admin     create the Admin, show its username or reset its password
   serve     run the Pantalan service (what the systemd unit runs)
   tls       show or replace the Dashboard's TLS certificate
   version   print the version

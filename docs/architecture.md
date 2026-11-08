@@ -66,11 +66,12 @@ host there, the Node's bare IP included, gets a 404.
 | Path | Role |
 |---|---|
 | `cmd/pantalan` | Entrypoint, config and dependency wiring |
-| `internal/domain` | Entities (`App`, `Deployment`), validation, sentinel errors |
-| `internal/service` | Use cases (`AppService`, `Deployer`) and the port interfaces |
+| `internal/domain` | Entities (`App`, `Deployment`, `Admin`), validation, sentinel errors |
+| `internal/service` | Use cases (`AppService`, `AdminService`, `Deployer`) and the port interfaces |
 | `internal/httpapi` | REST API, GitHub webhook, auth middleware |
 | `internal/dashtls` | Dashboard certificate (generate, load, renew) and the listener that redirects plain HTTP |
-| `internal/store/sqlite` | App and deployment repositories in SQLite, plus the schema migrations |
+| `internal/password` | Argon2id hashing of the Admin password into a PHC string |
+| `internal/store/sqlite` | App, deployment and Admin repositories and the sessions table in SQLite, plus the schema migrations |
 | `internal/source` | Git checkout |
 | `internal/build` | Dockerfile and Nixpacks builders |
 | `internal/runtime/docker` | Container lifecycle through the docker CLI |
@@ -84,7 +85,8 @@ host there, the Node's bare IP included, gets a 404.
 
 - **Standard library first.** `net/http` routing, `log/slog` and
   `httputil.ReverseProxy` cover the scaffold. Add a dependency only when it
-  replaces real code; `modernc.org/sqlite` is the first.
+  replaces real code: `modernc.org/sqlite` and `golang.org/x/crypto` (Argon2id)
+  so far.
 - **Docker CLI rather than the Engine SDK.** It has no dependencies and its
   errors match what an operator sees. Move to the SDK when you need event
   streams or container stats.

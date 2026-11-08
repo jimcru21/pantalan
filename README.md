@@ -96,6 +96,25 @@ The app proxy is unaffected: it stays on port 80, and a request there for an
 unknown host (including the Node's bare IP) gets a 404, never a redirect to
 the Dashboard.
 
+## Admin account
+
+The Admin is the one account that signs in to the Dashboard. Its password is
+always generated (26 base32 characters) and printed once; you can't choose
+one. Run these on the server:
+
+```sh
+sudo pantalan admin create --username alice   # prints the password; refuses if an Admin exists
+sudo pantalan admin show                      # prints the username; exits 3 when there is no Admin
+sudo pantalan admin reset-password            # prints a new password
+```
+
+`reset-password` also signs out every Dashboard session and clears the
+sign-in throttling, in one step, and works while the service is running.
+`admin create --username NAME --check` only validates the name and never
+touches the database. Usernames are 1 to 32 characters of `a-z`, `0-9`, `.`,
+`_` and `-`, starting with a letter, and are lowercased. The Admin can't be
+renamed.
+
 ## Configuration
 
 | Variable | Default | |

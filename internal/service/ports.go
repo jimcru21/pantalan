@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/pantalan/pantalan/internal/domain"
 )
@@ -72,4 +73,21 @@ type Router interface {
 // Scheduler hands a queued deployment to whatever runs it.
 type Scheduler interface {
 	Enqueue(deploymentID string) error
+}
+
+// AdminRepository stores the one Admin.
+type AdminRepository interface {
+	// CreateAdmin returns domain.ErrConflict when an Admin already exists.
+	CreateAdmin(ctx context.Context, admin domain.Admin) error
+	// GetAdmin returns domain.ErrNotFound when there is no Admin.
+	GetAdmin(ctx context.Context) (domain.Admin, error)
+	// ResetAdminPassword, in one transaction, replaces the Admin's
+	// password hash, deletes every session and clears the failure count.
+	// It returns domain.ErrNotFound when there is no Admin.
+	ResetAdminPassword(ctx context.Context, hash string, at time.Time) error
+}
+
+// PasswordHasher turns a password into a self-describing hash string.
+type PasswordHasher interface {
+	Hash(password string) (string, error)
 }
