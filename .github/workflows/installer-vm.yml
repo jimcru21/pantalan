@@ -66,11 +66,14 @@ jobs:
       # on: the release server listens there and SSH from outside comes from
       # there. The world-writable socket is the k3s pattern, accepted for
       # these ephemeral hosted runners only (they hold no secrets).
+      # dnsmasq-base is only a Recommends of libvirt-daemon-system, but the
+      # default network can't start without it (it serves virbr0's DHCP).
       - name: Install libvirt and the image tools
         run: |
           sudo apt-get update -q
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-            qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst cloud-image-utils
+            qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst cloud-image-utils \
+            dnsmasq-base
           sudo systemctl start libvirtd
           sudo chmod a+rw /var/run/libvirt/libvirt-sock
           virsh --connect qemu:///system net-info default | grep -q '^Active: *yes' ||
