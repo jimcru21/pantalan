@@ -60,6 +60,7 @@ func TestActiveUfwOnlyGetsRulesAdded(t *testing.T) {
 			ufw allow from 10.0.0.0/8 to any port 9000 proto tcp
 			ufw --force enable`)
 		rulesBefore, policyBefore := operatorRules(t, n), ufwPolicy(t, n)
+		defaultsBefore := sh(t, n, "cat /etc/default/ufw")
 
 		r := installer{}.run(t, n, "--admin-user", "alice")
 		if r.Code != 0 {
@@ -72,6 +73,9 @@ func TestActiveUfwOnlyGetsRulesAdded(t *testing.T) {
 		}
 		if got := ufwPolicy(t, n); got != policyBefore {
 			t.Errorf("ufw's default policy changed from %q to %q", policyBefore, got)
+		}
+		if got := sh(t, n, "cat /etc/default/ufw"); got != defaultsBefore {
+			t.Errorf("the installer changed /etc/default/ufw")
 		}
 		if strings.Contains(r.Output(), "default incoming policy") {
 			t.Errorf("the installer warned about a reject incoming policy, which is fine")
@@ -193,7 +197,9 @@ func TestSSHSocketOnAnotherPortIsAllowed(t *testing.T) {
 }
 
 // Hosts where enabling ufw is risky get the rules staged and ufw left off,
-// and the install still succeeds. One Debian and one Ubuntu each.
+// and the install still succeeds. One Debian and one Ubuntu each. Every
+// reason is in the unit table (TestRiskyHostsHaveAReasonToStageUfw); these are the ones whose
+// probes ask real software: Docker, and an SSH server that's gone.
 func TestRiskyHostsGetTheFirewallStaged(t *testing.T) {
 	t.Parallel()
 	for _, risk := range []struct {
@@ -203,12 +209,6 @@ func TestRiskyHostsGetTheFirewallStaged(t *testing.T) {
 		reason  string
 		ssh     []int
 	}{
-		{
-			name:    "manage-builtins",
-			variant: UFW,
-			setup:   "sed -i 's/^MANAGE_BUILTINS=.*/MANAGE_BUILTINS=yes/' /etc/default/ufw",
-			reason:  "MANAGE_BUILTINS=yes in /etc/default/ufw",
-		},
 		{
 			name:    "docker-nftables",
 			variant: DockerOK,
@@ -230,7 +230,6 @@ func TestRiskyHostsGetTheFirewallStaged(t *testing.T) {
 				onlyOn(t, d, "debian-13", "ubuntu-24.04")
 				n := substrate.Boot(t, d, risk.variant)
 				sh(t, n, risk.setup)
-				defaultsBefore := n.Run(t, Cmd{Script: "cat /etc/default/ufw"}).Output()
 
 				r := installer{}.run(t, n, "--admin-user", "alice")
 				if r.Code != 0 {
@@ -246,11 +245,6 @@ func TestRiskyHostsGetTheFirewallStaged(t *testing.T) {
 					AdminPassword: s.AdminPassword,
 					Firewall:      firewall{State: ufwStaged, SSH: risk.ssh},
 				})
-				if risk.variant == UFW {
-					if got := n.Run(t, Cmd{Script: "cat /etc/default/ufw"}).Output(); got != defaultsBefore {
-						t.Errorf("the installer changed /etc/default/ufw")
-					}
-				}
 			})
 		})
 	}
