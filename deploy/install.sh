@@ -63,6 +63,7 @@ FIREWALL_MODE=       # ufw or off, as stored in ENV_FILE (PANTALAN_FIREWALL)
 FW_ACTION=           # enable, add (ufw already active), stage, skip or off
 SSH_PORTS=           # the SSH ports found, space-separated
 FW_LINE=             # the summary's Firewall line
+FW_WARNINGS=         # lines the summary repeats under it
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -653,7 +654,31 @@ classify_firewall() {
 		return 0
 	fi
 	detect_ssh_ports
+	if ufw_active; then
+		# The operator's firewall: rules are added to it, and nothing of
+		# theirs (rules, policies) is touched.
+		FW_ACTION=add
+		check_ufw_policy
+		return 0
+	fi
 	FW_ACTION=enable
+}
+
+ufw_active() {
+	command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active$'
+}
+
+# check_ufw_policy warns when an active ufw lets in what no rule allows.
+check_ufw_policy() {
+	cu_policy=$(ufw status verbose | sed -n 's/^Default: \([a-z]*\) (incoming).*/\1/p')
+	case $cu_policy in
+	deny | reject) ;;
+	*)
+		FW_WARNINGS="${FW_WARNINGS}ufw's default incoming policy is ${cu_policy:-unknown}, so ports with no rule are open too. Pantalan leaves your policy as it is; \`sudo ufw default deny incoming\` changes it.
+"
+		warn "ufw's default incoming policy is ${cu_policy:-unknown}: ports with no rule are open too"
+		;;
+	esac
 }
 
 # resolve_firewall_mode: the stored PANTALAN_FIREWALL wins, and
@@ -747,9 +772,9 @@ session_ssh_port() {
 	done
 }
 
-# comma_list WORD...: "a, b, c".
+# comma_list PORTS...: "a, b, c", sorted.
 comma_list() {
-	printf '%s\n' "$*" | sed 's/ /, /g'
+	port_set "$*" | sed 's/ /, /g'
 }
 
 # ufw_rules COMMENT: the ports `ufw allow PORT/tcp comment COMMENT` rules
@@ -771,17 +796,76 @@ configure_firewall() {
 		say "Firewall: $FW_LINE"
 		return 0
 	fi
-	cf_targets="80 443 $DASHBOARD_PORT"
+	cf_targets=$(port_set "80 443 $DASHBOARD_PORT")
+	# Rules from an earlier run make this an upgrade or repair, whose
+	# summary says what changed.
+	cf_ours=$(port_set "$(ufw_rules pantalan)")
+	cf_had=$(port_set "$cf_ours $(ufw_rules pantalan-ssh)")
+	cf_added=
+	cf_taken=
+	cf_removed=
+	cf_ssh_added=
+	# Added before anything is removed or enabled, so no moment is missing
+	# a port.
 	for cf_port in $cf_targets; do
-		ufw_has_rule "$cf_port" || quietly ufw allow "$cf_port/tcp" comment pantalan
+		if in_list "$cf_port" "$cf_ours"; then
+			continue
+		elif ufw_has_rule "$cf_port"; then
+			cf_taken="$cf_taken $cf_port"
+		else
+			quietly ufw allow "$cf_port/tcp" comment pantalan
+			cf_added="$cf_added $cf_port"
+		fi
 	done
 	for cf_port in $SSH_PORTS; do
-		ufw_has_rule "$cf_port" || quietly ufw allow "$cf_port/tcp" comment pantalan-ssh
+		ufw_has_rule "$cf_port" && continue
+		quietly ufw allow "$cf_port/tcp" comment pantalan-ssh
+		cf_ssh_added="$cf_ssh_added $cf_port"
 	done
-	quietly ufw --force enable
+	for cf_port in $cf_ours; do
+		in_list "$cf_port" "$cf_targets" && continue
+		quietly ufw --force delete allow "$cf_port/tcp"
+		cf_removed="$cf_removed $cf_port"
+	done
+	if [ "$FW_ACTION" = enable ]; then
+		quietly ufw --force enable
+	fi
 	confirm_ufw_active "$cf_targets $SSH_PORTS"
-	FW_LINE="ufw enabled: allows SSH $(comma_list "$SSH_PORTS"), $(comma_list "$cf_targets")"
+
+	cf_allows="${SSH_PORTS:+SSH $(comma_list "$SSH_PORTS"), }$(comma_list "$cf_targets")"
+	cf_added_text=$(comma_list "$cf_added")
+	if [ -n "$cf_ssh_added" ]; then
+		cf_added_text="${cf_added_text:+$cf_added_text and }SSH $(comma_list "$cf_ssh_added")"
+	fi
+	cf_change="${cf_added_text:+added $cf_added_text}"
+	if [ -n "$cf_removed" ]; then
+		cf_change="${cf_change:+$cf_change, }removed $(comma_list "$cf_removed")"
+	fi
+	case $FW_ACTION:${cf_had:+had} in
+	enable:) FW_LINE="ufw enabled: allows $cf_allows" ;;
+	enable:had) FW_LINE="ufw enabled: allows $cf_allows; ${cf_change:-unchanged}" ;;
+	add:had) FW_LINE="ufw active: allows $cf_allows; ${cf_change:-unchanged}" ;;
+	add:)
+		if [ -z "$cf_added_text" ]; then
+			FW_LINE="ufw already active: your rules already allow $cf_allows, and are unchanged"
+		else
+			case $(port_set "$cf_taken") in
+			*" "*) cf_set=were ;;
+			*) cf_set=was ;;
+			esac
+			FW_LINE="ufw already active: added $cf_added_text${cf_taken:+ ($(comma_list "$cf_taken") $cf_set already allowed)}; your existing rules are unchanged"
+		fi
+		;;
+	esac
 	say "Firewall: $FW_LINE"
+}
+
+# in_list WORD LIST: is WORD one of LIST's space-separated words?
+in_list() {
+	case " $2 " in
+	*" $1 "*) return 0 ;;
+	esac
+	return 1
 }
 
 # confirm_ufw_active PORTS: ufw reports itself active, with each of PORTS
@@ -829,6 +913,9 @@ print_summary() {
 	say "  Admin Token     in $ENV_FILE (PANTALAN_ADMIN_TOKEN)"
 	say "  Lost password   sudo pantalan admin reset-password"
 	say "  Firewall        $FW_LINE"
+	printf '%s' "$FW_WARNINGS" | while IFS= read -r ps_warning; do
+		say "                  Warning: $ps_warning"
+	done
 	say ""
 	say "  Cloud security groups are outside this server's firewall: open 80, 443 and $DASHBOARD_PORT there too."
 	say "  Install log: $LOG_FILE"
