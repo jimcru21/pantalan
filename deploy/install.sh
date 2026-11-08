@@ -28,6 +28,7 @@ CONFIG_DIR=/etc/pantalan
 ENV_FILE=$CONFIG_DIR/pantalan.env
 DATA_DIR=/var/lib/pantalan
 UNIT_FILE=/etc/systemd/system/pantalan.service
+DROPIN_DIR=$UNIT_FILE.d
 LOG_FILE=/var/log/pantalan-install.log
 SERVICE_USER=pantalan
 DEFAULT_DASHBOARD_PORT=8443
@@ -37,6 +38,9 @@ MIN_DOCKER_MAJOR=28
 OPT_ADMIN_USER=
 OPT_DASHBOARD_PORT=
 OPT_VERSION=
+OPT_UNINSTALL=
+OPT_PURGE=
+OPT_YES=
 
 # What the steps found out or decided.
 STEP=checks
@@ -83,6 +87,9 @@ Options:
   --admin-user NAME     the Admin's username (asked for when there's a terminal)
   --dashboard-port N    the Dashboard's HTTPS port (default $DEFAULT_DASHBOARD_PORT)
   --version vX.Y.Z      install this release instead of $DEFAULT_VERSION
+  --uninstall           remove the service and binary; keep data, config and apps
+  --purge               remove everything --uninstall keeps too (asks you to type purge)
+  --yes                 with --purge and no terminal: purge without asking
   -h, --help            show this help
 EOF
 }
@@ -197,6 +204,10 @@ parse_args() {
 			[ -n "$pa_value" ] || die "$pa_flag needs a value"
 			shift
 			;;
+		--uninstall | --purge | --yes)
+			pa_flag=$1
+			shift
+			;;
 		-h | --help)
 			usage
 			exit 0
@@ -207,7 +218,23 @@ parse_args() {
 		--admin-user) OPT_ADMIN_USER=$pa_value ;;
 		--dashboard-port) OPT_DASHBOARD_PORT=$pa_value ;;
 		--version) OPT_VERSION=$pa_value ;;
+		--uninstall) OPT_UNINSTALL=1 ;;
+		--purge) OPT_PURGE=1 ;;
+		--yes) OPT_YES=1 ;;
 		esac
+	done
+	check_flag_combinations
+}
+
+# check_flag_combinations: --yes only answers --purge's question, and the
+# install flags mean nothing to a removal.
+check_flag_combinations() {
+	if [ -n "$OPT_YES" ] && [ -z "$OPT_PURGE" ]; then
+		die "--yes is only valid with --purge (it confirms the purge when there's no terminal to type purge on)"
+	fi
+	[ -n "$OPT_UNINSTALL$OPT_PURGE" ] || return 0
+	for cf_pair in "--admin-user=$OPT_ADMIN_USER" "--dashboard-port=$OPT_DASHBOARD_PORT" "--version=$OPT_VERSION"; do
+		[ -z "${cf_pair#*=}" ] || die "${cf_pair%%=*} is for installing, and can't be used with --uninstall or --purge"
 	done
 }
 
@@ -378,11 +405,16 @@ collect_inputs() {
 }
 
 # admin_exists: is there an Admin in the database already? Asks the
-# installed binary, which knows the schema the database is at.
+# installed binary, which knows the schema the database is at. After
+# --uninstall there is none, so the downloaded one asks instead: it migrates
+# a kept database to its own schema (which the install would do anyway), and
+# refuses one newer than it knows.
 admin_exists() {
-	[ -f "$DATA_DIR/pantalan.db" ] && [ -x "$BIN" ] || return 1
+	[ -f "$DATA_DIR/pantalan.db" ] || return 1
+	ae_bin=$BIN
+	[ -x "$ae_bin" ] || ae_bin=$NEW_BIN
 	ae_code=0
-	"$BIN" admin show >/dev/null 2>"$TMP_DIR/admin-show.err" || ae_code=$?
+	"$ae_bin" admin show >/dev/null 2>"$TMP_DIR/admin-show.err" || ae_code=$?
 	case $ae_code in
 	0) return 0 ;;
 	3) return 1 ;;
@@ -615,6 +647,133 @@ print_summary() {
 }
 
 # ---------------------------------------------------------------------------
+# --uninstall and --purge. --uninstall removes what installing again puts
+# back (service, unit, binary) and keeps everything else, so a reinstall
+# brings it all back as it was. --purge removes the rest too. Docker, ufw
+# and git are never removed: other things on the server may use them.
+
+remove_pantalan() {
+	step "Checking this host"
+	check_systemd
+	[ -z "$OPT_PURGE" ] || purge_preflight
+	step "Removing the service"
+	remove_service
+	# Pantalan's firewall rules are removed here (the firewall ticket).
+	if [ -n "$OPT_PURGE" ]; then
+		step "Removing app containers and images"
+		remove_apps
+		step "Removing config, data and the service user"
+		remove_files
+		remove_service_user
+		STEP="Printing the summary"
+		print_purged
+	else
+		STEP="Printing the summary"
+		print_uninstalled
+	fi
+}
+
+# remove_service stops and disables the service and removes its unit and
+# the binary. With nothing installed it does nothing, so it can re-run.
+remove_service() {
+	if [ -e "$UNIT_FILE" ]; then
+		systemctl disable --now --quiet pantalan.service
+		rm -f "$UNIT_FILE"
+		systemctl daemon-reload
+		systemctl reset-failed pantalan.service 2>/dev/null || :
+		say "Stopped and disabled pantalan.service and removed $UNIT_FILE."
+	fi
+	if [ -e "$BIN" ] || [ -e "$BIN.new" ]; then
+		rm -f "$BIN" "$BIN.new"
+		say "Removed $BIN."
+	fi
+}
+
+# app_containers: the IDs of Pantalan's app containers, running or not.
+app_containers() { docker ps -aq --filter label=pantalan.app; }
+
+print_uninstalled() {
+	say ""
+	say "Pantalan is uninstalled: its service, unit and $BIN are gone."
+	say ""
+	say "Kept, so installing again brings everything back as it was:"
+	[ ! -d "$CONFIG_DIR" ] || say "  $CONFIG_DIR/  settings and the Admin Token"
+	[ ! -d "$DATA_DIR" ] || say "  $DATA_DIR/  the database, TLS certificate and builds"
+	[ ! -d "$DROPIN_DIR" ] || say "  $DROPIN_DIR/  your unit drop-ins"
+	if docker_responds; then
+		pu_count=$(app_containers | wc -l)
+		say "  App containers (label pantalan.app, $pu_count now) and pantalan/* images, in Docker"
+	fi
+	! getent passwd "$SERVICE_USER" >/dev/null || say "  The $SERVICE_USER user"
+	say "  Docker, ufw and git: the installer never removes them"
+	say ""
+	say "  Install again    curl -fsSL $INSTALL_URL | sudo sh"
+	say "  Remove the rest  curl -fsSL $INSTALL_URL | sudo sh -s -- --purge"
+	say "  Install log      $LOG_FILE"
+}
+
+# purge_preflight: a purge can't be undone, so it is typed out at the
+# terminal, or given as --yes when there is none. Docker must answer, to
+# remove the app containers; with no Docker there are none.
+purge_preflight() {
+	if command -v docker >/dev/null 2>&1 && ! docker_responds; then
+		die "the Docker daemon doesn't answer, so the app containers and images can't be removed. Check \`systemctl status docker\`, then run this again. Nothing was changed."
+	fi
+	[ -z "$OPT_YES" ] || return 0
+	have_tty || die "--purge deletes Pantalan's data, config, app containers and images and the $SERVICE_USER user, and there's no terminal to confirm it on. Nothing was changed. To purge without asking: curl -fsSL $INSTALL_URL | sudo sh -s -- --purge --yes"
+	{
+		say "--purge deletes, for good: $CONFIG_DIR (with the Admin Token), $DATA_DIR (the"
+		say "database, the TLS certificate and builds), $DROPIN_DIR, Pantalan's app"
+		say "containers and pantalan/* images, and the $SERVICE_USER user."
+	} >/dev/tty
+	pp_answer=$(ask "Type purge to delete all of it: ")
+	[ "$pp_answer" = purge ] || die "the purge wasn't confirmed (typed \"$pp_answer\", not purge). Nothing was changed."
+}
+
+remove_apps() {
+	command -v docker >/dev/null 2>&1 || return 0
+	ra_ids=$(app_containers)
+	if [ -n "$ra_ids" ]; then
+		# shellcheck disable=SC2086 # one word per ID
+		quietly docker rm --force --volumes $ra_ids
+		say "Removed $(printf '%s\n' "$ra_ids" | wc -l) app container(s)."
+	fi
+	# By name, so an image that is also tagged as something else keeps
+	# that tag.
+	ra_images=$(docker images --filter 'reference=pantalan/*' --format '{{.Repository}}:{{.Tag}}')
+	if [ -n "$ra_images" ]; then
+		# shellcheck disable=SC2086 # one word per image
+		quietly docker rmi $ra_images
+		say "Removed $(printf '%s\n' "$ra_images" | wc -l) pantalan/* image(s)."
+	fi
+}
+
+remove_files() {
+	for rf_path in "$DROPIN_DIR" "$CONFIG_DIR" "$DATA_DIR"; do
+		[ -e "$rf_path" ] || continue
+		rm -rf "$rf_path"
+		say "Removed $rf_path."
+	done
+	systemctl daemon-reload
+}
+
+remove_service_user() {
+	if getent passwd "$SERVICE_USER" >/dev/null; then
+		userdel "$SERVICE_USER"
+		say "Removed the $SERVICE_USER user."
+	fi
+	if getent group "$SERVICE_USER" >/dev/null; then
+		groupdel "$SERVICE_USER"
+	fi
+}
+
+print_purged() {
+	say ""
+	say "Pantalan is purged: its service, binary, config, data, unit drop-ins, app"
+	say "containers, pantalan/* images and the $SERVICE_USER user are gone."
+	say "Docker, ufw and git are left as they are: the installer never removes them."
+	say "  Install log      $LOG_FILE"
+}
 
 main() {
 	# The script itself may be arriving on stdin (curl | sh); nothing below
@@ -626,6 +785,10 @@ main() {
 	trap on_exit EXIT
 	trap 'exit 130' INT
 	trap 'exit 143' TERM
+	if [ -n "$OPT_UNINSTALL$OPT_PURGE" ]; then
+		remove_pantalan
+		return 0
+	fi
 
 	step "Checking this host"
 	preflight

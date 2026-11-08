@@ -74,6 +74,34 @@ in a hardened unit (`ProtectSystem=strict`, `NoNewPrivileges`, only
 `CAP_NET_BIND_SERVICE`), but anything that can talk to Docker can get root
 on the host, so that hardening is defence in depth, not a boundary.
 
+### Uninstall and purge
+
+```sh
+curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh -s -- --uninstall
+```
+
+`--uninstall` stops and disables the service and removes its unit and
+`/usr/local/bin/pantalan`. It keeps everything else and lists what it kept:
+`/etc/pantalan/` (settings and the Admin Token), `/var/lib/pantalan/` (the
+database, TLS certificate and builds), your `pantalan.service.d/` drop-ins,
+the app containers (`label=pantalan.app`, which listen only on loopback),
+the `pantalan/*` images and the `pantalan` user. Running the install command
+again brings it all back as it was: the same Admin and password, Admin
+Token, certificate and apps, with no `--admin-user` needed.
+
+```sh
+curl -fsSL https://github.com/jimcru21/pantalan/releases/latest/download/install.sh | sudo sh -s -- --purge
+```
+
+`--purge` does what `--uninstall` does and also deletes what it keeps: the
+drop-ins, `/etc/pantalan/`, `/var/lib/pantalan/`, the app containers, the
+`pantalan/*` images and the `pantalan` user. There's no undo, so it asks you
+to type `purge` on the terminal. With no terminal it refuses unless you add
+`--yes` (`--purge --yes`); `--yes` is accepted only with `--purge`.
+
+Neither ever removes Docker, ufw or git, which other things on the server may
+use. The install log, `/var/log/pantalan-install.log`, stays too.
+
 ## Requirements for building from source
 
 - Go 1.26+
