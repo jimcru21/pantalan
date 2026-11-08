@@ -57,6 +57,7 @@ DOCKER_STATE=        # missing: install it; ok: an acceptable docker-ce is runni
 DASHBOARD_PORT=
 NEW_BIN=             # the downloaded, verified binary in TMP_DIR
 ADMIN_USER=          # empty when an Admin already exists
+EXISTING_ADMIN=      # the username of the Admin that already exists, if one does
 ADMIN_CREATED=
 ADMIN_PASSWORD=
 FINGERPRINT=
@@ -527,7 +528,11 @@ fetch() {
 
 collect_inputs() {
 	if admin_exists; then
-		say "An Admin already exists; keeping it."
+		say "An Admin ($EXISTING_ADMIN) already exists; keeping it."
+		ci_wanted=$(printf '%s' "$OPT_ADMIN_USER" | tr '[:upper:]' '[:lower:]')
+		if [ -n "$ci_wanted" ] && [ "$ci_wanted" != "$EXISTING_ADMIN" ]; then
+			warn "--admin-user $OPT_ADMIN_USER is ignored: the Admin $EXISTING_ADMIN already exists and is kept, since a Node has one Admin and a re-run never replaces it"
+		fi
 		return 0
 	fi
 	ADMIN_USER=$OPT_ADMIN_USER
@@ -543,17 +548,15 @@ collect_inputs() {
 	done
 }
 
-# admin_exists: is there an Admin in the database already? Asks the
-# installed binary, which knows the schema the database is at. After
-# --uninstall there is none, so the downloaded one asks instead: it migrates
-# a kept database to its own schema (which the install would do anyway), and
-# refuses one newer than it knows.
+# admin_exists: is there an Admin in the database already? If so, its
+# username goes in EXISTING_ADMIN. Asks the downloaded binary, whose
+# `admin show` only reads: it opens the database read-only, never migrates
+# or snapshots it, and refuses a schema newer than it knows. So this, like
+# every check, changes nothing on disk.
 admin_exists() {
 	[ -f "$DATA_DIR/pantalan.db" ] || return 1
-	ae_bin=$BIN
-	[ -x "$ae_bin" ] || ae_bin=$NEW_BIN
 	ae_code=0
-	"$ae_bin" admin show >/dev/null 2>"$TMP_DIR/admin-show.err" || ae_code=$?
+	EXISTING_ADMIN=$("$NEW_BIN" admin show 2>"$TMP_DIR/admin-show.err") || ae_code=$?
 	case $ae_code in
 	0) return 0 ;;
 	3) return 1 ;;
