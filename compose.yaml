@@ -1,0 +1,80 @@
+# The Docker dev stack: `docker compose up`, then edit and refresh. See
+# "Develop with Docker" in the README.
+#
+#   docker    a private Docker daemon (dind): the apps you deploy while
+#             developing run here, not in your machine's Docker
+#   pantalan  the checkout mounted at /src, built and run by air, which
+#             rebuilds and restarts it on every change
+#
+# pantalan shares docker's network namespace: Pantalan publishes app
+# containers on 127.0.0.1 and its proxy reaches them there, so both must
+# see the same loopback. That's also why the ports are published on docker.
+#
+# Settings, from the environment or a .env file next to this one:
+#
+#   PANTALAN_DEV_BIND            where the ports listen: 127.0.0.1 (default,
+#                                this machine only) or 0.0.0.0 (a VPS, to
+#                                open the Dashboard from a browser elsewhere)
+#   PANTALAN_DEV_HOST            the host name or IP printed in the URLs
+#                                (default localhost; a VPS's public IP)
+#   PANTALAN_DEV_DASHBOARD_PORT  the Dashboard's port (default 8443)
+#   PANTALAN_DEV_PROXY_PORT      the app proxy's port (default 8080)
+#   PANTALAN_DEV_ADMIN           the Admin made on first start (default dev)
+name: pantalan-dev
+
+services:
+  docker:
+    image: docker:28-dind
+    # dind needs it to run containers; it's the only privileged service.
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+      DOCKER_HOST: unix:///var/run/dind/docker.sock # for the healthcheck
+    # Naming dockerd stops the image adding its default tcp://0.0.0.0:2375
+    # listener: the daemon must answer on the socket only, or any app
+    # deployed in the stack could reach it, and through it the host
+    # (the daemon is privileged).
+    command: ["dockerd", "--host=unix:///var/run/dind/docker.sock"]
+    volumes:
+      - docker-socket:/var/run/dind
+      - docker-data:/var/lib/docker
+    ports:
+      - "${PANTALAN_DEV_BIND:-127.0.0.1}:${PANTALAN_DEV_DASHBOARD_PORT:-8443}:8443"
+      - "${PANTALAN_DEV_BIND:-127.0.0.1}:${PANTALAN_DEV_PROXY_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "docker", "version"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  pantalan:
+    build: dev
+    network_mode: service:docker
+    depends_on:
+      docker:
+        condition: service_healthy
+    environment:
+      PANTALAN_DATA_DIR: /data
+      PANTALAN_DASHBOARD_ADDR: :8443
+      PANTALAN_PROXY_ADDR: :8080
+      PANTALAN_DEV_HOST: ${PANTALAN_DEV_HOST:-localhost}
+      PANTALAN_DEV_DASHBOARD_PORT: ${PANTALAN_DEV_DASHBOARD_PORT:-8443}
+      PANTALAN_DEV_PROXY_PORT: ${PANTALAN_DEV_PROXY_PORT:-8080}
+      PANTALAN_DEV_ADMIN: ${PANTALAN_DEV_ADMIN:-dev}
+    volumes:
+      - .:/src
+      - docker-socket:/var/run/dind
+      - data:/data
+      - build-output:/src/tmp
+      - go-mod:/go/pkg/mod
+      - go-build:/root/.cache/go-build
+    restart: unless-stopped
+
+volumes:
+  docker-socket:
+  docker-data:
+  data:
+  build-output:
+  go-mod:
+  go-build:

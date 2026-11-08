@@ -29,7 +29,7 @@ check: vet test
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:"; gofmt -l .; exit 1)
 
 shellcheck:
-	shellcheck deploy/install.sh deploy/release.sh
+	shellcheck deploy/install.sh deploy/release.sh dev/entrypoint.sh
 
 # The installer harness: boots privileged systemd containers (needs Docker)
 # and runs deploy/install.sh in them. INSTALLTEST_DISTROS=debian-12 picks

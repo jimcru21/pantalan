@@ -1,0 +1,30 @@
+# air's config for the Docker dev stack (compose.yaml): rebuild and restart
+# `pantalan serve` whenever a file the binary is made of changes. The
+# Dashboard's templates, static files and migrations are embedded, so they
+# need a rebuild too.
+root = "."
+# A volume in compose.yaml, so builds don't write into the checkout.
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/pantalan ./cmd/pantalan"
+entrypoint = ["./tmp/pantalan", "serve"]
+include_ext = ["go", "html", "css", "js", "svg", "sql"]
+exclude_dir = [".git", ".claude", "bin", "data", "tmp", "deploy", "docs"]
+exclude_regex = ["_test\\.go$"]
+# Saving several files at once is one rebuild, not several.
+delay = 300
+# serve shuts down on SIGINT; give it time to before it's killed.
+send_interrupt = true
+kill_delay = "5s"
+# Keep the old server up while the tree doesn't build.
+stop_on_error = false
+
+[log]
+time = true
+
+[misc]
+clean_on_exit = false
+
+[screen]
+clear_on_rebuild = false

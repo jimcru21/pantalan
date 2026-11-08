@@ -269,10 +269,67 @@ Node".
 
 ## Run locally
 
+### Develop with Docker
+
+The easiest way: all you need is Docker with Compose (no Go, git or
+anything else on your machine).
+
+```sh
+docker compose up
+```
+
+The first start builds the dev image, then prints the Dashboard URL, the
+dev Admin (`dev`) and its password (shown once) and the Admin Token. Sign
+in at https://localhost:8443 and accept the browser's warning about the
+self-signed certificate. Edit any `.go`, template, CSS, JS, SVG or
+migration file and Pantalan rebuilds and restarts within seconds
+([air](https://github.com/air-verse/air) watches the checkout): refresh the
+browser to see it. A change that doesn't compile prints the error and keeps
+the last good build running.
+
+Apps you deploy run in the stack's own Docker daemon (Docker-in-Docker, the
+`docker` service), not in your machine's Docker, and are reachable through
+the app proxy at http://localhost:8080 with their domain as the `Host`
+header (`curl -H 'Host: myapp.example.com' http://localhost:8080`).
+
+```sh
+docker compose up -d                                             # in the background
+docker compose logs -f pantalan                                  # follow the build and server output
+docker compose exec pantalan pantalan admin reset-password       # a new Admin password
+docker compose exec pantalan cat /data/dev-secrets.env           # the Admin Token and webhook secret
+docker compose down                                              # stop (data, apps and caches stay)
+docker compose down -v                                           # stop and wipe everything: a fresh start
+```
+
+**On a VPS**, to open the Dashboard from your own browser, make the ports
+listen on every address with a `.env` file next to `compose.yaml` (it's
+ignored by git):
+
+```sh
+PANTALAN_DEV_BIND=0.0.0.0
+PANTALAN_DEV_HOST=203.0.113.10   # the VPS's public IP, for the printed URLs
+```
+
+then `docker compose up -d` and open `https://<public-ip>:8443`. Docker's
+published ports bypass ufw, so the provider's firewall or security group is
+what decides who can reach them: open 8443 (and 8080 to try the app proxy),
+ideally only to your own IP. The Admin Token and webhook secret are random,
+made on first start and kept in the data volume, because anyone who can
+reach the API with the token can deploy containers on the VPS. Other
+settings are listed at the top of `compose.yaml` (ports, the Admin's name).
+
+The `docker` service runs privileged, which Docker-in-Docker needs.
+
+### Without Docker
+
+With Go 1.26+, git and Docker on your machine:
+
 ```sh
 make run      # Dashboard + API on https://localhost:8443, app proxy on :8080
 make check    # vet + race tests + gofmt
 ```
+
+`make run` doesn't rebuild on changes: stop it and run it again.
 
 ### Test the installer
 
@@ -319,7 +376,8 @@ deploy/release.sh build v1.2.3 /tmp/pantalan-v1.2.3
 
 The Dashboard port speaks HTTPS with a self-signed certificate (see
 [Dashboard certificate](#dashboard-certificate)), so these local examples
-pass `-k`.
+pass `-k`. `TOKEN=dev` is `make run`'s token; with the Docker dev stack,
+use the Admin Token it prints (also in `/data/dev-secrets.env`).
 
 ```sh
 TOKEN=dev
@@ -442,6 +500,7 @@ keeps them in `/etc/pantalan/pantalan.env`; after editing it, run
 
 ```
 cmd/pantalan/            entrypoint + wiring
+compose.yaml, dev/        the Docker dev stack (docker compose up)
 deploy/install.sh       the installer (a release asset)
 deploy/release.sh       builds the release assets (used by release.yml)
 deploy/installtest/     installer harness (build tag installtest)
