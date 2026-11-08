@@ -5,6 +5,7 @@ package installtest
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -91,6 +92,47 @@ func TestDashboardPortTakenWithNoTTYAbortsNamingTheHolderAndTheFlag(t *testing.T
 
 		assertFailedNaming(t, r, "8443", "in use by perl", "--dashboard-port 8444")
 		assertUntouched(t, n, before)
+	})
+}
+
+func TestDashboardPortTakenAtATerminalAsksAndInstalls(t *testing.T) {
+	t.Parallel()
+	forEachDistro(t, func(t *testing.T, d Distro) {
+		only(t, d, "debian-12", "ubuntu-24.04")
+		if nodeArch != "amd64" {
+			t.Skip("this path runs on amd64 only")
+		}
+		n := substrate.Boot(t, d, Bare)
+		occupy(t, n, 8443)
+
+		// A refused port, then Enter for the suggested one; an invalid
+		// username, then a good one.
+		r := installer{typed: []string{"443", "", "9lives", "alice"}}.run(t, n)
+		if r.Code != 0 {
+			t.Fatalf("install exited %d", r.Code)
+		}
+		out := strings.ReplaceAll(r.Output(), "\r", "")
+		for _, want := range []string{
+			"port 8443 is in use by perl",
+			"Dashboard port [8444]: ",
+			"port 443 is kept for app HTTPS",
+			"start with a letter",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("the installer's output doesn't mention %q", want)
+			}
+		}
+		s := parseSummary(t, out)
+		if want := "https://" + n.Addr() + ":8444"; s.DashboardURL != want {
+			t.Errorf("the summary's Dashboard is %s, want %s", s.DashboardURL, want)
+		}
+		assertInstalled(t, n, installed{
+			Version:       tag,
+			DashboardPort: 8444,
+			Fingerprint:   s.Fingerprint,
+			AdminUser:     "alice",
+			AdminPassword: s.AdminPassword,
+		})
 	})
 }
 

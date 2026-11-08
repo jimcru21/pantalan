@@ -323,7 +323,6 @@ resolve_dashboard_port() {
 		die "$rd_problem, and it's the Dashboard's default port. Choose another with --dashboard-port N, e.g. --dashboard-port $rd_free"
 	fi
 	say "The Dashboard's default port can't be used: $rd_problem." >/dev/tty
-	rd_default=$DASHBOARD_PORT
 	while :; do
 		rd_answer=$(ask "Dashboard port [$rd_free]: ")
 		DASHBOARD_PORT=${rd_answer:-$rd_free}
@@ -331,7 +330,7 @@ resolve_dashboard_port() {
 		[ -n "$rd_answer_problem" ] || break
 		say "$rd_answer_problem." >/dev/tty
 	done
-	say "Dashboard: port $DASHBOARD_PORT, chosen at the terminal ($rd_default can't be used: $rd_problem)."
+	say "Dashboard: port $DASHBOARD_PORT, chosen at the terminal ($rd_problem)."
 }
 
 # dashboard_port_problem PORT: why PORT can't be the Dashboard's port, or
