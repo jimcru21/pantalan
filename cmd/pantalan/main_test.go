@@ -74,6 +74,7 @@ func (b *syncBuffer) String() string {
 
 // running is a `pantalan serve` running in a goroutine.
 type running struct {
+	env    []string // the environment serve was started with
 	stdout *syncBuffer
 	stop   context.CancelFunc
 	done   chan struct{}
@@ -95,7 +96,7 @@ func (s *running) wait(t *testing.T) int {
 func startServe(t *testing.T, env []string) *running {
 	t.Helper()
 	ctx, stop := context.WithCancel(t.Context())
-	s := &running{stdout: &syncBuffer{}, stop: stop, done: make(chan struct{})}
+	s := &running{env: env, stdout: &syncBuffer{}, stop: stop, done: make(chan struct{})}
 	node := testNode(t)
 	go func() {
 		defer close(s.done)

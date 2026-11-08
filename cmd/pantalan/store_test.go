@@ -15,11 +15,12 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// apiCall sends an Admin Token request to a running serve's /api/v1 and
-// returns the status and body.
+// apiCall sends an Admin Token request over HTTPS to a running serve's
+// Dashboard listener, pinning its certificate, and returns the status and
+// body.
 func apiCall(t *testing.T, s *running, method, path, body string) (int, []byte) {
 	t.Helper()
-	req, err := http.NewRequest(method, "http://"+s.addr(t, "api")+path, strings.NewReader(body))
+	req, err := http.NewRequest(method, "https://"+s.addr(t, "dashboard")+path, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +28,7 @@ func apiCall(t *testing.T, s *running, method, path, body string) (int, []byte) 
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := pinnedClient(t, s.env).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,9 +134,6 @@ func TestDomainsThatDifferOnlyInCaseConflict(t *testing.T) {
 	}
 }
 
-// dataDirOf returns the PANTALAN_DATA_DIR an environment sets.
-func dataDirOf(env []string) string { return lookupIn(env)("PANTALAN_DATA_DIR") }
-
 // newestMigration is the highest number among the migration files in the
 // source tree, which the binary embeds.
 func newestMigration(t *testing.T) int {
@@ -174,10 +172,10 @@ func userVersion(t *testing.T, path string) int {
 func TestServeOnAFreshDataDirCreatesThePrivateMigratedDatabase(t *testing.T) {
 	env := serveEnv(t)
 	s := startServe(t, env)
-	s.addr(t, "api")
+	s.addr(t, "dashboard")
 	stopServe(t, s)
 
-	db := filepath.Join(dataDirOf(env), "pantalan.db")
+	db := filepath.Join(dataDir(t, env), "pantalan.db")
 	info, err := os.Stat(db)
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +193,7 @@ func TestServeOnAFreshDataDirCreatesThePrivateMigratedDatabase(t *testing.T) {
 
 func TestServeRefusesADatabaseNewerThanItKnows(t *testing.T) {
 	env := serveEnv(t)
-	db := filepath.Join(dataDirOf(env), "pantalan.db")
+	db := filepath.Join(dataDir(t, env), "pantalan.db")
 	future := newestMigration(t) + 1
 	setUserVersion(t, db, future)
 
