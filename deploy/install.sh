@@ -64,6 +64,7 @@ FW_ACTION=           # enable, add (ufw already active), stage, skip or off
 SSH_PORTS=           # the SSH ports found, space-separated
 FW_LINE=             # the summary's Firewall line
 FW_WARNINGS=         # lines the summary repeats under it
+FW_REASON=           # why ufw is staged rather than enabled, or skipped
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -668,7 +669,44 @@ classify_firewall() {
 		check_ufw_policy
 		return 0
 	fi
+	FW_REASON=$(stage_reason)
+	if [ -n "$FW_REASON" ]; then
+		FW_ACTION=stage
+		warn "ufw won't be enabled ($FW_REASON): its rules will be staged for you to enable after checking SSH"
+		return 0
+	fi
 	FW_ACTION=enable
+}
+
+# stage_reason: why enabling ufw here could cut off SSH or break Docker,
+# if it could.
+stage_reason() {
+	if [ "$(ufw_default MANAGE_BUILTINS)" = yes ]; then
+		# Enabling would flush the built-in chains, Docker's rules with them.
+		printf '%s\n' "MANAGE_BUILTINS=yes in /etc/default/ufw"
+	elif [ "$(ufw_default IPV6)" = no ] && [ -n "$(ip -6 addr show scope global 2>/dev/null)" ]; then
+		# An SSH session over IPv6 would drop as soon as ufw came up.
+		printf '%s\n' "IPV6=no in /etc/default/ufw on a host with a global IPv6 address"
+	elif docker_nftables; then
+		printf '%s\n' "Docker uses its nftables firewall backend"
+	elif [ -z "$SSH_PORTS" ]; then
+		printf '%s\n' "no SSH server found"
+	fi
+}
+
+# ufw_default KEY: KEY's value in /etc/default/ufw (left from an earlier
+# ufw, or the operator's), unquoted; empty before ufw is installed.
+ufw_default() {
+	[ -r /etc/default/ufw ] || return 0
+	sed -n "s/^$1=//p" /etc/default/ufw | tr -d '"' | tail -n 1
+}
+
+# docker_nftables: is Docker set up for its own nftables backend, which
+# has no DOCKER-USER chain and isn't tested alongside ufw?
+docker_nftables() {
+	grep -Eq '"firewall-backend"[[:space:]]*:[[:space:]]*"nftables"' /etc/docker/daemon.json 2>/dev/null && return 0
+	docker_responds || return 1
+	[ "$(docker info --format '{{with .FirewallBackend}}{{.Driver}}{{end}}' 2>/dev/null)" = nftables ]
 }
 
 ufw_active() {
@@ -834,10 +872,15 @@ configure_firewall() {
 		quietly ufw --force delete allow "$cf_port/tcp"
 		cf_removed="$cf_removed $cf_port"
 	done
-	if [ "$FW_ACTION" = enable ]; then
+	case $FW_ACTION in
+	enable)
+		# --force: without it ufw asks y/n on stdin, which under curl | sh
+		# is the script.
 		quietly ufw --force enable
-	fi
-	confirm_ufw_active "$cf_targets $SSH_PORTS"
+		confirm_ufw_active "$cf_targets $SSH_PORTS"
+		;;
+	add) confirm_ufw_active "$cf_targets $SSH_PORTS" ;;
+	esac
 
 	cf_allows="${SSH_PORTS:+SSH $(comma_list "$SSH_PORTS"), }$(comma_list "$cf_targets")"
 	cf_added_text=$(comma_list "$cf_added")
@@ -852,6 +895,7 @@ configure_firewall() {
 	enable:) FW_LINE="ufw enabled: allows $cf_allows" ;;
 	enable:had) FW_LINE="ufw enabled: allows $cf_allows; ${cf_change:-unchanged}" ;;
 	add:had) FW_LINE="ufw active: allows $cf_allows; ${cf_change:-unchanged}" ;;
+	stage:*) FW_LINE="ufw NOT enabled ($FW_REASON): rules are staged${cf_had:+ (${cf_change:-unchanged})}; check SSH, then run: ufw --force enable" ;;
 	add:)
 		if [ -z "$cf_added_text" ]; then
 			FW_LINE="ufw already active: your rules already allow $cf_allows, and are unchanged"

@@ -3,6 +3,7 @@
 package installtest
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -138,6 +139,78 @@ func TestReRunConvergesTheFirewallToTheEnvFile(t *testing.T) {
 		})
 		assertEnvFirewall(t, n, "ufw")
 	})
+}
+
+// Hosts where enabling ufw is risky get the rules staged and ufw left off,
+// and the install still succeeds. One Debian and one Ubuntu each.
+func TestRiskyHostsGetTheFirewallStaged(t *testing.T) {
+	t.Parallel()
+	for _, risk := range []struct {
+		name    string
+		variant Variant
+		setup   string // makes the Node risky
+		reason  string
+		ssh     []int
+	}{
+		{
+			name:    "manage-builtins",
+			variant: UFW,
+			setup:   "sed -i 's/^MANAGE_BUILTINS=.*/MANAGE_BUILTINS=yes/' /etc/default/ufw",
+			reason:  "MANAGE_BUILTINS=yes in /etc/default/ufw",
+		},
+		{
+			name:    "docker-nftables",
+			variant: DockerOK,
+			setup:   `printf '{"firewall-backend": "nftables"}\n' > /etc/docker/daemon.json && systemctl restart docker && docker info --format '{{.FirewallBackend.Driver}}' | grep -qx nftables`,
+			reason:  "Docker uses its nftables firewall backend",
+		},
+		{
+			name:    "no-ssh",
+			variant: Bare,
+			// Ubuntu's ssh.socket outlives the package unless stopped first.
+			setup:  "systemctl disable --now --quiet ssh.socket ssh.service 2>/dev/null; DEBIAN_FRONTEND=noninteractive apt-get purge -y -q openssh-server >/dev/null",
+			reason: "no SSH server found",
+			ssh:    []int{},
+		},
+	} {
+		t.Run(risk.name, func(t *testing.T) {
+			t.Parallel()
+			forEachDistro(t, func(t *testing.T, d Distro) {
+				onlyOn(t, d, "debian-13", "ubuntu-24.04")
+				n := substrate.Boot(t, d, risk.variant)
+				sh(t, n, risk.setup)
+				defaultsBefore := n.Run(t, Cmd{Script: "cat /etc/default/ufw"}).Output()
+
+				r := installer{}.run(t, n, "--admin-user", "alice")
+				if r.Code != 0 {
+					t.Fatalf("install exited %d, want 0: a staged firewall is still a working install", r.Code)
+				}
+				s := parseSummary(t, r.Output())
+				assertFirewallLine(t, r.Output(), "ufw NOT enabled ("+risk.reason+"): rules are staged; check SSH, then run: ufw --force enable")
+				assertInstalled(t, n, installed{
+					Version:       tag,
+					DashboardPort: 8443,
+					Fingerprint:   s.Fingerprint,
+					AdminUser:     "alice",
+					AdminPassword: s.AdminPassword,
+					Firewall:      firewall{State: ufwStaged, SSH: risk.ssh},
+				})
+				if risk.variant == UFW {
+					if got := n.Run(t, Cmd{Script: "cat /etc/default/ufw"}).Output(); got != defaultsBefore {
+						t.Errorf("the installer changed /etc/default/ufw")
+					}
+				}
+			})
+		})
+	}
+}
+
+// onlyOn skips the test unless d is one of names.
+func onlyOn(t *testing.T, d Distro, names ...string) {
+	t.Helper()
+	if !slices.Contains(names, d.Name) {
+		t.Skipf("this path runs on %s only", strings.Join(names, ", "))
+	}
 }
 
 // ufwPolicy is ufw's "Default: ..." line.
