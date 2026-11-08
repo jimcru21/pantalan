@@ -17,10 +17,6 @@ type Apps interface {
 	List(ctx context.Context) ([]domain.App, error)
 }
 
-// appLabel is the label Pantalan puts on an app's containers; its value
-// is the app's ID.
-const appLabel = "pantalan.app"
-
 // tabs is the Node overview's tab bar, in order. Each tab is a fragment
 // of the same name, which renders the bar too, so switching tabs swaps
 // the whole tabs section.
@@ -89,7 +85,7 @@ func (d *Dashboard) containersTab(ctx context.Context, n node) containersTab {
 			CPU:    "–",
 			Memory: "–",
 		}
-		if id, ok := c.Labels[appLabel]; ok {
+		if id, ok := c.Labels[domain.AppLabel]; ok {
 			row.App = id
 			if name, ok := apps[id]; ok {
 				row.App = name
@@ -229,7 +225,7 @@ func (d *Dashboard) appNames(ctx context.Context, cs []nodeinfo.Container) map[s
 	names := map[string]string{}
 	hasApp := false
 	for _, c := range cs {
-		_, ok := c.Labels[appLabel]
+		_, ok := c.Labels[domain.AppLabel]
 		hasApp = hasApp || ok
 	}
 	if !hasApp || d.deps.Apps == nil {
