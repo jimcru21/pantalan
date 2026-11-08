@@ -20,11 +20,11 @@ type cli struct {
 	stdout, stderr string
 }
 
-// testNode is a Node whose outside world lives in a temp dir.
-func testNode(t *testing.T) Node {
+// testWorld is an outside world whose Node lives in a temp dir.
+func testWorld(t *testing.T) World {
 	t.Helper()
 	dir := t.TempDir()
-	return Node{ProcRoot: filepath.Join(dir, "proc"), DockerSocket: filepath.Join(dir, "docker.sock")}
+	return World{ProcRoot: filepath.Join(dir, "proc"), DockerSocket: filepath.Join(dir, "docker.sock")}
 }
 
 func runCLI(t *testing.T, ctx context.Context, env []string, args ...string) cli {
@@ -34,7 +34,7 @@ func runCLI(t *testing.T, ctx context.Context, env []string, args ...string) cli
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
-	code := run(ctx, args, env, Stdio{In: strings.NewReader(""), Out: &stdout, Err: &stderr}, testNode(t))
+	code := run(ctx, args, env, Stdio{In: strings.NewReader(""), Out: &stdout, Err: &stderr}, testWorld(t))
 	return cli{code: code, stdout: stdout.String(), stderr: stderr.String()}
 }
 
@@ -95,7 +95,7 @@ func (s *running) wait(t *testing.T) int {
 
 func startServe(t *testing.T, env []string) *running {
 	t.Helper()
-	return startServeOn(t, env, testNode(t))
+	return startServeOn(t, env, testWorld(t))
 }
 
 // fakeClock is a Node clock that moves only when the test says so.
@@ -123,18 +123,18 @@ func (c *fakeClock) advance(d time.Duration) {
 // startServeAt runs serve with the Node's clock under the test's control.
 func startServeAt(t *testing.T, env []string, clock *fakeClock) *running {
 	t.Helper()
-	node := testNode(t)
-	node.Clock = clock.Now
-	return startServeOn(t, env, node)
+	world := testWorld(t)
+	world.Clock = clock.Now
+	return startServeOn(t, env, world)
 }
 
-func startServeOn(t *testing.T, env []string, node Node) *running {
+func startServeOn(t *testing.T, env []string, world World) *running {
 	t.Helper()
 	ctx, stop := context.WithCancel(t.Context())
 	s := &running{env: env, stdout: &syncBuffer{}, stop: stop, done: make(chan struct{})}
 	go func() {
 		defer close(s.done)
-		s.code = run(ctx, []string{"serve"}, env, Stdio{In: strings.NewReader(""), Out: s.stdout, Err: s.stdout}, node)
+		s.code = run(ctx, []string{"serve"}, env, Stdio{In: strings.NewReader(""), Out: s.stdout, Err: s.stdout}, world)
 	}()
 	t.Cleanup(func() {
 		stop()

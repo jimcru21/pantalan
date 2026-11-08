@@ -22,14 +22,16 @@ type Stdio struct {
 	Out, Err io.Writer
 }
 
-// Node is where pantalan finds the Node's outside world. main passes the
-// host's real paths; tests point them at fixtures in a temp dir.
-type Node struct {
+// World is the process's outside world: where pantalan reads the Node
+// from, and the clocks, timers and hasher it runs on. main passes the
+// Node's real paths and the real clock; tests point the paths at fixtures
+// in a temp dir and take over the timers.
+type World struct {
 	ProcRoot     string // usually /proc
 	DockerSocket string // the Docker Engine API unix socket
-	// Statfs reports the host's disk space; nil means syscall.Statfs.
+	// Statfs reports the Node's disk space; nil means syscall.Statfs.
 	Statfs func(path string, buf *syscall.Statfs_t) error
-	// SampleTicks makes the Node sampler read the host; nil means every
+	// SampleTicks makes the Node sampler read /proc; nil means every
 	// nodeinfo.SampleInterval. Tests send on it to take a sample now.
 	SampleTicks <-chan time.Time
 	// EventsBackoff waits out the delay before Docker's event stream
@@ -50,17 +52,17 @@ type Node struct {
 	Clock func() time.Time
 }
 
-// now is the Node's clock.
-func (n Node) now() time.Time {
-	if n.Clock == nil {
+// now is the process's clock.
+func (w World) now() time.Time {
+	if w.Clock == nil {
 		return time.Now()
 	}
-	return n.Clock()
+	return w.Clock()
 }
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := run(ctx, os.Args[1:], os.Environ(), Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}, Node{
+	code := run(ctx, os.Args[1:], os.Environ(), Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}, World{
 		ProcRoot:     "/proc",
 		DockerSocket: "/var/run/docker.sock",
 		Statfs:       syscall.Statfs,
@@ -72,9 +74,9 @@ func main() {
 
 // run is the whole pantalan command: it takes the arguments after the
 // program name, the environment as os.Environ formats it, the standard
-// streams and the Node's sources, and returns the process exit code.
+// streams and its outside world, and returns the process exit code.
 // Cancelling ctx stops a running service.
-func run(ctx context.Context, args, env []string, stdio Stdio, node Node) int {
+func run(ctx context.Context, args, env []string, stdio Stdio, world World) int {
 	if len(args) == 0 {
 		return usage(stdio.Err)
 	}
@@ -82,7 +84,7 @@ func run(ctx context.Context, args, env []string, stdio Stdio, node Node) int {
 	if !ok {
 		return usage(stdio.Err)
 	}
-	inv := invocation{args: args[1:], getenv: lookupIn(env), stdio: stdio, node: node}
+	inv := invocation{args: args[1:], getenv: lookupIn(env), stdio: stdio, world: world}
 	if cmd.opensDataDir {
 		if err := becomeDataDirOwner(config.DataDir(inv.getenv)); err != nil {
 			fmt.Fprintln(stdio.Err, "pantalan:", err)
@@ -114,7 +116,7 @@ type invocation struct {
 	args   []string // after the subcommand's name
 	getenv func(string) string
 	stdio  Stdio
-	node   Node
+	world  World
 }
 
 // lookupIn turns an os.Environ-style list into an os.Getenv-style lookup.

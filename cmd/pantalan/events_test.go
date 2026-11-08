@@ -118,11 +118,11 @@ func (f *fakeBackoff) next(t *testing.T) time.Duration {
 func serveWithEvents(t *testing.T) (*browser, *fakeEngine, *fakeBackoff) {
 	t.Helper()
 	fp := newFakeProc(t)
-	node := fp.node(t)
+	world := fp.world(t)
 	backoff := newFakeBackoff()
-	node.EventsBackoff = backoff.after
-	fe := newFakeEngine(t, node.DockerSocket)
-	_, b := serveNodeOverview(t, fp, node)
+	world.EventsBackoff = backoff.after
+	fe := newFakeEngine(t, world.DockerSocket)
+	_, b := serveNodeOverview(t, fp, world)
 	fe.waitForStreams(t, 1)
 	return b, fe, backoff
 }

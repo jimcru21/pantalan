@@ -97,12 +97,12 @@ func (g *gatedHasher) letOneThrough(t *testing.T) {
 // under the test's control, with Admin alice created.
 func serveGated(t *testing.T) (*running, *gatedHasher, *slotTimer, string) {
 	t.Helper()
-	node := testNode(t)
+	world := testWorld(t)
 	hasher := newGatedHasher()
 	slotWait := newSlotTimer()
-	node.Hasher = hasher
-	node.HashSlotWait = slotWait.after
-	s := startServeOn(t, serveEnv(t), node)
+	world.Hasher = hasher
+	world.HashSlotWait = slotWait.after
+	s := startServeOn(t, serveEnv(t), world)
 	// Registered after serve's cleanup, so it runs first: a test that
 	// fails mid-way doesn't leave checks stuck at the gate.
 	t.Cleanup(hasher.openGate)

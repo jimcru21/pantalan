@@ -463,8 +463,8 @@ func writeJSON(w http.ResponseWriter, v any) {
 // and signs in, once the first sample is on the Node overview.
 func serveWithEngine(t *testing.T, fp *fakeProc) (*running, *browser, *fakeEngine) {
 	t.Helper()
-	node := fp.node(t)
-	fe := newFakeEngine(t, node.DockerSocket)
-	s, b := serveNodeOverview(t, fp, node)
+	world := fp.world(t)
+	fe := newFakeEngine(t, world.DockerSocket)
+	s, b := serveNodeOverview(t, fp, world)
 	return s, b, fe
 }

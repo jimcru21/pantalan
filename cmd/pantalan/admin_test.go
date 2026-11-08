@@ -85,7 +85,7 @@ func TestAdminCreateAndResetPasswordReadNothingFromStdin(t *testing.T) {
 		{"admin", "reset-password"},
 	} {
 		var stdout, stderr strings.Builder
-		code := run(t.Context(), args, env, Stdio{In: stdinTrap{t}, Out: &stdout, Err: &stderr}, testNode(t))
+		code := run(t.Context(), args, env, Stdio{In: stdinTrap{t}, Out: &stdout, Err: &stderr}, testWorld(t))
 		if code != 0 {
 			t.Fatalf("%v exit code = %d, want 0 (stderr %q)", args, code, stderr.String())
 		}

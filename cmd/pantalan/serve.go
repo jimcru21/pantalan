@@ -35,7 +35,7 @@ func serveCmd(ctx context.Context, inv invocation) int {
 	log := slog.New(slog.NewTextHandler(inv.stdio.Out, nil))
 	bin := buildInfo()
 	log.Info("starting", "version", bin.Version, "revision", bin.Revision, "go", bin.GoVersion)
-	if err := serve(ctx, log, inv.getenv, inv.node, bin); err != nil {
+	if err := serve(ctx, log, inv.getenv, inv.world, bin); err != nil {
 		log.Error("pantalan exited", "err", err)
 		return 1
 	}
@@ -53,7 +53,7 @@ func pruneSessions(ctx context.Context, log *slog.Logger, auth *service.AuthServ
 	log.Info("pruned expired sessions", "deleted", n)
 }
 
-func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, node Node, bin binary) error {
+func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, world World, bin binary) error {
 	cfg, err := config.Load(getenv)
 	if err != nil {
 		return err
@@ -104,21 +104,21 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 	log.Info("tls certificate", "fingerprint", cert.Fingerprint(), "expires", cert.Leaf().NotAfter, "generated", generated)
 
 	var hasher service.PasswordHasher = password.Hasher{}
-	if node.Hasher != nil {
-		hasher = node.Hasher
+	if world.Hasher != nil {
+		hasher = world.Hasher
 	}
 	auth := service.NewAuthService(service.AuthDeps{
 		Admins:   store,
 		Sessions: store,
 		Hasher:   hasher,
-		Now:      node.now,
-		After:    node.HashSlotWait,
+		Now:      world.now,
+		After:    world.HashSlotWait,
 	})
 	pruneSessions(ctx, log, auth)
 
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
-	daily := node.MaintenanceTicks
+	daily := world.MaintenanceTicks
 	if daily == nil {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
@@ -140,17 +140,17 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, no
 	if err != nil {
 		return fmt.Errorf("hostname: %w", err)
 	}
-	sampler := nodeinfo.NewSampler(nodeinfo.Host{ProcRoot: node.ProcRoot, Statfs: node.Statfs}, log)
+	sampler := nodeinfo.NewSampler(nodeinfo.Host{ProcRoot: world.ProcRoot, Statfs: world.Statfs}, log)
 	samplerDone := make(chan struct{})
 	go func() {
-		sampler.Run(ctx, node.SampleTicks)
+		sampler.Run(ctx, world.SampleTicks)
 		close(samplerDone)
 	}()
-	dockerAPI := nodeinfo.NewDocker(node.DockerSocket, node.Statfs, node.now)
+	dockerAPI := nodeinfo.NewDocker(world.DockerSocket, world.Statfs, world.now)
 	events := nodeinfo.NewEventStream(dockerAPI, log)
 	eventsDone := make(chan struct{})
 	go func() {
-		events.Run(ctx, node.EventsBackoff)
+		events.Run(ctx, world.EventsBackoff)
 		close(eventsDone)
 	}()
 	defer func() {

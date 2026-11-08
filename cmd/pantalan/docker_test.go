@@ -498,10 +498,10 @@ func TestAnOlderDaemonsSystemDFIsWorkedOutFromItsItemLists(t *testing.T) {
 // test's control.
 func serveWithEngineAt(t *testing.T, fp *fakeProc, clock *fakeClock) (*running, *browser, *fakeEngine) {
 	t.Helper()
-	node := fp.node(t)
-	node.Clock = clock.Now
-	fe := newFakeEngine(t, node.DockerSocket)
-	s, b := serveNodeOverview(t, fp, node)
+	world := fp.world(t)
+	world.Clock = clock.Now
+	fe := newFakeEngine(t, world.DockerSocket)
+	s, b := serveNodeOverview(t, fp, world)
 	return s, b, fe
 }
 
