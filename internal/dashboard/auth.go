@@ -115,26 +115,19 @@ func (d *Dashboard) login(w http.ResponseWriter, r *http.Request) {
 				d.log.Warn("sign out replaced session", "err", err)
 			}
 		}
-		http.SetCookie(w, &http.Cookie{
-			Name:     CookieName,
-			Value:    token,
-			Path:     "/",
-			Secure:   true,
-			HttpOnly: true,
-			SameSite: http.SameSiteStrictMode,
-		})
+		setSessionCookie(w, token)
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	case errors.Is(err, service.ErrBadCredentials):
 		data.Error = "Incorrect username or password."
 		data.Username = username
 		d.render(w, http.StatusUnauthorized, d.views.login, "base", data)
 	case errors.As(err, &throttled):
-		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(throttled.Wait.Seconds()))))
+		w.Header().Set("Retry-After", retryAfter(throttled.Wait))
 		data.Throttled = formatWait(throttled.Wait)
 		data.Username = username
 		d.render(w, http.StatusTooManyRequests, d.views.login, "base", data)
 	case errors.Is(err, service.ErrBusy):
-		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Retry-After", retryAfter(service.HashSlotWait))
 		data.Error = "Too many sign-ins at once. Try again in a few seconds."
 		data.Username = username
 		d.render(w, http.StatusServiceUnavailable, d.views.login, "base", data)
@@ -164,16 +157,33 @@ func sessionToken(r *http.Request) string {
 	return c.Value
 }
 
-func clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
+// sessionCookie is the session cookie with every attribute the spec
+// fixes: __Host- prefix, Secure, HttpOnly, SameSite=Strict, Path=/ and no
+// Domain. Without MaxAge or Expires it lasts the browser session.
+func sessionCookie(token string) *http.Cookie {
+	return &http.Cookie{
 		Name:     CookieName,
-		Value:    "",
+		Value:    token,
 		Path:     "/",
-		MaxAge:   -1,
 		Secure:   true,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-	})
+	}
+}
+
+func setSessionCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, sessionCookie(token))
+}
+
+func clearSessionCookie(w http.ResponseWriter) {
+	c := sessionCookie("")
+	c.MaxAge = -1
+	http.SetCookie(w, c)
+}
+
+// retryAfter is a Retry-After value for wait: whole seconds, rounded up.
+func retryAfter(wait time.Duration) string {
+	return strconv.Itoa(int(math.Ceil(wait.Seconds())))
 }
 
 func (d *Dashboard) serverError(w http.ResponseWriter, what string, err error) {

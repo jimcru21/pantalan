@@ -225,6 +225,9 @@ func TestALoginThatWaitsOverFiveSecondsForAHashSlotGets503(t *testing.T) {
 	if len(got.Cookies()) != 0 {
 		t.Errorf("the 503 sets cookies %q", got.Header.Values("Set-Cookie"))
 	}
+	if ra := got.Header.Get("Retry-After"); ra != "5" {
+		t.Errorf("the 503's Retry-After = %q, want 5 (the hash-slot wait)", ra)
+	}
 
 	hasher.openGate()
 	<-first
