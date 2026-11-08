@@ -1,0 +1,105 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # release.yml runs this whole workflow as its gate.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: make check and cross-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: make check
+        run: make check
+
+      - name: Cross-build linux/amd64 and linux/arm64
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+        run: |
+          for arch in amd64 arm64; do
+            GOARCH="$arch" go build -trimpath -o "bin/pantalan_linux_$arch" ./cmd/pantalan
+          done
+          file bin/pantalan_linux_*
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # shellcheck ships with the hosted Ubuntu image.
+      - name: ShellCheck the installer and release scripts
+        run: |
+          shellcheck --version
+          make shellcheck
+
+  # The installer, end to end, in privileged systemd containers: each distro
+  # natively on each arch (see deploy/installtest). No retries: a flake here
+  # is a convergence bug until shown otherwise.
+  installer:
+    name: installer (${{ matrix.distro }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [debian-12, debian-13, ubuntu-24.04, ubuntu-26.04]
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # The harness saves the Node images it builds here as tarballs, named
+      # by the hash of their Dockerfiles, and loads them on the next run.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/installtest-images
+          key: installtest-images-${{ matrix.distro }}-${{ matrix.arch }}-${{ hashFiles('deploy/installtest/images/**') }}
+
+      - name: Installer paths
+        env:
+          INSTALLTEST_DISTROS: ${{ matrix.distro }}
+          INSTALLTEST_IMAGE_CACHE: ${{ runner.temp }}/installtest-images
+        run: make installtest
+
+  # One stable name for the branch ruleset to require, whatever the matrix
+  # holds.
+  installer-matrix:
+    name: installer matrix
+    if: always()
+    needs: installer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Every installer job passed
+        env:
+          RESULT: ${{ needs.installer.result }}
+        run: test "$RESULT" = success

@@ -1,0 +1,36 @@
+{{/* The login card. Data: dashboard.loginData. */}}
+{{define "body"}}
+<main class="login">
+  <div class="login-card">
+    <div class="brand"><span class="logo">P</span>Pantalan</div>
+    <div>
+      <h1>Sign in to the Dashboard</h1>
+      <p class="muted node-id">{{.Hostname}} · <span class="mono">{{.Address}}</span></p>
+    </div>
+    {{if .NoAdmin}}
+    <div class="alert" role="alert">
+      No Admin has been created on this Node yet. On the server, run
+      <code>sudo pantalan admin create --username NAME</code>, then sign in with the password it prints.
+    </div>
+    {{else}}
+    <form class="login-form" method="post" action="/login">
+      {{with .Error}}<div class="alert" role="alert">{{.}}</div>{{end}}
+      {{with .Throttled}}<div class="alert" role="alert">Too many attempts, try again in {{.}}, or run <code>sudo pantalan admin reset-password</code> on the server.</div>{{end}}
+      <div class="field">
+        <label for="username">Username</label>
+        <input class="input" id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" value="{{.Username}}" required {{if not .Username}}autofocus{{end}}>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input class="input" id="password" name="password" type="password" autocomplete="current-password" required {{if .Username}}autofocus{{end}}>
+      </div>
+      <button class="btn" type="submit">Sign in</button>
+    </form>
+    {{end}}
+    <div class="login-foot">
+      <span>{{icon "lock"}} Before signing in, check that your browser shows the certificate fingerprint that <code>sudo pantalan tls fingerprint</code> prints on the server.</span>
+      <span>Forgot the password? Run <code>sudo pantalan admin reset-password</code> on the server.</span>
+    </div>
+  </div>
+</main>
+{{end}}

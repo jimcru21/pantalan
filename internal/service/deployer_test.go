@@ -10,12 +10,12 @@ import (
 
 	"github.com/pantalan/pantalan/internal/domain"
 	"github.com/pantalan/pantalan/internal/service"
-	"github.com/pantalan/pantalan/internal/store/memory"
+	"github.com/pantalan/pantalan/internal/store/sqlite"
 )
 
 func TestDeploySwitchesTrafficAndRetiresPrevious(t *testing.T) {
 	h := newHarness(t)
-	app := h.createApp(t)
+	app := h.createApp(t, "web")
 
 	first, err := h.deploy(app.ID)
 	if err != nil {
@@ -42,7 +42,7 @@ func TestDeploySwitchesTrafficAndRetiresPrevious(t *testing.T) {
 
 func TestFailedHealthCheckKeepsCurrentDeploymentLive(t *testing.T) {
 	h := newHarness(t)
-	app := h.createApp(t)
+	app := h.createApp(t, "web")
 
 	first, err := h.deploy(app.ID)
 	if err != nil {
@@ -71,7 +71,7 @@ func TestFailedHealthCheckKeepsCurrentDeploymentLive(t *testing.T) {
 
 func TestStartRejectsFlagLikeRef(t *testing.T) {
 	h := newHarness(t)
-	app := h.createApp(t)
+	app := h.createApp(t, "web")
 
 	_, err := h.deployer.Start(context.Background(), app.ID, "--upload-pack=evil")
 	if !errors.Is(err, domain.ErrInvalid) {
@@ -79,24 +79,36 @@ func TestStartRejectsFlagLikeRef(t *testing.T) {
 	}
 }
 
+// harness drives the Deployer with fakes at the Node's edge and the real
+// SQLite store. The store, data dir and runtime (standing in for Docker)
+// outlive a restart; the deployer, router and scheduler are rebuilt by it.
 type harness struct {
-	store    *memory.Store
-	apps     *service.AppService
-	deployer *service.Deployer
-	runtime  *fakeRuntime
-	health   *fakeHealth
-	router   *fakeRouter
+	store     *sqlite.Store
+	dataDir   string
+	apps      *service.AppService
+	deployer  *service.Deployer
+	runtime   *fakeRuntime
+	health    *fakeHealth
+	router    *fakeRouter
+	scheduler *fakeScheduler
 }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{
-		store:   memory.New(),
-		runtime: &fakeRuntime{},
+		store:   openStore(t),
+		dataDir: t.TempDir(),
+		runtime: &fakeRuntime{containers: map[string]fakeContainer{}},
 		health:  &fakeHealth{unhealthy: map[string]bool{}},
-		router:  &fakeRouter{routes: map[string]string{}},
 	}
 	h.apps = service.NewAppService(h.store)
+	h.wire()
+	return h
+}
+
+func (h *harness) wire() {
+	h.router = &fakeRouter{routes: map[string]string{}}
+	h.scheduler = &fakeScheduler{}
 	h.deployer = service.NewDeployer(service.DeployerDeps{
 		Apps:        h.store,
 		Deployments: h.store,
@@ -105,19 +117,49 @@ func newHarness(t *testing.T) *harness {
 		Runtime:     h.runtime,
 		Health:      h.health,
 		Router:      h.router,
-		Scheduler:   fakeScheduler{},
-		DataDir:     t.TempDir(),
+		Scheduler:   h.scheduler,
+		DataDir:     h.dataDir,
 		Log:         slog.New(slog.DiscardHandler),
 	})
-	return h
 }
 
-func (h *harness) createApp(t *testing.T) domain.App {
+// restart simulates the service starting again on the same data dir and
+// Docker: a fresh deployer, empty routes and queue, then startup recovery.
+func (h *harness) restart(t *testing.T) {
+	t.Helper()
+	h.wire()
+	if err := h.deployer.Recover(context.Background()); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+}
+
+// seed stores a deployment as a previous run of the service left it.
+func (h *harness) seed(t *testing.T, dep domain.Deployment) domain.Deployment {
+	t.Helper()
+	dep.ID = domain.NewID()
+	if err := h.store.SaveDeployment(context.Background(), dep); err != nil {
+		t.Fatalf("seed deployment: %v", err)
+	}
+	return dep
+}
+
+// openStore opens the real SQLite store in a temp data dir.
+func openStore(t *testing.T) *sqlite.Store {
+	t.Helper()
+	store, err := sqlite.Open(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
+}
+
+func (h *harness) createApp(t *testing.T, name string) domain.App {
 	t.Helper()
 	app, err := h.apps.Create(context.Background(), domain.App{
-		Name:    "web",
-		RepoURL: "https://example.test/acme/web.git",
-		Domain:  "web.example.test",
+		Name:    name,
+		RepoURL: "https://example.test/acme/" + name + ".git",
+		Domain:  name + ".example.test",
 		Port:    8080,
 	})
 	if err != nil {
@@ -161,22 +203,62 @@ type fakeBuilder struct{}
 
 func (fakeBuilder) Build(context.Context, service.BuildRequest) error { return nil }
 
+// fakeRuntime stands in for Docker: it remembers the containers it runs, so
+// a test can change a published port or check what is still running.
 type fakeRuntime struct {
-	started int
-	removed []string
+	started    int
+	containers map[string]fakeContainer // by ID
+	removed    []string                 // IDs or names passed to Remove
 }
 
-func (r *fakeRuntime) Start(context.Context, service.ContainerSpec) (service.Container, error) {
+type fakeContainer struct {
+	name     string
+	upstream string
+}
+
+func (r *fakeRuntime) Start(_ context.Context, spec service.ContainerSpec) (service.Container, error) {
 	r.started++
-	return service.Container{
+	ctr := service.Container{
 		ID:       fmt.Sprintf("ctr-%d", r.started),
 		Upstream: fmt.Sprintf("127.0.0.1:%d", 9000+r.started),
-	}, nil
+	}
+	r.containers[ctr.ID] = fakeContainer{name: spec.Name, upstream: ctr.Upstream}
+	return ctr, nil
 }
 
-func (r *fakeRuntime) Remove(_ context.Context, id string) error {
-	r.removed = append(r.removed, id)
-	return nil
+// Remove accepts an ID or a name, as docker rm does.
+func (r *fakeRuntime) Remove(_ context.Context, idOrName string) error {
+	r.removed = append(r.removed, idOrName)
+	for id, c := range r.containers {
+		if id == idOrName || c.name == idOrName {
+			delete(r.containers, id)
+			return nil
+		}
+	}
+	return fmt.Errorf("no such container: %s", idOrName)
+}
+
+func (r *fakeRuntime) Upstream(_ context.Context, id string, _ int) (string, error) {
+	c, ok := r.containers[id]
+	if !ok {
+		return "", fmt.Errorf("no such container: %s", id)
+	}
+	return c.upstream, nil
+}
+
+// run plants a container as an earlier run of the service left it.
+func (r *fakeRuntime) run(id, name, upstream string) {
+	r.containers[id] = fakeContainer{name: name, upstream: upstream}
+}
+
+// running reports whether a container with this name exists.
+func (r *fakeRuntime) running(name string) bool {
+	for _, c := range r.containers {
+		if c.name == name {
+			return true
+		}
+	}
+	return false
 }
 
 type fakeHealth struct{ unhealthy map[string]bool }
@@ -193,7 +275,10 @@ type fakeRouter struct{ routes map[string]string }
 func (r *fakeRouter) SetRoute(host, upstream string) { r.routes[host] = upstream }
 func (r *fakeRouter) RemoveRoute(host string)        { delete(r.routes, host) }
 
-// fakeScheduler accepts jobs; tests call Deployer.Run themselves.
-type fakeScheduler struct{}
+// fakeScheduler records jobs; tests call Deployer.Run themselves.
+type fakeScheduler struct{ enqueued []string }
 
-func (fakeScheduler) Enqueue(string) error { return nil }
+func (s *fakeScheduler) Enqueue(id string) error {
+	s.enqueued = append(s.enqueued, id)
+	return nil
+}

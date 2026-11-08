@@ -16,6 +16,14 @@ const (
 	BuildNixpacks   BuildType = "nixpacks"
 )
 
+// Labels Pantalan puts on every app container it starts. AppLabel's value
+// is the app's ID and DeploymentLabel's the deployment's; the Dashboard
+// badges containers by AppLabel, and install.sh --purge finds them by it.
+const (
+	AppLabel        = "pantalan.app"
+	DeploymentLabel = "pantalan.deployment"
+)
+
 // App is a deployable service: one git repository served on one domain.
 type App struct {
 	ID        string            `json:"id"`

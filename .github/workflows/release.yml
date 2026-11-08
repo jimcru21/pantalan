@@ -1,0 +1,153 @@
+name: release
+
+# Pushing a vX.Y.Z tag publishes the release the installer downloads:
+# pantalan_<tag>_linux_amd64, pantalan_<tag>_linux_arm64, install.sh with
+# the tag baked in, and SHA256SUMS over all three. Any other v* tag fails
+# the run before anything is built.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Only plain vX.Y.Z tags are released
+        env:
+          TAG: ${{ github.ref_name }}
+        run: sh deploy/release.sh check-tag "$TAG"
+
+  # The same gate a PR passes: make check, ShellCheck, the cross-build and
+  # the installer matrix.
+  gate:
+    name: gate
+    needs: tag
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  build:
+    name: build release assets
+    needs: gate
+    # amd64: release.sh checks the version of the binary this host runs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No module or build cache: the release is built from scratch.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build the release assets
+        env:
+          TAG: ${{ github.ref_name }}
+        run: sh deploy/release.sh build "$TAG" "$RUNNER_TEMP/release"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The installer on KVM VMs of all four distros, run on the exact assets
+  # the build job uploaded (both binaries, SHA256SUMS, the baked
+  # install.sh), read back from this run's artifact.
+  installer-vm:
+    name: installer VM tier
+    needs: build
+    uses: ./.github/workflows/installer-vm.yml
+    permissions:
+      contents: read
+    with:
+      release-tag: ${{ github.ref_name }}
+      release-artifact: release-assets
+
+  # The only job with write access. It runs no repository code: it attests,
+  # drafts, uploads and publishes the assets the build job made. It needs
+  # the VM tier, so a failed gate leaves no draft behind.
+  release:
+    name: publish release
+    needs: [build, installer-vm]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release and upload its assets
+      id-token: write # sign the provenance attestations (Sigstore)
+      attestations: write # store them
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: release
+
+      - name: Check the assets
+        working-directory: release
+        run: |
+          want="SHA256SUMS install.sh pantalan_${TAG}_linux_amd64 pantalan_${TAG}_linux_arm64"
+          got=$(find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort | paste -sd ' ')
+          if [ "$got" != "$want" ]; then
+            echo "::error::assets are '$got', want '$want'"
+            exit 1
+          fi
+          if grep -q '@VERSION@' install.sh; then
+            echo "::error::install.sh still holds the @VERSION@ placeholder"
+            exit 1
+          fi
+          sha256sum -c --strict SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            release/pantalan_${{ github.ref_name }}_linux_amd64
+            release/pantalan_${{ github.ref_name }}_linux_arm64
+
+      # A draft isn't visible at releases/latest, so the installer never
+      # sees a release with some of its assets missing.
+      - name: Create a draft release
+        run: |
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            # A re-run after a failed upload: carry on with the same draft.
+            if [ "$draft" != true ]; then
+              echo "::error::$TAG is already published"
+              exit 1
+            fi
+          else
+            gh release create "$TAG" --draft --verify-tag --title "$TAG" --generate-notes
+          fi
+
+      - name: Upload the assets
+        run: gh release upload "$TAG" --clobber release/*
+
+      # Publish last. The release becomes latest only when it's the newest
+      # version, so a patch to an older line never replaces it as what
+      # releases/latest/download/install.sh installs.
+      - name: Publish the release
+        run: |
+          newest=$({ gh release list --exclude-drafts --limit 1000 --json tagName --jq '.[].tagName'; echo "$TAG"; } | sort -V | tail -n 1)
+          gh release edit "$TAG" --draft=false --latest="$([ "$newest" = "$TAG" ] && echo true || echo false)"
+          gh release view "$TAG" --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}'
