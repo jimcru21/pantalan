@@ -17,7 +17,7 @@ Inside, the code follows ports & adapters (hexagonal):
   HTTP ──► httpapi ──► service (use cases) ◄── ports.go: interfaces      │
                           │                                              │
                           ▼ calls ports, never adapters                  │
-     store/memory   source(git)   build   runtime/docker  health  proxy  │
+     store/sqlite   source(git)   build   runtime/docker  health  proxy  │
      (adapters: each implements one interface from service/ports.go)     │
                  └───────────────────────────────────────────────────────┘
 ```
@@ -49,7 +49,7 @@ up to `PANTALAN_WORKERS` at a time.
 | `internal/domain` | Entities (`App`, `Deployment`), validation, sentinel errors |
 | `internal/service` | Use cases (`AppService`, `Deployer`) and the port interfaces |
 | `internal/httpapi` | REST API, GitHub webhook, auth middleware |
-| `internal/store/memory` | In-memory repositories (dev/test) |
+| `internal/store/sqlite` | App and deployment repositories in SQLite, plus the schema migrations |
 | `internal/source` | Git checkout |
 | `internal/build` | Dockerfile and Nixpacks builders |
 | `internal/runtime/docker` | Container lifecycle through the docker CLI |
@@ -61,9 +61,9 @@ up to `PANTALAN_WORKERS` at a time.
 
 ## Decisions
 
-- **Standard library only for now.** `net/http` routing, `log/slog` and
+- **Standard library first.** `net/http` routing, `log/slog` and
   `httputil.ReverseProxy` cover the scaffold. Add a dependency only when it
-  replaces real code.
+  replaces real code; `modernc.org/sqlite` is the first.
 - **Docker CLI rather than the Engine SDK.** It has no dependencies and its
   errors match what an operator sees. Move to the SDK when you need event
   streams or container stats.
@@ -71,15 +71,25 @@ up to `PANTALAN_WORKERS` at a time.
   to configure and no label syncing; routes change atomically in memory.
   Coolify and Dokploy use Traefik, which is a valid alternative behind the
   same `Router` interface.
-- **SQLite next.** `modernc.org/sqlite` is pure Go, so the binary stays a
-  single static file.
+- **One SQLite file for all state** ([ADR 0001](adr/0001-single-sqlite-file-shared-by-service-and-cli.md)).
+  `internal/store/sqlite` keeps apps and deployments in
+  `$PANTALAN_DATA_DIR/pantalan.db` (`0600`, WAL) through `modernc.org/sqlite`,
+  which is pure Go, so the binary stays a single static file. Every process
+  that opens the file migrates it first: the numbered `.sql` files in
+  `internal/store/sqlite/migrations` are embedded, forward-only and applied
+  in one transaction, with the schema version in `PRAGMA user_version`. When
+  migrations are pending the old database is copied to
+  `pantalan.db.bak-<version>` first (the two newest copies are kept), and a
+  database newer than the binary is refused. Tests use the same store on a
+  temp directory; there is no in-memory store.
 
 ## Known simplifications
 
 These are in the scaffold on purpose and are listed here so nobody mistakes
 them for design:
 
-- State is in memory. Restarting loses apps and deployments.
+- Apps and deployments survive a restart, but a deployment that was queued
+  or mid-build when the service stopped is not picked up again.
 - Containers publish on `127.0.0.1:<ephemeral>`. That port can change if
   Docker restarts the container. The production fix is a shared Docker network
   with the proxy reaching containers by name.
@@ -91,7 +101,6 @@ them for design:
 
 ```
 cmd/pantalan-agent/        node agent for multi-server (gRPC over WireGuard)
-internal/store/sqlite/    persistent repositories + migrations/
 internal/proxy/acme.go    automatic HTTPS
 internal/compose/         docker-compose stacks
 internal/databases/       managed Postgres/MySQL/Redis templates
