@@ -530,8 +530,12 @@ download_release() {
 	say "Verified $dr_asset against SHA256SUMS."
 }
 
+# A server that accepts the connection and then sends nothing would hang
+# curl forever: --speed-limit/--speed-time give up on a download that moves
+# under 1 KiB/s for 60 s, and --retry tries a stalled one again.
 fetch() {
-	curl -fsSL --retry 3 --connect-timeout 20 -o "$2" "$1" || die "couldn't download $1"
+	curl -fsSL --retry 3 --connect-timeout 20 --speed-limit 1024 --speed-time 60 \
+		-o "$2" "$1" || die "couldn't download $1 (no answer, or too slow, after 4 tries)"
 }
 
 # ---------------------------------------------------------------------------
