@@ -199,8 +199,12 @@ Auth surfaces on the one listener:
   session every 60 s with `AdminService.CheckSession`, which, unlike
   `Authenticate`, doesn't count as activity, so an open stream never keeps
   a session alive; it ends within a minute of a sign-out, an expiry or a
-  reset-password, and the browser's reconnect then gets 401. Streams also
-  end when the service shuts down. The dashboard listener has no write
+  reset-password, and the browser's reconnect then gets 401. An
+  `EventSource` can't read the status of a refused reconnect, so the SPA
+  asks `GET /api/v1/sessions/current` why: a 401 says "Signed out, reload
+  to sign in", a live session that the server refused the stream itself
+  (a 404 or 400), and no answer that Pantalan can't be reached. Streams
+  also end when the service shuts down. The dashboard listener has no write
   timeout, so a long stream is fine.
 
 ### Deployment Log
@@ -247,8 +251,8 @@ splitting its multiplexed stdout/stderr frames apart.
   `Last-Event-ID` names an earlier Deployment gets the same;
 - an App with no live Deployment gets `done` with data
   `no-live-deployment` at once. Both endings are events rather than HTTP
-  errors, because `EventSource` can't read a status and the Dashboard
-  takes a refused stream to mean the session ended.
+  errors, because `EventSource` can't read a status: the Dashboard can
+  only say a refused stream was refused.
 
 ### Node overview
 

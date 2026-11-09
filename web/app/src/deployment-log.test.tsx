@@ -2,7 +2,7 @@ import { act, fireEvent, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { deploymentsServer } from "@/test/deployment-fixtures";
 import { aDeployment, anApp } from "@/test/fixtures";
-import type { FakeEventSource } from "@/test/network";
+import { json, type FakeEventSource } from "@/test/network";
 import { renderApp } from "@/test/render";
 
 const app = anApp({ id: "app7", name: "shop", domain: "shop.example.com" });
@@ -161,15 +161,58 @@ describe("the Deployment Log", () => {
     expect(screen.queryByText(/Signed out/)).not.toBeInTheDocument();
   });
 
+  // An EventSource can't read the status of a refused reconnect, so the
+  // page asks the server whether the session is still live.
   it("ends for good, saying so, when a reconnect is refused as signed out", async () => {
-    const { log, stream } = await openLog();
+    const { log, stream, server } = await openLog();
     send(stream, "line 1\n");
+    server.api["GET /api/v1/sessions/current"] = () =>
+      json({ error: "not signed in" }, { status: 401 });
 
     act(() => stream.fail({ closed: true })); // the reconnect got 401
 
-    expect(
-      within(screen.getByRole("region", { name: "Deployment Log" })).getByRole("status"),
-    ).toHaveTextContent("Signed out, reload to sign in.");
+    expect(await within(logRegion()).findByRole("status")).toHaveTextContent(
+      "Signed out, reload to sign in.",
+    );
     expect(log).toHaveTextContent("line 1"); // what it had stays
   });
+
+  it("says the server refused the stream, not signed out, while the session is live", async () => {
+    const { log, stream } = await openLog(); // the session check answers 204
+    send(stream, "line 1\n");
+
+    act(() => stream.fail({ closed: true })); // the reconnect got a 404, say
+
+    expect(await within(logRegion()).findByRole("status")).toHaveTextContent(
+      "The server refused this log stream. Reload to try again.",
+    );
+    expect(screen.queryByText(/Signed out/)).not.toBeInTheDocument();
+    expect(log).toHaveTextContent("line 1");
+  });
+
+  it("says the server can't be reached when the session check fails too", async () => {
+    const { stream, server } = await openLog();
+    server.api["GET /api/v1/sessions/current"] = () => Promise.reject(new TypeError("offline"));
+
+    act(() => stream.fail({ closed: true }));
+
+    expect(await within(logRegion()).findByRole("status")).toHaveTextContent(
+      "Can't reach Pantalan to check the session. Reload to try again.",
+    );
+  });
+
+  it("says the Deployment was deleted when the server ends the log that way", async () => {
+    const { log, stream } = await openLog();
+    send(stream, "line 1\n");
+
+    act(() => stream.emit("deleted", { type: "done" }));
+
+    expect(log).toHaveTextContent("The Deployment was deleted with its App.");
+    expect(log).not.toHaveTextContent("End of the log.");
+    expect(stream.readyState).toBe(stream.CLOSED);
+  });
 });
+
+function logRegion() {
+  return screen.getByRole("region", { name: "Deployment Log" });
+}

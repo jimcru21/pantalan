@@ -3,7 +3,9 @@
 // server's.
 import { useQuery } from "@tanstack/react-query";
 import type { LoginInfo, SignInRequest } from "@/api/generated/httpapi";
-import { request, requestPublic } from "@/api/client";
+import { ApiError, request, requestPublic } from "@/api/client";
+
+const currentSession = "/api/v1/sessions/current";
 
 export function fetchLoginInfo(): Promise<LoginInfo> {
   return requestPublic<LoginInfo>("/api/v1/login-info");
@@ -39,7 +41,7 @@ export const sessionCheckMs = 30_000;
 export function useSessionCheck() {
   useQuery({
     queryKey: ["session"],
-    queryFn: () => request<void>("/api/v1/sessions/current").then(() => null),
+    queryFn: () => request<void>(currentSession).then(() => null),
     // The page gate checked the session to serve this page: no check on
     // mount, the first one is 30 s in.
     initialData: null,
@@ -48,4 +50,19 @@ export function useSessionCheck() {
     refetchOnWindowFocus: "always",
     retry: false,
   });
+}
+
+/**
+ * Whether this browser's session is live, for a caller that says what it
+ * means itself: no redirect to /login on a 401. "unreachable" when the
+ * server didn't answer, or answered something else. Like the shell's
+ * check, it doesn't extend the session.
+ */
+export async function sessionState(): Promise<"live" | "signed-out" | "unreachable"> {
+  try {
+    await requestPublic<void>(currentSession);
+    return "live";
+  } catch (err) {
+    return err instanceof ApiError && err.status === 401 ? "signed-out" : "unreachable";
+  }
 }

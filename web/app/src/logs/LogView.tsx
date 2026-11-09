@@ -3,13 +3,21 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import type { LogStream } from "@/api/streams";
 
+// Why a stream ended for good without done.
+const refusals: Partial<Record<LogStream["state"], string>> = {
+  "signed-out": "Signed out, reload to sign in.",
+  refused: "The server refused this log stream. Reload to try again.",
+  unreachable: "Can't reach Pantalan to check the session. Reload to try again.",
+};
+
 /**
  * The log's text in a scroll box (role log, named by `label`) that stays
  * pinned to the newest line unless the Admin has scrolled up to read.
  * Starts with an "Earlier output omitted" line when earlier output isn't
  * shown, ends with "End of the log." once the stream is done (`end`
- * replaces that line), and says "Signed out, reload to sign in." when the
- * server refused the stream. `empty` shows while there's no output yet.
+ * replaces that line), and says why when the server refused the stream:
+ * signed out, or refused with the session live, or unreachable. `empty`
+ * shows while there's no output yet.
  */
 export function LogView({
   stream,
@@ -23,6 +31,7 @@ export function LogView({
   end?: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  const refusal = refusals[stream.state];
   // Whether the view follows new output: until the Admin scrolls up.
   const pinned = useRef(true);
 
@@ -57,9 +66,9 @@ export function LogView({
         )}
         {stream.state === "done" && <p className="m-0 text-muted-foreground">{end}</p>}
       </div>
-      {stream.state === "signed-out" && (
+      {refusal && (
         <p role="status" className="m-0 border-t px-4 py-3 text-destructive">
-          Signed out, reload to sign in.
+          {refusal}
         </p>
       )}
     </div>

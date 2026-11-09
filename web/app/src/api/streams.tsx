@@ -17,6 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import { StreamDone, StreamOmitted } from "@/api/generated/httpapi";
+import { sessionState } from "@/api/sessions";
 
 /**
  * How much text a log keeps: 1 MiB, the server's first replay. Older
@@ -31,10 +32,13 @@ export type LogStream = {
   omitted: boolean;
   /**
    * open: connected (or reconnecting after a drop); done: the server said
-   * the log is complete; signed-out: the server refused a (re)connect,
-   * which ends the stream for good: the session has ended.
+   * the log is complete. The other three end the stream for good: the
+   * server refused a (re)connect, and the session check said why.
+   * signed-out: the session has ended (a 401); refused: the session is
+   * live, so the server refused the stream itself (its App or Deployment
+   * is gone, say); unreachable: the session check failed too.
    */
-  state: "open" | "done" | "signed-out";
+  state: "open" | "done" | "signed-out" | "refused" | "unreachable";
   /** The data of the done event, e.g. the Deployment's final status. */
   done?: string;
   /** The last data of each of the extra named events asked for. */
@@ -136,9 +140,13 @@ class Streams {
     }
     source.addEventListener("error", () => {
       // CONNECTING: the browser is retrying a drop. CLOSED: the server
-      // refused the stream (not 200 text/event-stream), which for a log
-      // stream means the session has ended (a 401).
-      if (source.readyState === EventSource.CLOSED) update({ state: "signed-out" });
+      // refused the stream (not 200 text/event-stream). An EventSource
+      // can't read the status, so ask the session check whether it was a
+      // 401 or the stream itself.
+      if (source.readyState !== EventSource.CLOSED) return;
+      void sessionState().then((session) =>
+        update({ state: session === "live" ? "refused" : session }),
+      );
     });
   }
 

@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import type { App, Deployment } from "@/api/generated/domain";
+import { DeploymentLogDeleted } from "@/api/generated/httpapi";
 import { appKeys, isInProgress, isNotFound, useApp, useDeployments } from "@/api/apps";
 import { useDeployment } from "@/api/deployments";
 import { useLogStream } from "@/api/streams";
@@ -97,7 +98,15 @@ function DeploymentLog({ appID, deploymentID }: { appID: string; deploymentID: s
         </a>
       }
     >
-      <LogView stream={stream} label="Deployment Log" />
+      <LogView
+        stream={stream}
+        label="Deployment Log"
+        end={
+          stream.done === DeploymentLogDeleted
+            ? "The Deployment was deleted with its App."
+            : undefined
+        }
+      />
     </Panel>
   );
 }

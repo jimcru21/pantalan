@@ -22,8 +22,8 @@ import (
 // once: nothing to follow, which isn't an empty log.
 //
 // Both endings are events, not HTTP errors: the browser's EventSource
-// can't read a status, and the Dashboard takes a refused stream to mean
-// the session has ended.
+// can't read a status, so the Dashboard could only say the stream was
+// refused, not why.
 func (h *handler) streamAppLog(w http.ResponseWriter, r *http.Request) {
 	appID := r.PathValue("id")
 	var after service.AppLogCursor
