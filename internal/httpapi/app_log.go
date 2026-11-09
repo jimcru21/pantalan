@@ -12,12 +12,6 @@ import (
 	"github.com/pantalan/pantalan/internal/service"
 )
 
-// The done event's data when an App Log stream ends.
-const (
-	appLogReplaced         = "replaced"           // a new Deployment replaced the container
-	appLogNoLiveDeployment = "no-live-deployment" // there is no container to follow
-)
-
 // streamAppLog streams an App's App Log as Server-Sent Events: the last
 // lines of its live Deployment's container, then each line as the
 // container writes it, stdout and stderr alike. Each "message" event is
@@ -28,8 +22,8 @@ const (
 // once: nothing to follow, which isn't an empty log.
 //
 // Both endings are events, not HTTP errors: the browser's EventSource
-// can't read a status, and the Dashboard takes a refused stream to mean
-// the session has ended.
+// can't read a status, so the Dashboard could only say the stream was
+// refused, not why.
 func (h *handler) streamAppLog(w http.ResponseWriter, r *http.Request) {
 	appID := r.PathValue("id")
 	var after service.AppLogCursor
@@ -56,13 +50,13 @@ func (h *handler) streamAppLog(w http.ResponseWriter, r *http.Request) {
 		if text == "" {
 			return nil
 		}
-		return es.send("", formatAppLogCursor(l.Cursor), text)
+		return es.send(message, formatAppLogCursor(l.Cursor), text)
 	})
 	switch {
 	case errors.Is(err, service.ErrReplaced):
-		_ = es.send("done", "", appLogReplaced)
+		_ = es.send(StreamDone, "", string(AppLogReplaced))
 	case errors.Is(err, service.ErrNoLiveDeployment):
-		_ = es.send("done", "", appLogNoLiveDeployment)
+		_ = es.send(StreamDone, "", string(AppLogNoLiveDeployment))
 	case ctx.Err() != nil:
 		// The client left, the session ended or the service is stopping.
 	default:

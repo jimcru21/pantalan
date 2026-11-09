@@ -153,7 +153,7 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, wo
 		<-eventsDone
 	}()
 
-	apps := service.NewAppService(store)
+	apps := service.NewAppService(store, deployer)
 	dash := dashboard.New(dashboard.Deps{
 		Sessions: admins,
 		Files:    web.Dist(),

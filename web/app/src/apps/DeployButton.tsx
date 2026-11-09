@@ -8,13 +8,13 @@ import type { Deployment } from "@/api/generated/domain";
  * queued Deployment.
  */
 export function DeployButton({
-  appID,
+  appId,
   onDeployed,
 }: {
-  appID: string;
+  appId: string;
   onDeployed?: (deployment: Deployment) => void;
 }) {
-  const deploy = useDeploy(appID);
+  const deploy = useDeploy(appId);
   return (
     <span className="flex items-center gap-3">
       {deploy.error && (

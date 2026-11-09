@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Boxes, ChevronLeft, LayoutDashboard, LogOut, type LucideIcon } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router";
-import { signOut as endSession } from "@/api/sessions";
+import { signOut as endSession, useSessionCheck } from "@/api/sessions";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +24,7 @@ const nav: { to: string; label: string; icon: LucideIcon; end: boolean }[] = [
  * an icon rail (remembered across reloads), then the page.
  */
 export function Shell() {
+  useSessionCheck();
   const [collapsed, setCollapsed] = useRememberedCollapse();
   const navigate = useNavigate();
   // Ends the session on the server, so the cookie can't be reused; only

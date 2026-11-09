@@ -1,14 +1,10 @@
 package httpapi
 
 import (
-	"errors"
-	"math"
 	"net"
 	"net/http"
-	"strconv"
-	"time"
 
-	"github.com/pantalan/pantalan/internal/service"
+	"github.com/pantalan/pantalan/internal/sessioncookie"
 )
 
 // The sign-in contract the Dashboard's sign-in screen talks to. These
@@ -53,49 +49,42 @@ func (h *handler) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, err := h.deps.Sessions.SignIn(r.Context(), req.Username, req.Password)
-	var later *service.RetryLaterError
-	if errors.As(err, &later) {
-		w.Header().Set("Retry-After", retryAfter(later.Wait))
-	}
-	switch {
-	case err == nil:
-		// A browser that signs in again leaves its old session behind.
-		if old := SessionToken(r); old != "" {
-			if err := h.deps.Sessions.SignOut(r.Context(), old); err != nil {
-				h.deps.Log.Warn("sign out replaced session", "err", err)
-			}
-		}
-		setSessionCookie(w, token)
-		w.WriteHeader(http.StatusNoContent)
-	case errors.Is(err, service.ErrBadCredentials):
-		h.writeJSON(w, http.StatusUnauthorized, errorBody(service.ErrBadCredentials))
-	case errors.Is(err, service.ErrThrottled):
-		h.writeJSON(w, http.StatusTooManyRequests, errorBody(service.ErrThrottled))
-	case errors.Is(err, service.ErrBusy):
-		h.writeJSON(w, http.StatusServiceUnavailable, errorBody(service.ErrBusy))
-	case errors.Is(err, service.ErrNoAdmin):
-		h.writeJSON(w, http.StatusForbidden, errorBody(service.ErrNoAdmin))
-	default:
+	if err != nil {
 		h.writeError(w, err)
+		return
 	}
+	// Signing in again ends the session the browser's cookie named, as
+	// the form login before the SPA did: the new cookie replaces it, so
+	// nothing could use it again.
+	if old := sessioncookie.Token(r); old != "" {
+		if err := h.deps.Sessions.SignOut(r.Context(), old); err != nil {
+			h.deps.Log.Warn("sign out replaced session", "err", err)
+		}
+	}
+	sessioncookie.Set(w, token)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// checkSession answers 204 while the browser's session cookie names a
+// live session, and 401 once it doesn't. It is Sessions.CheckSession, so
+// it doesn't count as activity: a page checking every 30 s never keeps
+// its session alive, but notices within 30 s that it has ended. It reads
+// the cookie alone; the Admin Token has no session.
+func (h *handler) checkSession(w http.ResponseWriter, r *http.Request) {
+	if err := h.deps.Sessions.CheckSession(r.Context(), sessioncookie.Token(r)); err != nil {
+		h.writeError(w, err) // a 401 once the session has ended
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // signOut ends the browser's session, if it has one, and clears its
 // cookie.
 func (h *handler) signOut(w http.ResponseWriter, r *http.Request) {
-	if err := h.deps.Sessions.SignOut(r.Context(), SessionToken(r)); err != nil {
+	if err := h.deps.Sessions.SignOut(r.Context(), sessioncookie.Token(r)); err != nil {
 		h.writeError(w, err)
 		return
 	}
-	ClearSessionCookie(w)
+	sessioncookie.Clear(w)
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// errorBody is the {"error": ...} body every API error has, with err's
-// message alone (not any wrapping around it).
-func errorBody(err error) map[string]string { return map[string]string{"error": err.Error()} }
-
-// retryAfter is a Retry-After value: whole seconds, rounded up.
-func retryAfter(wait time.Duration) string {
-	return strconv.Itoa(int(math.Ceil(wait.Seconds())))
 }

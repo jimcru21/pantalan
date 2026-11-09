@@ -1,13 +1,15 @@
 import { useNavigate, useParams } from "react-router";
-import { useUpdateApp } from "@/api/app-settings";
+import { useUpdateApp } from "@/api/app-mutations";
 import { isNotFound, useApp } from "@/api/apps";
 import { AppForm, valuesOf } from "@/apps/AppForm";
+import { AppNotFound } from "@/apps/AppNotFound";
 import { FormAlert } from "@/components/form";
-import { NotFoundPage, Page } from "@/shell/Page";
+import { Page } from "@/shell/Page";
 
 /**
  * The edit form for an App's settings, starting from what it has now.
- * Saving starts no Deployment: the settings take effect on the next one.
+ * Saving starts no Deployment: the settings take effect on the next one,
+ * but a new domain, which serves the live Deployment at once.
  */
 export function EditAppPage() {
   const { appId = "" } = useParams();
@@ -17,12 +19,7 @@ export function EditAppPage() {
   const appPath = `/apps/${encodeURIComponent(appId)}`;
 
   if (isNotFound(app.error)) {
-    return (
-      <NotFoundPage title="App not found" back={{ to: "/apps", label: "Back to Apps" }}>
-        No App has the ID <code className="font-mono text-[0.92em]">{appId}</code>. It may have been
-        deleted.
-      </NotFoundPage>
-    );
+    return <AppNotFound appId={appId} />;
   }
   if (!app.data) {
     return (
@@ -39,7 +36,7 @@ export function EditAppPage() {
         initial={valuesOf(app.data)}
         submitLabel="Save"
         cancelTo={appPath}
-        note="Changes take effect on the next Deployment. Saving doesn't deploy."
+        note="Changes take effect on the next Deployment, but a new domain serves the live one at once. Saving doesn't deploy."
         onSubmit={(settings) => update.mutateAsync(settings).then(() => navigate(appPath))}
         error={update.error}
         pending={update.isPending}

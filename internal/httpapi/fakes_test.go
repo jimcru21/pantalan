@@ -399,6 +399,15 @@ func (r *fakeRouter) RemoveRoutesTo(upstream string) {
 	}
 }
 
+func (r *fakeRouter) MoveRoute(from, to string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if upstream, ok := r.routes[from]; ok && from != to {
+		delete(r.routes, from)
+		r.routes[to] = upstream
+	}
+}
+
 // table is a copy of the routes, host to upstream.
 func (r *fakeRouter) table() map[string]string {
 	r.mu.Lock()

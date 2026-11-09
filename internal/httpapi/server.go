@@ -82,6 +82,9 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/v1/login-info", h.loginInfo)
 	mux.Handle("POST /api/v1/sessions", sameOrigin.Handler(http.HandlerFunc(h.signIn)))
 	mux.Handle("DELETE /api/v1/sessions/current", sameOrigin.Handler(http.HandlerFunc(h.signOut)))
+	// Checking the session must not extend it, as requireCredential's
+	// Authenticate would, so it is out here too.
+	mux.HandleFunc("GET /api/v1/sessions/current", h.checkSession)
 	// Everything else under /api: the Admin Token or a live session cookie.
 	mux.Handle("/api/", requireCredential(deps.AdminToken, deps.Sessions, deps.Log, api))
 	// Authenticated by HMAC signature, not the admin token.

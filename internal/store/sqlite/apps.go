@@ -50,12 +50,7 @@ func (s *Store) UpdateApp(ctx context.Context, app domain.App) error {
 	if err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return err
-	} else if n == 0 {
-		return fmt.Errorf("app %s: %w", app.ID, domain.ErrNotFound)
-	}
-	return nil
+	return touchedRow(res, appNotFound(app.ID))
 }
 
 // SetAppEnv replaces the env vars of the App with ID id.
@@ -68,12 +63,7 @@ func (s *Store) SetAppEnv(ctx context.Context, id string, env map[string]string)
 	if err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return err
-	} else if n == 0 {
-		return fmt.Errorf("app %s: %w", id, domain.ErrNotFound)
-	}
-	return nil
+	return touchedRow(res, appNotFound(id))
 }
 
 // DeleteApp deletes the App with ID id and its Deployments, at once.
@@ -86,13 +76,24 @@ func (s *Store) DeleteApp(ctx context.Context, id string) error {
 		if err != nil {
 			return err
 		}
-		if n, err := res.RowsAffected(); err != nil {
-			return err
-		} else if n == 0 {
-			return fmt.Errorf("app %s: %w", id, domain.ErrNotFound)
-		}
-		return nil
+		return touchedRow(res, appNotFound(id))
 	})
+}
+
+func appNotFound(id string) error { return fmt.Errorf("app %s: %w", id, domain.ErrNotFound) }
+
+// touchedRow is nil when the write whose result is res changed a row,
+// none when it changed nothing (the row it was for isn't there), or the
+// error reading how many rows it changed.
+func touchedRow(res sql.Result, none error) error {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return none
+	}
+	return nil
 }
 
 func marshalEnv(env map[string]string) (string, error) {

@@ -50,7 +50,9 @@ func (h *handler) deploymentLog(w http.ResponseWriter, r *http.Request) {
 }
 
 // deploymentLogs is the older address of the plain-text Deployment Log,
-// by the Deployment's ID alone. It is kept for scripts.
+// by the Deployment's ID alone. It is kept for scripts, so it serves the
+// log as it always has: byte for byte as written, escape codes and line
+// ends untouched. Only the App-scoped addresses clean it.
 func (h *handler) deploymentLogs(w http.ResponseWriter, r *http.Request) {
 	f, err := h.deps.Deployer.OpenLog(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -58,7 +60,10 @@ func (h *handler) deploymentLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.closeLog(f)
-	h.sendPlainLog(w, f)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if _, err := io.Copy(w, f); err != nil {
+		h.deps.Log.Warn("send log", "err", err)
+	}
 }
 
 // sendPlainLog writes the log in f (none when nil) as plain text. nosniff
@@ -101,7 +106,8 @@ func (h *handler) closeLog(f *os.File) {
 // connect replays the last logReplay bytes, preceded by an "omitted"
 // event (data: how many bytes it left out) when it skipped any. The
 // stream follows the log while the Deployment runs, then sends "done"
-// (data: the final status) and ends.
+// (data: the final status) and ends; if the Deployment is deleted on the
+// way, "done" says "deleted".
 func (h *handler) streamDeploymentLog(w http.ResponseWriter, r *http.Request) {
 	appID, depID := r.PathValue("id"), r.PathValue("deploymentID")
 	dep, err := h.deps.Deployer.Get(r.Context(), appID, depID)
@@ -142,7 +148,7 @@ func (h *handler) streamDeploymentLog(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if finished {
-			_ = es.send("done", "", string(dep.Status))
+			_ = es.send(StreamDone, "", string(dep.Status))
 			return
 		}
 		select {
@@ -151,7 +157,14 @@ func (h *handler) streamDeploymentLog(w http.ResponseWriter, r *http.Request) {
 		case <-poll.C:
 		}
 		if dep, err = h.deps.Deployer.Get(ctx, appID, depID); err != nil {
-			return // the App was deleted, or the client has gone
+			if errors.Is(err, domain.ErrNotFound) {
+				// The App was deleted. Say so: a dropped stream would
+				// reconnect to a 404, which the browser can't read.
+				_ = es.send(StreamDone, "", string(DeploymentLogDeleted))
+			} else if ctx.Err() == nil {
+				h.deps.Log.Warn("stream log", "deployment", depID, "err", err)
+			}
+			return
 		}
 	}
 }
@@ -175,7 +188,7 @@ func (h *handler) sendNewOutput(ctx context.Context, es *eventStream, tail *logT
 		}
 		if omitted > 0 {
 			off := strconv.FormatInt(omitted, 10)
-			if err := es.send("omitted", off, off); err != nil {
+			if err := es.send(StreamOmitted, off, off); err != nil {
 				return err
 			}
 		}
@@ -187,7 +200,7 @@ func (h *handler) sendNewOutput(ctx context.Context, es *eventStream, tail *logT
 		}
 		if chunk, end := tail.take(finished && !more); len(chunk) > 0 {
 			if text := cleanText(chunk); text != "" {
-				if err := es.send("", strconv.FormatInt(end, 10), text); err != nil {
+				if err := es.send(message, strconv.FormatInt(end, 10), text); err != nil {
 					return err
 				}
 			}

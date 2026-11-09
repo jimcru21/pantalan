@@ -121,6 +121,9 @@ type Router interface {
 	RemoveRoute(host string)
 	// RemoveRoutesTo removes every route to upstream, whatever its host.
 	RemoveRoutesTo(upstream string)
+	// MoveRoute serves what from serves under to instead, in one step.
+	// It does nothing when from has no route.
+	MoveRoute(from, to string)
 }
 
 // Scheduler hands a queued deployment to whatever runs it.

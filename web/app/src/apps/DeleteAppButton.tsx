@@ -1,7 +1,7 @@
 import { useId, useRef, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
-import { forgetApp, useDeleteApp } from "@/api/app-settings";
+import { forgetApp, useDeleteApp } from "@/api/app-mutations";
 import type { App } from "@/api/generated/httpapi";
 import { buttonClass, Field, FormAlert, inputClass } from "@/components/form";
 import { cn } from "@/lib/utils";

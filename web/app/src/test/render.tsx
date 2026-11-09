@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient } from "@tanstack/react-query";
 import { App } from "@/App";
-import { stubEventSource, stubFetch, type Api } from "./network";
+import { status, stubEventSource, stubFetch, type Api } from "./network";
 
 /**
  * Renders the whole app at a path, as a browser opening that address
@@ -14,7 +14,7 @@ import { stubEventSource, stubFetch, type Api } from "./network";
  */
 export function renderApp(path: string, { api = {} }: { api?: Api } = {}) {
   window.history.replaceState(null, "", path);
-  const calls = stubFetch(api);
+  const calls = stubFetch(api, liveSession);
   const eventSources = stubEventSource();
   const user = userEvent.setup();
   let view = render(<App queryClient={testQueryClient()} />);
@@ -32,6 +32,10 @@ export function renderApp(path: string, { api = {} }: { api?: Api } = {}) {
     },
   };
 }
+
+// The shell's session check finds the session live, unless a test's api
+// answers it otherwise.
+const liveSession: Api = { "GET /api/v1/sessions/current": () => status(204) };
 
 // No retries, so an error shows at once instead of after the backoff.
 function testQueryClient() {

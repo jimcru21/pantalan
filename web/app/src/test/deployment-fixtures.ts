@@ -100,9 +100,9 @@ export function deploymentsServer(
 }
 
 /** What a Deployment's page gets for an ID the App has no Deployment by: the API's 404. */
-export function unknownDeploymentApi(appID: string, id: string): Api {
+export function unknownDeploymentApi(appId: string, id: string): Api {
   return {
-    [`GET /api/v1/apps/${appID}/deployments/${id}`]: () =>
-      json({ error: `deployment ${id} of app ${appID}: not found` }, { status: 404 }),
+    [`GET /api/v1/apps/${appId}/deployments/${id}`]: () =>
+      json({ error: `deployment ${id} of app ${appId}: not found` }, { status: 404 }),
   };
 }

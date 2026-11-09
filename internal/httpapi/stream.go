@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pantalan/pantalan/internal/service"
+	"github.com/pantalan/pantalan/internal/sessioncookie"
 )
 
 // Both logs, the Deployment Log and the App Log, stream as Server-Sent
@@ -45,13 +46,13 @@ func openEventStream(w http.ResponseWriter) (*eventStream, error) {
 	return es, es.rc.Flush()
 }
 
-// send writes one event and flushes it. An empty event is the unnamed
-// "message"; an empty id leaves the browser's last event ID as it was.
+// send writes one event and flushes it. The event message is the unnamed
+// one; an empty id leaves the browser's last event ID as it was.
 // Each line of data goes on its own data: line, which the browser joins
 // again with "\n", so data arrives exactly as given.
-func (es *eventStream) send(event, id, data string) error {
+func (es *eventStream) send(event StreamEvent, id, data string) error {
 	var b strings.Builder
-	if event != "" {
+	if event != message {
 		fmt.Fprintf(&b, "event: %s\n", event)
 	}
 	if id != "" {
@@ -78,8 +79,8 @@ var ansiEscape = regexp.MustCompile("\x1b\\[[0-?]*[ -/]*[@-~]|\x1b\\][^\x07\x1b]
 var newlines = strings.NewReplacer("\r\n", "\n", "\r", "\n")
 
 // cleanText is log output as the Dashboard shows it: ANSI escape codes
-// stripped (the colours aren't rendered, ADR 0003) and line ends made
-// "\n". It works on any span of whole lines, since no escape spans one.
+// stripped (the Dashboard shows logs as plain text and doesn't render
+// colours; spec #68, user story 62) and line ends made "\n". It works on any span of whole lines, since no escape spans one.
 func cleanText(b []byte) string {
 	s := string(b)
 	if strings.IndexByte(s, '\x1b') >= 0 {
@@ -112,7 +113,7 @@ func (h *handler) streamContext(r *http.Request) (context.Context, context.Cance
 	if r.Header.Get("Authorization") != "" {
 		return ctx, cancel
 	}
-	token := SessionToken(r)
+	token := sessioncookie.Token(r)
 	tick := h.deps.After(sessionRecheck) // set before the stream opens
 	go func() {
 		defer cancel()

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { anAppListItem, appsListApi } from "@/test/app-fixtures";
 import { deploymentsServer } from "@/test/deployment-fixtures";
 import { aDeployment, anApp } from "@/test/fixtures";
-import type { FakeEventSource } from "@/test/network";
+import { json, type FakeEventSource } from "@/test/network";
 import { renderApp } from "@/test/render";
 
 const app = anApp({ id: "app7", name: "shop", domain: "shop.example.com" });
@@ -17,13 +17,12 @@ afterEach(() => {
 // The App's page, and the App Log stream it opened.
 async function openAppLog(deployments = [live]) {
   const server = deploymentsServer(app, deployments);
-  const view = renderApp("/apps/app7", {
-    api: { ...appsListApi([anAppListItem(app)]), ...server.api },
-  });
+  const api = { ...appsListApi([anAppListItem(app)]), ...server.api };
+  const view = renderApp("/apps/app7", { api });
   const log = await screen.findByRole("log", { name: "App Log" });
   const stream = latest(view.eventSources);
   act(() => stream.open());
-  return { ...view, server, log, stream };
+  return { ...view, api, server, log, stream };
 }
 
 function latest(eventSources: typeof FakeEventSource): FakeEventSource {
@@ -113,15 +112,26 @@ describe("the App Log", () => {
   });
 
   it("ends for good, saying so, when a reconnect is refused as signed out", async () => {
-    const { log, stream } = await openAppLog();
+    const { log, stream, api } = await openAppLog();
     print(stream, "GET / 200\n");
+    api["GET /api/v1/sessions/current"] = () => json({ error: "not signed in" }, { status: 401 });
 
     act(() => stream.fail({ closed: true })); // the reconnect got 401
 
-    expect(within(region()).getByRole("status")).toHaveTextContent(
+    expect(await within(region()).findByRole("status")).toHaveTextContent(
       "Signed out, reload to sign in.",
     );
     expect(log).toHaveTextContent("GET / 200");
+  });
+
+  it("says the server refused the stream when the session is still live", async () => {
+    const { stream } = await openAppLog();
+
+    act(() => stream.fail({ closed: true })); // the App was deleted: a 404
+
+    expect(await within(region()).findByRole("status")).toHaveTextContent(
+      "The server refused this log stream. Reload to try again.",
+    );
   });
 
   it("closes the stream when the Admin leaves the App's page", async () => {

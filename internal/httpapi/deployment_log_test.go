@@ -117,6 +117,34 @@ func TestARunningDeploymentsLogStreamsAsItIsWritten(t *testing.T) {
 	es.ended()
 }
 
+// A stream whose Deployment disappears under it says so and ends, rather
+// than dropping the connection: the browser would reconnect to a 404,
+// which an EventSource can't tell from a refused session.
+func TestADeploymentLogStreamWhoseDeploymentIsGoneEndsWithDoneDeleted(t *testing.T) {
+	s := newSeam(t)
+	app := s.createApp("web")
+	builds := s.builder.hold()
+	dep := s.deploy(app, "")
+	ran := s.runQueuedInBackground()
+	builds.started(t)
+	es := s.stream(logPath(app, dep)+"/stream", withToken(adminToken))
+	textUntil(t, es, "==> building")
+
+	// Deleting waits for a running Deployment, so go behind its back:
+	// the same as a delete just after the Deployment finished, between
+	// two of the stream's looks at it.
+	if err := s.store.DeleteApp(t.Context(), app); err != nil {
+		t.Fatalf("delete the App's records: %v", err)
+	}
+
+	if _, _, done := logText(t, es); done != "deleted" {
+		t.Errorf("done = %q, want deleted", done)
+	}
+	es.ended()
+	builds.finish()
+	<-ran
+}
+
 func TestAReconnectResumesTheDeploymentLogWithNoRepeatedOrMissingBytes(t *testing.T) {
 	s := newSeam(t)
 	app := s.createApp("web")
@@ -317,6 +345,30 @@ func TestTheDeploymentLogHasItsColourCodesStripped(t *testing.T) {
 		if !strings.Contains(text, "error: bad layer\ndone\n") || strings.ContainsAny(text, "\x1b\r") {
 			t.Errorf("%s = %q, want the build's output without escape codes or carriage returns", what, text)
 		}
+	}
+}
+
+// The older address by Deployment ID alone is for scripts, which read
+// the log exactly as the build wrote it, colour codes and carriage
+// returns included, as they always have.
+func TestTheLegacyLogsAddressServesTheLogAsWritten(t *testing.T) {
+	s := newSeam(t)
+	app := s.createApp("web")
+	raw := "\x1b[1;31merror\x1b[0m: bad layer\r\n\rprogress 50%\rprogress 100%\n"
+	s.builder.writes(raw)
+	dep := s.deploy(app, "")
+	s.runQueued()
+
+	got := s.get("/api/v1/deployments/"+dep+"/logs", withToken(adminToken))
+
+	if got.status != http.StatusOK {
+		t.Fatalf("GET legacy logs = %d %q, want 200", got.status, got.body)
+	}
+	if ct := got.header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/plain; charset=utf-8", ct)
+	}
+	if !strings.Contains(got.body, "\n"+raw+"==> ") {
+		t.Errorf("legacy logs = %q, want the build's output byte for byte (%q)", got.body, raw)
 	}
 }
 

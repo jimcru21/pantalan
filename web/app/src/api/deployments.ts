@@ -1,11 +1,12 @@
 // Deploying an App, and one Deployment by its App and ID.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, request } from "@/api/client";
+import { request } from "@/api/client";
 import type { Deployment } from "@/api/generated/domain";
-import { appKeys, isInProgress, statusPollMs } from "@/api/apps";
+import { appKeys, isInProgress, retryUnlessAnswered, statusPollMs } from "@/api/apps";
+import { appPaths } from "@/api/paths";
 
-export const deploymentKey = (appID: string, id: string) =>
-  [...appKeys.deployments(appID), id] as const;
+export const deploymentKey = (appId: string, id: string) =>
+  [...appKeys.deployments(appId), id] as const;
 
 /**
  * One of an App's Deployments, by ID. Polled every 2 s while it's queued,
@@ -13,14 +14,11 @@ export const deploymentKey = (appID: string, id: string) =>
  * superseded. An unknown ID (or another App's Deployment) fails at once
  * with a 404 (isNotFound).
  */
-export function useDeployment(appID: string, id: string) {
+export function useDeployment(appId: string, id: string) {
   return useQuery({
-    queryKey: deploymentKey(appID, id),
-    queryFn: () =>
-      request<Deployment>(
-        `/api/v1/apps/${encodeURIComponent(appID)}/deployments/${encodeURIComponent(id)}`,
-      ),
-    retry: (failures, err) => !(err instanceof ApiError && err.status < 500) && failures < 3,
+    queryKey: deploymentKey(appId, id),
+    queryFn: () => request<Deployment>(appPaths.deployment(appId, id)),
+    retry: retryUnlessAnswered,
     refetchInterval: (query) =>
       query.state.data && isInProgress(query.state.data.status) ? statusPollMs : false,
   });
@@ -35,21 +33,19 @@ export function useDeployment(appID: string, id: string) {
  * goes into the App's Deployments at once, so neither click's Deployment
  * waits for (or is lost to) the other's refetch.
  */
-export function useDeploy(appID: string) {
+export function useDeploy(appId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ redeployOf }: { redeployOf?: string }) => {
-      const deployments = `/api/v1/apps/${encodeURIComponent(appID)}/deployments`;
-      return request<Deployment>(
-        redeployOf ? `${deployments}/${encodeURIComponent(redeployOf)}/redeploy` : deployments,
+    mutationFn: ({ redeployOf }: { redeployOf?: string }) =>
+      request<Deployment>(
+        redeployOf ? appPaths.redeploy(appId, redeployOf) : appPaths.deployments(appId),
         { method: "POST" },
-      );
-    },
+      ),
     onSuccess: (dep) => {
-      client.setQueryData<Deployment[]>(appKeys.deployments(appID), (old = []) =>
+      client.setQueryData<Deployment[]>(appKeys.deployments(appId), (old = []) =>
         newestFirst([dep, ...old.filter((d) => d.id !== dep.id)]),
       );
-      void client.invalidateQueries({ queryKey: appKeys.deployments(appID) });
+      void client.invalidateQueries({ queryKey: appKeys.deployments(appId) });
       void client.invalidateQueries({ queryKey: appKeys.list, exact: true });
     },
   });

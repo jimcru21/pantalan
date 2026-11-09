@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pantalan/pantalan/internal/service"
+	"github.com/pantalan/pantalan/internal/sessioncookie"
 )
 
 // Sessions signs the Admin in and out and checks their sessions;
@@ -26,7 +27,8 @@ type Sessions interface {
 	// session, and extends it.
 	Authenticate(ctx context.Context, token string) error
 	// CheckSession is Authenticate without extending the session: an
-	// open stream re-checks its session with it.
+	// open stream re-checks its session with it, and GET
+	// /api/v1/sessions/current answers with it.
 	CheckSession(ctx context.Context, token string) error
 	// SignOut ends the session token names, if there is one.
 	SignOut(ctx context.Context, token string) error
@@ -54,7 +56,7 @@ func requireCredential(token string, sessions Sessions, log *slog.Logger, next h
 			next.ServeHTTP(w, r)
 			return
 		}
-		cookie, err := r.Cookie(CookieName)
+		cookie, err := r.Cookie(sessioncookie.Name)
 		if err != nil || cookie.Value == "" {
 			unauthorized(w)
 			return

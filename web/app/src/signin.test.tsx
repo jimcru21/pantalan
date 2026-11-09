@@ -1,11 +1,12 @@
 import { act, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AppListItem, LoginInfo, SignInRequest } from "@/api/generated/httpapi";
+import type { App, AppEnv, AppListItem, LoginInfo, SignInRequest } from "@/api/generated/httpapi";
 import { anAppListItem } from "@/test/app-fixtures";
-import { aLoginInfo } from "@/test/fixtures";
-import { json, status, type Api } from "@/test/network";
+import { aLoginInfo, anApp } from "@/test/fixtures";
+import { json, status, type Api, type ApiCall } from "@/test/network";
 import { overviewApi } from "@/test/node-fixtures";
 import { renderApp } from "@/test/render";
+import { setHidden } from "@/test/visibility";
 
 // The sign-in API as a Node with one Admin answers it.
 function signInApi(signIn: Api[string] = () => status(204)): Api {
@@ -155,6 +156,73 @@ describe("an ended session", () => {
 
     expect(await screen.findByText("hello")).toBeInTheDocument();
     expect(window.location.pathname + window.location.search).toBe("/apps?sort=name");
+  });
+});
+
+// admin reset-password must sign out every open page within a minute,
+// even one that never polls, like the env editor.
+describe("the session check", () => {
+  const app = anApp({ id: "app7", name: "shop" });
+  // The env editor: a page that asks the server nothing once it's shown.
+  function envEditorApi(session: () => Response): Api {
+    return {
+      ...signInApi(),
+      "GET /api/v1/apps/app7": () => json<App>(app),
+      "GET /api/v1/apps/app7/env": () => json<AppEnv>({ env: "A=1\n" }),
+      "GET /api/v1/sessions/current": session,
+    };
+  }
+  const checks = (calls: ApiCall[]) =>
+    calls.filter((c) => c.path === "/api/v1/sessions/current").length;
+
+  it("sends a page that never polls to sign in within 30 s of its session ending", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let live = true;
+    renderApp("/apps/app7/env", {
+      api: envEditorApi(() =>
+        live ? status(204) : json({ error: "not signed in" }, { status: 401 }),
+      ),
+    });
+    expect(await screen.findByLabelText("Env vars")).toBeInTheDocument();
+
+    live = false; // admin reset-password
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+
+    expect(await screen.findByRole("button", { name: "Sign in" })).toBeInTheDocument();
+    expect(new URLSearchParams(window.location.search).get("next")).toBe("/apps/app7/env");
+  });
+
+  it("leaves a live session's page where it is", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { calls } = renderApp("/apps/app7/env", { api: envEditorApi(() => status(204)) });
+    expect(await screen.findByLabelText("Env vars")).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(checks(calls)).toBe(2);
+    expect(window.location.pathname).toBe("/apps/app7/env");
+    expect(screen.getByLabelText("Env vars")).toBeInTheDocument();
+  });
+
+  it("pauses in a hidden tab and checks again as soon as it's shown", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let live = true;
+    const { calls } = renderApp("/apps/app7/env", {
+      api: envEditorApi(() =>
+        live ? status(204) : json({ error: "not signed in" }, { status: 401 }),
+      ),
+    });
+    expect(await screen.findByLabelText("Env vars")).toBeInTheDocument();
+
+    await act(async () => setHidden(true));
+    live = false;
+    await act(() => vi.advanceTimersByTimeAsync(5 * 60_000));
+    expect(checks(calls)).toBe(0);
+
+    await act(async () => setHidden(false));
+
+    expect(await screen.findByRole("button", { name: "Sign in" })).toBeInTheDocument();
+    expect(checks(calls)).toBe(1);
   });
 });
 

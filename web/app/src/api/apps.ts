@@ -4,12 +4,13 @@ import { useQuery } from "@tanstack/react-query";
 import { ApiError, request } from "@/api/client";
 import type { Deployment } from "@/api/generated/domain";
 import type { App, AppListItem } from "@/api/generated/httpapi";
+import { appPaths } from "@/api/paths";
 
 /** Query keys, so mutations can invalidate what they change. */
 export const appKeys = {
   list: ["apps"] as const,
-  app: (id: string) => ["apps", id] as const,
-  deployments: (id: string) => ["apps", id, "deployments"] as const,
+  app: (appId: string) => ["apps", appId] as const,
+  deployments: (appId: string) => ["apps", appId, "deployments"] as const,
 };
 
 /** True for the API's 404: no App (or Deployment) has that ID. */
@@ -26,24 +27,27 @@ export function isNotFound(err: unknown): boolean {
 export function useApps() {
   return useQuery({
     queryKey: appKeys.list,
-    queryFn: () => request<AppListItem[]>("/api/v1/apps"),
+    queryFn: () => request<AppListItem[]>(appPaths.apps),
     refetchInterval: 5_000,
     retry: false,
   });
 }
 
-// Retries only what may pass next time: a network error or a 5xx. A 4xx
-// (an unknown ID, a signed-out session) answers the same again.
-function retryUnlessAnswered(failures: number, err: Error): boolean {
+/**
+ * Retries only what may pass next time: a network error or a 5xx. A 4xx
+ * (an unknown ID, a signed-out session) answers the same again. For the
+ * `retry` of a query that reads by ID.
+ */
+export function retryUnlessAnswered(failures: number, err: Error): boolean {
   if (err instanceof ApiError && err.status < 500) return false;
   return failures < 3;
 }
 
 /** One App, by ID. An unknown ID fails at once with a 404 (isNotFound). */
-export function useApp(id: string) {
+export function useApp(appId: string) {
   return useQuery({
-    queryKey: appKeys.app(id),
-    queryFn: () => request<App>(`/api/v1/apps/${encodeURIComponent(id)}`),
+    queryKey: appKeys.app(appId),
+    queryFn: () => request<App>(appPaths.app(appId)),
     retry: retryUnlessAnswered,
   });
 }
@@ -53,10 +57,10 @@ export function useApp(id: string) {
  * on its way (queued, building or starting), so status moves on screen;
  * once all are final the polling stops.
  */
-export function useDeployments(appID: string) {
+export function useDeployments(appId: string) {
   return useQuery({
-    queryKey: appKeys.deployments(appID),
-    queryFn: () => request<Deployment[]>(`/api/v1/apps/${encodeURIComponent(appID)}/deployments`),
+    queryKey: appKeys.deployments(appId),
+    queryFn: () => request<Deployment[]>(appPaths.deployments(appId)),
     retry: retryUnlessAnswered,
     refetchInterval: (query) =>
       query.state.data?.some((d) => isInProgress(d.status)) ? statusPollMs : false,

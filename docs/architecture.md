@@ -28,9 +28,12 @@ Inside, the code follows ports & adapters (hexagonal):
 ```
 
 Dependency rule: `domain` imports nothing internal. `service` imports only
-`domain`. Adapters import `service` and `domain`. Only `cmd/pantalan` imports
-everything. This keeps the deploy pipeline testable with fakes
-(`service/deployer_test.go`) and lets each adapter be replaced on its own.
+`domain`. Adapters import `service` and `domain`, never each other. Only
+`cmd/pantalan` imports everything. This keeps the deploy pipeline testable
+with fakes (`service/deployer_test.go`) and lets each adapter be replaced on
+its own. Small stdlib-only helpers that several adapters share and that
+import nothing internal (`execx`, `sessioncookie`) aren't adapters, and
+any adapter may import them.
 
 One exception, on purpose: the Node overview's reads skip the service
 layer. `internal/httpapi` declares the small interfaces it reads through
@@ -51,11 +54,18 @@ moves into `service` behind a port.
 2. **building**: fetch the exact ref into `$DATA/builds/<id>`, then build an image.
 3. **starting**: run the new container next to the old one.
 4. Health-check the new container. On failure, remove it. The old one keeps serving.
-5. **live**: switch the proxy route, then mark the previous deployment
-   **superseded** and remove its container.
+5. **live**: route the App's domain, as it is now, to the new container,
+   remove every route to the previous one, then mark the previous
+   deployment **superseded** and remove its container.
 
 Deployments of the same app are serialised. Different apps build in parallel,
 up to `PANTALAN_WORKERS` at a time.
+
+Editing an App's domain (`AppService.Update`) moves its live route at once
+through `Deployer.MoveDomain`: the new domain serves the live Deployment and
+the old one serves nothing. Go-live and that move hold the same lock, and
+both read the domain under it, so a Deployment that was building during
+the edit goes live on the new domain.
 
 ### Startup recovery
 
@@ -135,6 +145,9 @@ shadcn/ui components style it, and Recharts draws the sparklines.
 - **API types.** The TypeScript types of the API's responses are generated
   from the Go structs with `tygo` (`make types`, configured in `tygo.yaml`)
   into `web/app/src/api/generated`, and CI fails when they are stale.
+  The log streams' event names and `done` reasons are generated the same
+  way (`internal/httpapi/stream_events.go`), so a rename on either side
+  fails the SPA's type check.
 - **Development.** `make web-dev`, or the compose stack's `web` service,
   runs Vite with hot reload and proxies `/api` to Pantalan. Vite serves
   `index.html` for every path, so the page gate and the CSP don't apply
@@ -145,7 +158,7 @@ Auth surfaces on the one listener:
 | Route | Session cookie | Admin Token (bearer) | Other |
 |---|---|---|---|
 | Dashboard pages | `/login`: not needed; any other page: a live session, or a 303 to `/login?next=…` | no: a request with an `Authorization` header gets 401 | `/assets/…` needs nothing |
-| `GET /api/v1/login-info`, `POST /api/v1/sessions`, `DELETE /api/v1/sessions/current` | not needed | not needed | the sign-in contract; the two session routes are behind `http.CrossOriginProtection` whatever credential comes with them |
+| `GET /api/v1/login-info`, `POST /api/v1/sessions`, `GET` and `DELETE /api/v1/sessions/current` | not needed (`GET …/sessions/current` checks it) | not needed | the sign-in contract; `POST` and `DELETE` are behind `http.CrossOriginProtection` whatever credential comes with them |
 | the rest of `/api/v1/…` | yes, behind `http.CrossOriginProtection` (a cross-origin unsafe request gets 403) | yes, from any origin | an `Authorization` header is judged alone, whatever cookie comes with it; no credential, a wrong token or an ended session gets 401 |
 | `/webhooks/github` | no | no | HMAC signature |
 | `/healthz` | no | no | none needed |
@@ -160,15 +173,22 @@ Auth surfaces on the one listener:
   message. With no Admin, the screen shows the `admin create` command
   instead of the form, and sign-in gets 403. `DELETE
   /api/v1/sessions/current` ends the browser's session, if any, and
-  answers 204 clearing the cookie.
+  answers 204 clearing the cookie. `GET /api/v1/sessions/current` answers
+  204 while the cookie names a live session and 401 once it doesn't, with
+  `AdminService.CheckSession`, so checking never extends the session.
 - `service.AdminService` issues a `crypto/rand.Text()` token per sign-in
   and stores only its SHA-256 hex in `sessions`. The cookie, which
-  `internal/httpapi/cookie.go` sets, reads and clears, is
+  `internal/sessioncookie` sets, reads and clears for both `httpapi` (which
+  issues it) and `dashboard` (whose page gate reads it), is
   `__Host-pantalan_session; Path=/; Secure; HttpOnly; SameSite=Strict`, with
   no expiry: the server ends a session after 1 h idle or 24 h in all.
   `last_seen_at` is rewritten at most once a minute. Nothing is cached in
   memory, so `admin reset-password` (which deletes every session) signs the
-  browser out on its next request. At most 20 sessions exist: a new
+  browser out on its next request. Every page behind sign-in checks
+  `GET /api/v1/sessions/current` every 30 s while its tab is shown, and
+  again as soon as a hidden tab is shown, so an open page goes to sign-in
+  within a minute of a reset even when it polls nothing (the env editor, a
+  finished Deployment). The check doesn't extend the session. At most 20 sessions exist: a new
   sign-in evicts the oldest. Expired sessions are pruned at startup and on
   the daily maintenance tick that also checks TLS renewal.
 - Sign-in throttling: one failure counter on the `admin` row, whatever
@@ -190,8 +210,12 @@ Auth surfaces on the one listener:
   session every 60 s with `AdminService.CheckSession`, which, unlike
   `Authenticate`, doesn't count as activity, so an open stream never keeps
   a session alive; it ends within a minute of a sign-out, an expiry or a
-  reset-password, and the browser's reconnect then gets 401. Streams also
-  end when the service shuts down. The dashboard listener has no write
+  reset-password, and the browser's reconnect then gets 401. An
+  `EventSource` can't read the status of a refused reconnect, so the SPA
+  asks `GET /api/v1/sessions/current` why: a 401 says "Signed out, reload
+  to sign in", a live session that the server refused the stream itself
+  (a 404 or 400), and no answer that Pantalan can't be reached. Streams
+  also end when the service shuts down. The dashboard listener has no write
   timeout, so a long stream is fine.
 
 ### Deployment Log
@@ -206,10 +230,15 @@ plain text; `…/log/stream` streams it:
 - a first connect replays the last 1 MiB from a line start, after an
   `omitted` event (data and id: the bytes left out) when it skipped any;
 - it follows the file (polled every 250 ms) while the Deployment runs,
-  then sends `done` (data: the final status) and ends.
+  then sends `done` (data: the final status) and ends;
+- if the Deployment is deleted with its App while the stream follows it,
+  `done` says `deleted`: an event rather than a dropped connection, whose
+  reconnect would get a 404 that `EventSource` can't tell from a 401.
 
 ANSI escape codes are stripped and `\r` line ends become `\n` on the
-server, in both forms.
+server, in both forms. The older `GET /api/v1/deployments/{id}/logs`,
+kept for scripts, serves the file byte for byte as written, as it always
+has.
 
 ### App Log
 
@@ -233,8 +262,8 @@ splitting its multiplexed stdout/stderr frames apart.
   `Last-Event-ID` names an earlier Deployment gets the same;
 - an App with no live Deployment gets `done` with data
   `no-live-deployment` at once. Both endings are events rather than HTTP
-  errors, because `EventSource` can't read a status and the Dashboard
-  takes a refused stream to mean the session ended.
+  errors, because `EventSource` can't read a status: the Dashboard can
+  only say a refused stream was refused.
 
 ### Node overview
 
@@ -403,7 +432,7 @@ uploads and publishes last.
 |---|---|
 | `cmd/pantalan` | Entrypoint, config and dependency wiring |
 | `internal/domain` | Entities (`App`, `Deployment`, `Admin`), validation, sentinel errors |
-| `internal/service` | Use cases (`AppService`, `AdminService`, `Deployer`) and the port interfaces; `AdminService` owns every rule about the Admin, for both the Dashboard and `pantalan admin` (`admin show` only reads the store) |
+| `internal/service` | Use cases (`AppService`, `AdminService`, `Deployer`, `AppLogs`) and the port interfaces; `AdminService` owns every rule about the Admin, for both the Dashboard and `pantalan admin` (`admin show` only reads the store). `AppLogs` follows an App Log through the `ContainerLogs` port. Deleting an App is `Deployer.DeleteApp`, not `AppService`'s: it removes the route, containers, images and Deployment Logs, so it needs the runtime, the router and the data dir that only the Deployer has, and it takes the lock `Start` read-locks, so no Deployment can be queued between its in-flight check and the removal |
 | `internal/httpapi` | REST API (Admin Token or session cookie), sign-in and the session cookie, the Node overview's JSON, GitHub webhook, `/healthz`; mounts the Dashboard at `/` |
 | `internal/dashtls` | Dashboard certificate (generate, load, renew) and the listener that redirects plain HTTP |
 | `internal/password` | Argon2id hashing of the Admin password into a PHC string |
@@ -412,11 +441,12 @@ uploads and publishes last.
 | `internal/build` | Dockerfile builder; the Nixpacks builder fails with "nixpacks not installed on this Node" unless a hand-built setup has nixpacks on the PATH |
 | `internal/runtime/docker` | Container lifecycle through the docker CLI |
 | `internal/health` | HTTP readiness probe |
-| `internal/proxy` | Host-based reverse proxy |
+| `internal/proxy` | Host-based reverse proxy (the `Router` port) |
 | `internal/queue` | In-process job queue |
 | `internal/execx` | Shared helpers for running external commands |
+| `internal/sessioncookie` | The Dashboard's session cookie (name, attributes, read, set, clear), shared by `httpapi` and `dashboard` so neither imports the other |
 | `internal/dashboard` | Serves the embedded SPA: `index.html` for every page behind the session gate, the hashed assets, the "frontend not built" page, and the security and cache headers |
-| `internal/nodeinfo` | Read-only Node information: host health from `/proc` and `statfs`, the background sampler's ring, Docker through the Engine API on its unix socket, and the container event ring fed by its `/events` stream |
+| `internal/nodeinfo` | Read-only Node information: host health from `/proc` and `statfs`, the background sampler's ring, Docker through the Engine API on its unix socket, and the container event ring fed by its `/events` stream. It also follows a container's output for the App Log (`Docker.FollowLogs`, the `service.ContainerLogs` port) |
 | `web` | The Dashboard SPA: its source in `web/app` (React, Vite, TypeScript) and the build in `web/dist`, which package `web` embeds into the binary |
 
 ## Decisions

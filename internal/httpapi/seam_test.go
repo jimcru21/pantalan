@@ -14,6 +14,7 @@ import (
 	"github.com/pantalan/pantalan/internal/domain"
 	"github.com/pantalan/pantalan/internal/httpapi"
 	"github.com/pantalan/pantalan/internal/service"
+	"github.com/pantalan/pantalan/internal/sessioncookie"
 	"github.com/pantalan/pantalan/internal/store/sqlite"
 )
 
@@ -48,6 +49,9 @@ type seam struct {
 	events    *fakeEvents
 	stopping  chan struct{} // close it to shut the service down
 	dataDir   string        // the Deployer's: Deployment Logs and build checkouts
+	// store is the services' own, for a scene no service can set up in
+	// one step (records gone behind a running Deployment's back).
+	store *sqlite.Store
 }
 
 // The built frontend the seam's Dashboard serves: what `vite build`
@@ -106,6 +110,7 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		host:      &fakeHost{},
 		events:    &fakeEvents{},
 		stopping:  make(chan struct{}),
+		store:     store,
 	}
 	s.builder = &fakeBuilder{docker: s.runtime}
 	s.docker = &fakeDocker{clock: s.clock}
@@ -115,7 +120,6 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		Now:         s.clock.Now,
 		After:       s.hashWait.After,
 	})
-	s.apps = service.NewAppService(store)
 	s.deployer = service.NewDeployer(service.DeployerDeps{
 		Apps:        store,
 		Deployments: store,
@@ -128,6 +132,7 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		DataDir:     s.dataDir,
 		Log:         log,
 	})
+	s.apps = service.NewAppService(store, s.deployer)
 	dash := dashboard.New(dashboard.Deps{
 		Sessions: s.admins,
 		Files:    cfg.frontend,
@@ -173,7 +178,7 @@ func withToken(token string) option {
 
 // withSession sends token as the session cookie, as the browser does.
 func withSession(token string) option {
-	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: httpapi.CookieName, Value: token}) }
+	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: sessioncookie.Name, Value: token}) }
 }
 
 func withHeader(name, value string) option {

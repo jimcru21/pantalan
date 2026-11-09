@@ -114,22 +114,15 @@ func TestDeletingAnAppRemovesItsContainerImagesRouteLogsAndRecords(t *testing.T)
 	})
 }
 
-func TestDeletingAnAppRemovesItsLiveRouteEvenAfterItsDomainChanged(t *testing.T) {
+func TestDeletingAnAppRemovesItsLiveRouteAfterItsDomainChanged(t *testing.T) {
 	s := newSeam(t)
 	session := s.signedIn()
 	app := s.createApp("moved")
 	s.deploy(app, "")
 	s.runQueued()
-	// The live container stays routed under the old domain until the next
-	// Deployment.
-	edit := s.do(http.MethodPut, "/api/v1/apps/"+app,
-		`{"name":"moved","repo_url":"https://example.test/acme/moved.git","domain":"elsewhere.example.test","port":8080}`,
-		withSession(session))
-	if edit.status != http.StatusOK {
-		t.Fatalf("PUT the new domain = %d %q, want 200", edit.status, edit.body)
-	}
-	if routes := s.router.table(); routes["moved.example.test"] == "" {
-		t.Fatalf("routes before the delete = %v, want the old domain still routed", routes)
+	s.changeDomain(app, "moved", "elsewhere.example.test")
+	if routes := s.router.table(); routes["elsewhere.example.test"] == "" {
+		t.Fatalf("routes before the delete = %v, want the new domain routed", routes)
 	}
 
 	if got := s.do(http.MethodDelete, "/api/v1/apps/"+app, "", withSession(session)); got.status != http.StatusNoContent {

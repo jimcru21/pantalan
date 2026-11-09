@@ -24,6 +24,7 @@ packages:
       - node_types.go
       - respond.go
       - sessions.go
+      - stream_events.go
     preserve_comments: types
     frontmatter: |
       import type * as domain from "./domain";
