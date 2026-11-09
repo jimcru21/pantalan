@@ -5,11 +5,6 @@ import (
 	"time"
 )
 
-// DiskUsageTTL is how long a system/df result is shared before the next
-// caller asks Docker again. system/df walks volumes and sizes layers, so
-// it is slow and grows with the Node's data.
-const DiskUsageTTL = 60 * time.Second
-
 // dfTimeout bounds a system/df call, which can take far longer than the
 // others on a Node with a lot of data.
 const dfTimeout = 60 * time.Second
@@ -42,16 +37,11 @@ type DiskUse struct {
 	Size, Reclaimable int64
 }
 
-// DiskUsage is system/df, shared between callers for DiskUsageTTL.
-// Concurrent callers wait for one call rather than each making their own;
-// a failed call isn't cached.
+// DiskUsage is system/df. It walks volumes and sizes layers, so it is
+// slow and grows with the Node's data: callers share its answer
+// (internal/httpapi does, for 60 s).
 func (d *Docker) DiskUsage(ctx context.Context, apiVersion string) (DiskUsage, error) {
-	d.dfMu.Lock()
-	defer d.dfMu.Unlock()
-	if d.df != nil && d.now().Sub(d.df.At) < DiskUsageTTL {
-		return *d.df, nil
-	}
-	// The result is shared, so one caller going away doesn't cancel it.
+	// The answer is shared, so one caller going away doesn't cancel it.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dfTimeout)
 	defer cancel()
 	var body dfBody
@@ -60,7 +50,6 @@ func (d *Docker) DiskUsage(ctx context.Context, apiVersion string) (DiskUsage, e
 	}
 	usage := body.usage()
 	usage.At = d.now()
-	d.df = &usage
 	return usage, nil
 }
 

@@ -32,7 +32,7 @@ type NodeDocker interface {
 	Images(ctx context.Context, apiVersion string) ([]nodeinfo.Image, error)
 	Version(ctx context.Context, apiVersion string) (nodeinfo.DockerVersion, error)
 	// DiskUsage is system/df, which is slow; the handler shares its
-	// answer between requests for nodeinfo.DiskUsageTTL.
+	// answer between requests for diskUsageTTL.
 	DiskUsage(ctx context.Context, apiVersion string) (nodeinfo.DiskUsage, error)
 }
 
