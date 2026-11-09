@@ -35,3 +35,29 @@ func TestProxyRoutesByHostAndPreservesHostHeader(t *testing.T) {
 		t.Errorf("unknown host status = %d, want 404", rec.Code)
 	}
 }
+
+func TestRemoveRoutesToRemovesEveryHostOfThatUpstreamOnly(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer backend.Close()
+	other := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer other.Close()
+
+	p := proxy.New(slog.New(slog.DiscardHandler))
+	p.SetRoute("old.example.test", strings.TrimPrefix(backend.URL, "http://"))
+	p.SetRoute("new.example.test", strings.TrimPrefix(backend.URL, "http://"))
+	p.SetRoute("other.example.test", strings.TrimPrefix(other.URL, "http://"))
+
+	p.RemoveRoutesTo(strings.TrimPrefix(backend.URL, "http://"))
+
+	for host, want := range map[string]int{
+		"old.example.test":   http.StatusNotFound,
+		"new.example.test":   http.StatusNotFound,
+		"other.example.test": http.StatusOK,
+	} {
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://"+host+"/", nil))
+		if rec.Code != want {
+			t.Errorf("%s status = %d, want %d", host, rec.Code, want)
+		}
+	}
+}

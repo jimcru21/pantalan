@@ -37,6 +37,10 @@ type Deployer struct {
 
 	mu       sync.Mutex
 	appLocks map[string]*sync.Mutex
+	// starting is read-locked while Start records a Deployment and
+	// locked while DeleteApp runs, so no Deployment starts on an App
+	// that is being deleted.
+	starting sync.RWMutex
 }
 
 func NewDeployer(deps DeployerDeps) *Deployer {
@@ -46,6 +50,8 @@ func NewDeployer(deps DeployerDeps) *Deployer {
 // Start records a queued deployment of ref (the app's branch when empty) and
 // hands it to the scheduler.
 func (d *Deployer) Start(ctx context.Context, appID, ref string) (domain.Deployment, error) {
+	d.starting.RLock()
+	defer d.starting.RUnlock()
 	app, err := d.deps.Apps.GetApp(ctx, appID)
 	if err != nil {
 		return domain.Deployment{}, err
@@ -122,7 +128,7 @@ func (d *Deployer) run(ctx context.Context, app domain.App, dep *domain.Deployme
 		return fmt.Errorf("fetch source: %w", err)
 	}
 	dep.Commit = commit
-	dep.Image = fmt.Sprintf("pantalan/%s:%s", app.ID, dep.ID)
+	dep.Image = imageRepository(app.ID) + ":" + dep.ID
 
 	fmt.Fprintf(logs, "==> building %s (%s) with %s\n", dep.Image, commit, app.BuildType)
 	if err := builder.Build(ctx, BuildRequest{Dir: dir, Image: dep.Image, Logs: logs}); err != nil {
@@ -295,6 +301,12 @@ func (d *Deployer) buildDir(deploymentID string) string {
 // never recorded.
 func containerName(appID, deploymentID string) string {
 	return fmt.Sprintf("pantalan-%s-%s", appID, deploymentID)
+}
+
+// imageRepository is the Docker repository of an App's images, one tag
+// per Deployment.
+func imageRepository(appID string) string {
+	return "pantalan/" + appID
 }
 
 func (d *Deployer) logPath(deploymentID string) string {

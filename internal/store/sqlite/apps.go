@@ -76,6 +76,25 @@ func (s *Store) SetAppEnv(ctx context.Context, id string, env map[string]string)
 	return nil
 }
 
+// DeleteApp deletes the App with ID id and its Deployments, at once.
+func (s *Store) DeleteApp(ctx context.Context, id string) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM deployments WHERE app_id = ?`, id); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `DELETE FROM apps WHERE id = ?`, id)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return fmt.Errorf("app %s: %w", id, domain.ErrNotFound)
+		}
+		return nil
+	})
+}
+
 func marshalEnv(env map[string]string) (string, error) {
 	if len(env) == 0 {
 		return "{}", nil // json.Marshal writes null for a nil map
