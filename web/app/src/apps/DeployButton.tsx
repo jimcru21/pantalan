@@ -16,7 +16,7 @@ export function DeployButton({ appID }: { appID: string }) {
       )}
       <button
         type="button"
-        onClick={() => deploy.mutate()}
+        onClick={() => deploy.mutate({})}
         className="cursor-pointer rounded-md bg-primary px-3 py-[5px] font-semibold text-primary-foreground"
       >
         Deploy

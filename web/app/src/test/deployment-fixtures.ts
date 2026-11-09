@@ -5,7 +5,7 @@ import { anApp } from "./fixtures";
 import { json, type Api } from "./network";
 
 export type DeploymentsServer = {
-  /** The handlers: GET the App, GET/POST its Deployments, GET one Deployment. */
+  /** The handlers: GET the App, GET/POST its Deployments, GET and redeploy one Deployment. */
   api: Api;
   /** The App's Deployments, oldest first (the order they were deployed). */
   deployments: Deployment[];
@@ -37,28 +37,47 @@ export function deploymentsServer(
     [`POST ${base}/deployments`]: async (req) => {
       const text = await req.text();
       const ref = (text && (JSON.parse(text) as { ref?: string }).ref) || app.branch;
-      deploys++;
-      const dep: Deployment = {
-        id: `dep-${deploys}`,
-        app_id: app.id,
-        ref,
-        commit: "",
-        image: "",
-        status: "queued",
-        created_at: new Date(Date.UTC(2026, 10, 9, 12, 0, deploys)).toISOString(),
-      };
-      deployments.push(dep);
-      addRead(dep.id);
-      await held.shift();
-      return json<Deployment>(dep, { status: 202 });
+      return deploy(ref);
     },
   };
   for (const dep of existing) addRead(dep.id);
 
+  async function deploy(ref: string) {
+    deploys++;
+    const dep: Deployment = {
+      id: `dep-${deploys}`,
+      app_id: app.id,
+      ref,
+      commit: "",
+      image: "",
+      status: "queued",
+      created_at: new Date(Date.UTC(2026, 10, 9, 12, 0, deploys)).toISOString(),
+    };
+    deployments.push(dep);
+    addRead(dep.id);
+    await held.shift();
+    return json<Deployment>(dep, { status: 202 });
+  }
+
+  // Reading a Deployment, and redeploying its commit (refused, as the
+  // server does, when it never resolved one).
   function addRead(id: string) {
+    const find = () => deployments.find((d) => d.id === id);
     api[`GET ${base}/deployments/${id}`] = () => {
-      const dep = deployments.find((d) => d.id === id);
+      const dep = find();
       return dep ? json<Deployment>(dep) : json({ error: "not found" }, { status: 404 });
+    };
+    api[`POST ${base}/deployments/${id}/redeploy`] = () => {
+      const dep = find();
+      if (!dep) return json({ error: "not found" }, { status: 404 });
+      if (!dep.commit)
+        return json(
+          {
+            error: `conflict: Deployment ${id} never resolved a commit, so there is no commit to redeploy`,
+          },
+          { status: 409 },
+        );
+      return deploy(dep.commit);
     };
   }
 
