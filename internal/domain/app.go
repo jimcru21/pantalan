@@ -26,14 +26,16 @@ const (
 
 // App is a deployable service: one git repository served on one domain.
 type App struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	RepoURL   string            `json:"repo_url"`
-	Branch    string            `json:"branch"`
-	BuildType BuildType         `json:"build_type"`
-	Domain    string            `json:"domain"`
-	Port      int               `json:"port"` // port the app listens on inside its container
-	Env       map[string]string `json:"env,omitempty"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	RepoURL   string    `json:"repo_url"`
+	Branch    string    `json:"branch"`
+	BuildType BuildType `json:"build_type"`
+	Domain    string    `json:"domain"`
+	Port      int       `json:"port"` // port the app listens on inside its container
+	// Env is never written as JSON: env values may be secrets, and only
+	// the env endpoint, which reads them as dotenv text, hands them out.
+	Env       map[string]string `json:"-"`
 	CreatedAt time.Time         `json:"created_at"`
 }
 
@@ -53,10 +55,8 @@ func (a App) Validate() error {
 	case a.Port < 1 || a.Port > 65535:
 		return InvalidField("port", "port must be between 1 and 65535")
 	}
-	for k := range a.Env {
-		if k == "" || strings.HasPrefix(k, "-") || strings.Contains(k, "=") {
-			return InvalidField("env", fmt.Sprintf("env name %q is invalid", k))
-		}
+	if err := ValidateEnv(a.Env); err != nil {
+		return err
 	}
 	switch a.BuildType {
 	case BuildDockerfile, BuildNixpacks:

@@ -1,6 +1,7 @@
 // A stubbed server for one App's Deployments: deploy, list, read one, and
 // a hand on each Deployment's status so a test can move it along.
-import type { App, Deployment, DeploymentStatus } from "@/api/generated/domain";
+import type { Deployment, DeploymentStatus } from "@/api/generated/domain";
+import type { App } from "@/api/generated/httpapi";
 import { anApp } from "./fixtures";
 import { json, type Api } from "./network";
 

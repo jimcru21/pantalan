@@ -2,8 +2,8 @@
 // queries. Apps are addressed by ID: names aren't unique.
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, request } from "@/api/client";
-import type { App, Deployment } from "@/api/generated/domain";
-import type { AppListItem } from "@/api/generated/httpapi";
+import type { Deployment } from "@/api/generated/domain";
+import type { App, AppListItem } from "@/api/generated/httpapi";
 
 /** Query keys, so mutations can invalidate what they change. */
 export const appKeys = {

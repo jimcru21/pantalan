@@ -4,8 +4,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { request } from "@/api/client";
 import { appKeys } from "@/api/apps";
-import type { App } from "@/api/generated/domain";
-import type { AppSettings, CreateAppRequest } from "@/api/generated/httpapi";
+import type { App, AppSettings, CreateAppRequest } from "@/api/generated/httpapi";
 
 /** POST /api/v1/apps. Resolves to the new App, already in the cache. */
 export function useCreateApp() {

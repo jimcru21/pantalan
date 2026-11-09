@@ -32,7 +32,6 @@ export interface App {
   build_type: BuildType;
   domain: string;
   port: number /* int */; // port the app listens on inside its container
-  env?: { [key: string]: string};
   created_at: string /* RFC 3339 */;
 }
 
