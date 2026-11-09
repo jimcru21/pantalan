@@ -21,8 +21,8 @@ Inside, the code follows ports & adapters (hexagonal):
              │  store/sqlite  source(git)  build  runtime/docker  health │
              │  proxy (adapters: each implements one service/ports.go    │
              │  interface)                                               │
-             └──► nodeinfo (read-only Node information, through the      │
-                  dashboard's own Host, Docker and Events interfaces)    │
+             └──► nodeinfo (read-only Node information, through httpapi's│
+                  and the dashboard's own Host, Docker, Events interfaces│
                  └───────────────────────────────────────────────────────┘
 ```
 
@@ -32,15 +32,17 @@ everything. This keeps the deploy pipeline testable with fakes
 (`service/deployer_test.go`) and lets each adapter be replaced on its own.
 
 One exception, on purpose: the Node overview's reads skip the service
-layer. `internal/dashboard` declares the small interfaces it reads through
-(`Host`, `Docker`, `Events`) and imports `internal/nodeinfo` for their
-value types (`Snapshot`, `DockerSummary`, `EventLog`, ...); `cmd/pantalan`
-wires the `nodeinfo` implementations in, and the dashboard never builds
-one. There is no use case between the two: no rule, no state and no
-write, only data to render, so a service port would be a pass-through
-that re-declares every `nodeinfo` type. If a read ever grows a rule (an
-alert, a decision a deployment acts on), it moves into `service` behind
-a port.
+layer. `internal/httpapi` declares the small interfaces it reads through
+(`NodeHost`, `NodeDocker`, `NodeEvents`) and imports `internal/nodeinfo`
+for their value types (`Snapshot`, `DockerSummary`, `EventLog`, ...);
+`cmd/pantalan` wires the `nodeinfo` implementations in, and `httpapi`
+never builds one. Until the SPA replaces the server-rendered Dashboard,
+`internal/dashboard` keeps its own copy of these interfaces (`Host`,
+`Docker`, `Events`) for its pages. There is no use case between the two:
+no rule, no state and no write, only data to render, so a service port
+would be a pass-through that re-declares every `nodeinfo` type. If a
+read ever grows a rule (an alert, a decision a deployment acts on), it
+moves into `service` behind a port.
 
 ## Deploy pipeline
 
@@ -239,6 +241,29 @@ The page:
 - A fragment request without a live session gets 401 with
   `HX-Redirect: /login`, which htmx turns into a full navigation.
 
+The same Node overview is JSON on `/api/v1` (either credential), for the
+SPA and for automation, with raw values (bytes, ratios where 0.25 is
+25 %, counts, RFC 3339 times) that the browser formats. The status level
+and its reasons are still decided in Go, by the rules above. The wire
+types are in `internal/httpapi/node_types.go`.
+
+- `GET /api/v1/node`: the top bar and the stat band: `ip`, `arch`,
+  `status` (`level` `ok`, `warn`, `down` or `off` before the first host
+  reading, and `reasons`), `host` (missing until the sampler has a
+  reading: hostname, OS, uptime, load, CPU and memory with the sampler's
+  ring as `history`, and the disks), `host_error`, and `docker`
+  (`reachable`, or the `error`, with the version and container counts).
+  It answers while Docker is down.
+- `GET /api/v1/node/containers`, `/images` and `/docker`: one per tab.
+  While Docker is unreachable they answer 503 with
+  `{"error": "Docker unreachable: …"}`. The Docker tab's `system/df` is
+  shared between requests for 60 s after Docker computed it, by the
+  handler's clock.
+- `GET /api/v1/node/events`: the event ring, newest first, each event
+  with `gap_before` where earlier events may be missing, and
+  `stream_error` while the stream is down. It answers while Docker is
+  down.
+
 ## Installer
 
 `deploy/install.sh` is a POSIX `sh` script (`set -eu`, ShellCheck-clean,
@@ -317,7 +342,7 @@ uploads and publishes last.
 | `cmd/pantalan` | Entrypoint, config and dependency wiring |
 | `internal/domain` | Entities (`App`, `Deployment`, `Admin`), validation, sentinel errors |
 | `internal/service` | Use cases (`AppService`, `AdminService`, `Deployer`) and the port interfaces; `AdminService` owns every rule about the Admin, for both the Dashboard and `pantalan admin` (`admin show` only reads the store) |
-| `internal/httpapi` | REST API (Admin Token), GitHub webhook, `/healthz`; mounts the Dashboard at `/` |
+| `internal/httpapi` | REST API (Admin Token or session cookie), sign-in, the Node overview's JSON, GitHub webhook, `/healthz`; mounts the Dashboard at `/` |
 | `internal/dashtls` | Dashboard certificate (generate, load, renew) and the listener that redirects plain HTTP |
 | `internal/password` | Argon2id hashing of the Admin password into a PHC string |
 | `internal/store/sqlite` | App and deployment repositories and the Admin's credentials (Admin and sessions) in SQLite, plus the schema migrations |

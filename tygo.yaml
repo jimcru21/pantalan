@@ -12,6 +12,11 @@ packages:
     type_mappings:
       time.Time: string /* RFC 3339 */
   - path: github.com/pantalan/pantalan/internal/httpapi
+    output_path: web/app/src/api/generated/node.ts
+    include_files:
+      - node_types.go
+    preserve_comments: types
+  - path: github.com/pantalan/pantalan/internal/httpapi
     output_path: web/app/src/api/generated/httpapi.ts
     include_files:
       - sessions.go

@@ -7,25 +7,39 @@ package httpapi
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/pantalan/pantalan/internal/service"
 )
 
 type Deps struct {
-	Apps          *service.AppService
-	Deployer      *service.Deployer
-	Sessions      Sessions // signs in and out, and checks the session cookie on /api/v1
-	Hostname      string   // the Node's, for the sign-in screen
+	Apps     *service.AppService
+	Deployer *service.Deployer
+	Sessions Sessions // signs in and out, and checks the session cookie on /api/v1
+	Hostname string   // the Node's, for the sign-in screen
+	// Host, Docker and Events are what the Node overview reads; nil
+	// shows that source as unavailable.
+	Host   NodeHost
+	Docker NodeDocker
+	Events NodeEvents
+	// Now is the clock disk usage is shared by; nil means time.Now.
+	Now           func() time.Time
 	AdminToken    string
 	WebhookSecret string
 	Dashboard     http.Handler // everything outside /api, /webhooks and /healthz
 	Log           *slog.Logger
 }
 
-type handler struct{ deps Deps }
+type handler struct {
+	deps      Deps
+	diskUsage sharedDiskUsage
+}
 
 func NewHandler(deps Deps) http.Handler {
-	h := &handler{deps: deps}
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
+	h := &handler{deps: deps, diskUsage: sharedDiskUsage{now: deps.Now}}
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/apps", h.listApps)
@@ -34,6 +48,11 @@ func NewHandler(deps Deps) http.Handler {
 	api.HandleFunc("GET /api/v1/apps/{id}/deployments", h.listDeployments)
 	api.HandleFunc("POST /api/v1/apps/{id}/deployments", h.deploy)
 	api.HandleFunc("GET /api/v1/deployments/{id}/logs", h.deploymentLogs)
+	api.HandleFunc("GET /api/v1/node", h.node)
+	api.HandleFunc("GET /api/v1/node/containers", h.nodeContainers)
+	api.HandleFunc("GET /api/v1/node/images", h.nodeImages)
+	api.HandleFunc("GET /api/v1/node/docker", h.nodeDocker)
+	api.HandleFunc("GET /api/v1/node/events", h.nodeEvents)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
