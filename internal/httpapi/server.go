@@ -23,7 +23,13 @@ type Deps struct {
 	Docker NodeDocker
 	Events NodeEvents
 	// Now is the clock disk usage is shared by; nil means time.Now.
-	Now           func() time.Time
+	Now func() time.Time
+	// After times an open stream's session re-checks; nil means
+	// time.After.
+	After func(time.Duration) <-chan time.Time
+	// Stopping closes when the service shuts down, which ends every open
+	// stream (the browser reconnects to the next run); nil never closes.
+	Stopping      <-chan struct{}
 	AdminToken    string
 	WebhookSecret string
 	Dashboard     http.Handler // everything outside /api, /webhooks and /healthz
@@ -39,6 +45,9 @@ func NewHandler(deps Deps) http.Handler {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
+	if deps.After == nil {
+		deps.After = time.After
+	}
 	h := &handler{deps: deps, diskUsage: sharedDiskUsage{now: deps.Now}}
 
 	api := http.NewServeMux()
@@ -50,6 +59,8 @@ func NewHandler(deps Deps) http.Handler {
 	api.HandleFunc("POST /api/v1/apps/{id}/deployments", h.deploy)
 	api.HandleFunc("GET /api/v1/apps/{id}/deployments/{deploymentID}", h.getDeployment)
 	api.HandleFunc("POST /api/v1/apps/{id}/deployments/{deploymentID}/redeploy", h.redeploy)
+	api.HandleFunc("GET /api/v1/apps/{id}/deployments/{deploymentID}/log", h.deploymentLog)
+	api.HandleFunc("GET /api/v1/apps/{id}/deployments/{deploymentID}/log/stream", h.streamDeploymentLog)
 	api.HandleFunc("GET /api/v1/deployments/{id}/logs", h.deploymentLogs)
 	api.HandleFunc("GET /api/v1/node", h.node)
 	api.HandleFunc("GET /api/v1/node/containers", h.nodeContainers)

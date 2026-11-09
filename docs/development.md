@@ -268,7 +268,8 @@ curl -sk -X POST $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN
 
 # Watch status and logs
 curl -sk $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN"
-curl -sk $API/deployments/<deployment-id>/logs -H "Authorization: Bearer $TOKEN"
+curl -sk $API/apps/<app-id>/deployments/<deployment-id>/log -H "Authorization: Bearer $TOKEN"
+curl -skN $API/apps/<app-id>/deployments/<deployment-id>/log/stream -H "Authorization: Bearer $TOKEN"
 
 # Hit the app through the proxy
 curl -s -H "Host: hello.localhost" localhost:8080

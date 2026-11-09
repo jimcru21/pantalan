@@ -168,6 +168,7 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, wo
 		Docker:        dockerAPI,
 		Events:        events,
 		Now:           world.now,
+		Stopping:      ctx.Done(),
 		AdminToken:    cfg.AdminToken,
 		WebhookSecret: cfg.WebhookSecret,
 		Dashboard:     dash,
