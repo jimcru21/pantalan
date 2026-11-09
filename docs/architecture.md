@@ -96,6 +96,10 @@ host there, the Node's bare IP included, gets a 404.
 
 ## Dashboard
 
+> [ADR 0003](adr/0003-react-spa-dashboard.md) replaces this server-rendered
+> Dashboard with a React SPA over `/api/v1`. This section describes the code
+> as it stands until that migration lands, and will be rewritten with it.
+
 The Dashboard is server-rendered ([ADR 0002](adr/0002-server-rendered-dashboard-with-htmx.md)):
 `internal/dashboard` renders Go `html/template` files from `web/templates`
 and serves `web/static` (CSS, `app.js` and htmx 2.0.11, vendored as one
