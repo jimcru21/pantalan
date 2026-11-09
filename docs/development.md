@@ -185,7 +185,12 @@ make smoke          # on this machine: make build, then npm run smoke in web/app
 `npx playwright install --with-deps chromium` in `web/app`. Without them,
 use `make smoke-docker`, which runs the suite in
 `mcr.microsoft.com/playwright` at the version in `package.json`, as your
-own user. With the binary already built, `npm run smoke -- --headed` (or
+own user. One test deploys a real App (a `busybox` web server committed to
+a throwaway git repo) and watches its Deployment Log stream to `done`, so
+the suite needs `git` and Docker: `make smoke-docker` hands the container
+this machine's Docker socket and `docker` CLI and runs it on the host
+network. The test removes the App's container and image afterwards. Off CI
+it is skipped when `docker` doesn't answer. With the binary already built, `npm run smoke -- --headed` (or
 `--ui`, `-g <test name>`) in `web/app` runs it again. `PANTALAN_BIN` points
 it at another binary. A failed test keeps a trace in `web/app/test-results`:
 open it with `npx playwright show-trace <trace.zip>`.
@@ -268,7 +273,8 @@ curl -sk -X POST $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN
 
 # Watch status and logs
 curl -sk $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN"
-curl -sk $API/deployments/<deployment-id>/logs -H "Authorization: Bearer $TOKEN"
+curl -sk $API/apps/<app-id>/deployments/<deployment-id>/log -H "Authorization: Bearer $TOKEN"
+curl -skN $API/apps/<app-id>/deployments/<deployment-id>/log/stream -H "Authorization: Bearer $TOKEN"
 
 # Hit the app through the proxy
 curl -s -H "Host: hello.localhost" localhost:8080

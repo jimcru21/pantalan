@@ -294,30 +294,49 @@ func (s *AdminService) acquireHashSlot(ctx context.Context) (release func(), err
 // Authenticate checks that token names a live session and counts the
 // request as activity. It fails with ErrNoSession otherwise.
 func (s *AdminService) Authenticate(ctx context.Context, token string) error {
-	if token == "" {
-		return ErrNoSession
-	}
-	hash := tokenHash(token)
-	sess, err := s.creds.GetSession(ctx, hash)
-	if errors.Is(err, domain.ErrNotFound) {
-		return ErrNoSession
-	}
+	sess, now, err := s.liveSession(ctx, token)
 	if err != nil {
 		return err
 	}
-	now := s.now().UTC()
-	if sess.ExpiredAt(now) {
-		if err := s.creds.EndSession(ctx, hash); err != nil {
-			return err
-		}
-		return ErrNoSession
-	}
 	if now.Sub(sess.LastSeenAt) >= touchEvery {
-		if err := s.creds.TouchSession(ctx, hash, now); err != nil {
+		if err := s.creds.TouchSession(ctx, sess.TokenHash, now); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// CheckSession is Authenticate without counting as activity: an open
+// stream re-checks its session with it, and a stream must not keep its
+// session alive. It fails with ErrNoSession once the session has ended.
+func (s *AdminService) CheckSession(ctx context.Context, token string) error {
+	_, _, err := s.liveSession(ctx, token)
+	return err
+}
+
+// liveSession returns the live session token names and the time it was
+// checked at, ending it if it has just expired.
+func (s *AdminService) liveSession(ctx context.Context, token string) (domain.Session, time.Time, error) {
+	if token == "" {
+		return domain.Session{}, time.Time{}, ErrNoSession
+	}
+	hash := tokenHash(token)
+	sess, err := s.creds.GetSession(ctx, hash)
+	if errors.Is(err, domain.ErrNotFound) {
+		return domain.Session{}, time.Time{}, ErrNoSession
+	}
+	if err != nil {
+		return domain.Session{}, time.Time{}, err
+	}
+	now := s.now().UTC()
+	if sess.ExpiredAt(now) {
+		if err := s.creds.EndSession(ctx, hash); err != nil {
+			return domain.Session{}, time.Time{}, err
+		}
+		return domain.Session{}, time.Time{}, ErrNoSession
+	}
+	sess.TokenHash = hash
+	return sess, now, nil
 }
 
 // PruneSessions ends every session that has expired by now and returns

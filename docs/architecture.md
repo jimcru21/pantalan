@@ -185,6 +185,31 @@ Auth surfaces on the one listener:
   next successful sign-in; a sign-in that finds another sign-in's rehash
   in its place checks the password against it once more, rather than
   taking it for a reset.
+- Log streams (`internal/httpapi/stream.go`) are Server-Sent Events over
+  either credential. A stream opened with the cookie re-checks its
+  session every 60 s with `AdminService.CheckSession`, which, unlike
+  `Authenticate`, doesn't count as activity, so an open stream never keeps
+  a session alive; it ends within a minute of a sign-out, an expiry or a
+  reset-password, and the browser's reconnect then gets 401. Streams also
+  end when the service shuts down. The dashboard listener has no write
+  timeout, so a long stream is fine.
+
+### Deployment Log
+
+A Deployment's output, from the fetch to go-live or failure, is a file per
+Deployment under `logs/` in the data dir, written by the Deployer.
+`GET /api/v1/apps/{id}/deployments/{deployment-id}/log` serves all of it as
+plain text; `…/log/stream` streams it:
+
+- each event is a chunk of whole lines, and its `id` is the byte offset in
+  the file after it, so a reconnect's `Last-Event-ID` resumes exactly;
+- a first connect replays the last 1 MiB from a line start, after an
+  `omitted` event (data and id: the bytes left out) when it skipped any;
+- it follows the file (polled every 250 ms) while the Deployment runs,
+  then sends `done` (data: the final status) and ends.
+
+ANSI escape codes are stripped and `\r` line ends become `\n` on the
+server, in both forms.
 
 ### Node overview
 
