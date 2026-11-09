@@ -1,0 +1,15 @@
+# The Dashboard's npm dependencies: one grouped pull request a week. See
+# "Frontend dependencies" in docs/development.md for the policy on adding
+# one.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /web/app
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ["*"]
+    commit-message:
+      prefix: build
+      include: scope
