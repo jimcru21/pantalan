@@ -46,6 +46,7 @@ func NewHandler(deps Deps) http.Handler {
 	api.HandleFunc("POST /api/v1/apps", h.createApp)
 	api.HandleFunc("GET /api/v1/apps/{id}", h.getApp)
 	api.HandleFunc("PUT /api/v1/apps/{id}", h.updateApp)
+	api.HandleFunc("DELETE /api/v1/apps/{id}", h.deleteApp)
 	api.HandleFunc("GET /api/v1/apps/{id}/env", h.getEnv)
 	api.HandleFunc("PUT /api/v1/apps/{id}/env", h.putEnv)
 	api.HandleFunc("GET /api/v1/apps/{id}/deployments", h.listDeployments)

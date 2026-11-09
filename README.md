@@ -207,6 +207,7 @@ All under `/api/v1`, with `Authorization: Bearer <Admin Token>`.
 | `POST` | `/apps` | Create an app |
 | `GET` | `/apps/{id}` | Get one app |
 | `PUT` | `/apps/{id}` | Change an app's settings (`name`, `repo_url`, `branch`, `build_type`, `domain`, `port`; env vars, ID and creation time stay). Takes effect on the next Deployment; it doesn't start one |
+| `DELETE` | `/apps/{id}` | Delete an app: its container, images, route, Deployment Logs and Deployments go too (`204`; `409` while a Deployment of it is queued, building or starting) |
 | `GET` | `/apps/{id}/env` | An app's env vars, as dotenv text: `{"env": "KEY=value\n..."}`, sorted by name. The only response with env values |
 | `PUT` | `/apps/{id}/env` | Replace an app's env vars (`{"env": "<dotenv text>"}`; blank and `#` lines ignored, a bad line refused with its line number). Takes effect on the next Deployment; it doesn't start one |
 | `GET` | `/apps/{id}/deployments` | List an app's Deployments |

@@ -46,6 +46,7 @@ type seam struct {
 	host      *fakeHost
 	docker    *fakeDocker
 	events    *fakeEvents
+	dataDir   string // the Deployer's: Deployment Logs and build checkouts
 }
 
 // The built frontend the seam's Dashboard serves: what `vite build`
@@ -98,12 +99,13 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		hasher:    &fakeHasher{},
 		hashWait:  newFakeTimer(),
 		runtime:   newFakeRuntime(),
-		builder:   &fakeBuilder{},
+		dataDir:   t.TempDir(),
 		router:    newFakeRouter(),
 		scheduler: &fakeScheduler{},
 		host:      &fakeHost{},
 		events:    &fakeEvents{},
 	}
+	s.builder = &fakeBuilder{docker: s.runtime}
 	s.docker = &fakeDocker{clock: s.clock}
 	s.admins = service.NewAdminService(service.AdminDeps{
 		Credentials: store,
@@ -121,7 +123,7 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		Health:      fakeHealth{},
 		Router:      s.router,
 		Scheduler:   s.scheduler,
-		DataDir:     t.TempDir(),
+		DataDir:     s.dataDir,
 		Log:         log,
 	})
 	dash := dashboard.New(dashboard.Deps{
