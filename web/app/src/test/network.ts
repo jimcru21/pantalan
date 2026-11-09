@@ -35,8 +35,12 @@ export function takeUnhandled(): string[] {
   return unhandled.splice(0);
 }
 
-/** Replaces fetch with the stubbed API and returns every call it served. */
-export function stubFetch(api: Api): ApiCall[] {
+/**
+ * Replaces fetch with the stubbed API and returns every call it served.
+ * `defaults` answers what `api` has no handler for. Both are read at each
+ * request, so a handler added later (a stateful fixture) is found.
+ */
+export function stubFetch(api: Api, defaults: Api = {}): ApiCall[] {
   const calls: ApiCall[] = [];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(
@@ -46,7 +50,7 @@ export function stubFetch(api: Api): ApiCall[] {
     const url = new URL(request.url);
     const key = `${request.method} ${url.pathname}`;
     calls.push({ method: request.method, path: url.pathname + url.search, request });
-    const handler = api[key];
+    const handler = api[key] ?? defaults[key];
     if (!handler) {
       unhandled.push(key);
       return status(599);

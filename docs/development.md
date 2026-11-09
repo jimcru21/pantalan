@@ -164,8 +164,10 @@ tests in watch mode.
 **Tests** render the whole app at a route with Vitest and React Testing
 Library, and stub only `fetch` and `EventSource`
 (`src/test/render.tsx` and `src/test/network.ts`). No hook or component is
-mocked. A request no test handler answers fails the test. Fixtures are
-typed by the generated API types (`src/test/fixtures.ts`).
+mocked. A request no test handler answers fails the test, except the
+shell's session check (`GET /api/v1/sessions/current`), which `renderApp`
+answers 204 unless the test's handlers say otherwise. Fixtures are typed
+by the generated API types (`src/test/fixtures.ts`).
 
 **Smoke tests** in `web/app/e2e` drive Chromium with
 [Playwright](https://playwright.dev) against the binary built with its

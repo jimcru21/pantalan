@@ -173,7 +173,11 @@ Auth surfaces on the one listener:
   no expiry: the server ends a session after 1 h idle or 24 h in all.
   `last_seen_at` is rewritten at most once a minute. Nothing is cached in
   memory, so `admin reset-password` (which deletes every session) signs the
-  browser out on its next request. At most 20 sessions exist: a new
+  browser out on its next request. Every page behind sign-in checks
+  `GET /api/v1/sessions/current` every 30 s while its tab is shown, and
+  again as soon as a hidden tab is shown, so an open page goes to sign-in
+  within a minute of a reset even when it polls nothing (the env editor, a
+  finished Deployment). The check doesn't extend the session. At most 20 sessions exist: a new
   sign-in evicts the oldest. Expired sessions are pruned at startup and on
   the daily maintenance tick that also checks TLS renewal.
 - Sign-in throttling: one failure counter on the `admin` row, whatever

@@ -17,6 +17,7 @@ sudo pantalan admin reset-password            # prints a new password
 
 `reset-password` also signs out every Dashboard session and clears the
 sign-in throttling, in one step, and works while the service is running.
+An open Dashboard tab goes to the sign-in page within a minute.
 
 Sign in at `https://<node-ip>:8443` with the username and the printed
 password. A session lasts while you use it: it ends after an hour without a
