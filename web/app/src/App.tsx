@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { loginPath } from "@/lib/return-to";
 import { AppPage } from "@/pages/AppPage";
 import { AppsPage } from "@/pages/AppsPage";
+import { DeploymentPage } from "@/pages/DeploymentPage";
 import { OverviewPage } from "@/pages/OverviewPage";
 import { SignInPage } from "@/pages/SignInPage";
 import { NotFoundPage } from "@/shell/Page";
@@ -21,6 +22,7 @@ const routes = [
       { index: true, element: <OverviewPage /> },
       { path: "apps", element: <AppsPage /> },
       { path: "apps/:appId", element: <AppPage /> },
+      { path: "apps/:appId/deployments/:deploymentId", element: <DeploymentPage /> },
       {
         path: "*",
         element: (

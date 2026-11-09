@@ -197,6 +197,7 @@ All under `/api/v1`, with `Authorization: Bearer <Admin Token>`.
 | `GET` | `/apps/{id}` | Get one app |
 | `GET` | `/apps/{id}/deployments` | List an app's Deployments |
 | `POST` | `/apps/{id}/deployments` | Deploy (body optional: `{"ref": "..."}`) |
+| `GET` | `/apps/{id}/deployments/{deployment-id}` | One Deployment: its ref, commit, image, timing, status and error |
 | `GET` | `/deployments/{id}/logs` | A Deployment's log |
 
 `GET /healthz` needs no credentials and answers `200` when the service is up.

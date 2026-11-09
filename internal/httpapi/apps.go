@@ -79,6 +79,17 @@ func (h *handler) listDeployments(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, deps)
 }
 
+// getDeployment reads one Deployment under its App, so its page and its
+// status polling need nothing but the address.
+func (h *handler) getDeployment(w http.ResponseWriter, r *http.Request) {
+	dep, err := h.deps.Deployer.Get(r.Context(), r.PathValue("id"), r.PathValue("deploymentID"))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	h.writeJSON(w, http.StatusOK, dep)
+}
+
 // deploy queues a deployment. The body is optional: {"ref": "<branch|tag|sha>"}.
 func (h *handler) deploy(w http.ResponseWriter, r *http.Request) {
 	var req struct {

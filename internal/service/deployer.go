@@ -174,6 +174,22 @@ func (d *Deployer) List(ctx context.Context, appID string) ([]domain.Deployment,
 	return d.deps.Deployments.ListDeployments(ctx, appID)
 }
 
+// Get returns one of an App's Deployments. A Deployment of another App is
+// not found, so a Deployment is only ever addressed under its own App.
+func (d *Deployer) Get(ctx context.Context, appID, deploymentID string) (domain.Deployment, error) {
+	if _, err := d.deps.Apps.GetApp(ctx, appID); err != nil {
+		return domain.Deployment{}, err
+	}
+	dep, err := d.deps.Deployments.GetDeployment(ctx, deploymentID)
+	if err != nil {
+		return domain.Deployment{}, err
+	}
+	if dep.AppID != appID {
+		return domain.Deployment{}, fmt.Errorf("deployment %s of app %s: %w", deploymentID, appID, domain.ErrNotFound)
+	}
+	return dep, nil
+}
+
 // Latest returns every App's newest Deployment, by App ID. An App with no
 // Deployments has no entry.
 func (d *Deployer) Latest(ctx context.Context) (map[string]domain.Deployment, error) {

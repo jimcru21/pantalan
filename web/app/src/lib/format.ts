@@ -116,3 +116,17 @@ const utcDateTime = new Intl.DateTimeFormat(undefined, {
 export function formatUTCDateTime(rfc3339: string): string {
   return utcDateTime.format(new Date(rfc3339));
 }
+
+const shortDuration = new Intl.DurationFormat(undefined, { style: "narrow" });
+
+/** A short span in minutes and seconds, leaving out zero units: "1m 30s", "4s". */
+export function formatDuration(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  return (
+    shortDuration.format({
+      hours: Math.floor(s / 3600),
+      minutes: Math.floor(s / 60) % 60,
+      seconds: s % 60,
+    }) || "0s"
+  );
+}
