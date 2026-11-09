@@ -13,11 +13,21 @@ import (
 	"github.com/pantalan/pantalan/internal/service"
 )
 
-// Sessions checks Dashboard sessions; service.AdminService provides it.
+// Sessions signs the Admin in and out and checks their sessions;
+// service.AdminService provides it and keeps every rule.
 type Sessions interface {
+	AdminExists(ctx context.Context) (bool, error)
+	// SignIn returns a new session token, or why it refused one:
+	// service.ErrNoAdmin, service.ErrBadCredentials, or a
+	// *service.RetryLaterError carrying its own wait whose reason is
+	// service.ErrThrottled or service.ErrBusy. Any other error is the
+	// server's own failure.
+	SignIn(ctx context.Context, username, password string) (token string, err error)
 	// Authenticate returns service.ErrNoSession unless token names a live
 	// session, and extends it.
 	Authenticate(ctx context.Context, token string) error
+	// SignOut ends the session token names, if there is one.
+	SignOut(ctx context.Context, token string) error
 }
 
 // requireCredential lets a request through with either credential:

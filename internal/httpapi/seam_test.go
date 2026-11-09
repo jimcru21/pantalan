@@ -33,6 +33,8 @@ type seam struct {
 	client *http.Client
 
 	clock     *fakeClock
+	hasher    *fakeHasher
+	hashWait  *fakeTimer // AdminService's wait for a hash slot
 	admins    *service.AdminService
 	apps      *service.AppService
 	deployer  *service.Deployer
@@ -53,14 +55,17 @@ func newSeam(t *testing.T) *seam {
 	s := &seam{
 		t:         t,
 		clock:     newFakeClock(),
+		hasher:    &fakeHasher{},
+		hashWait:  newFakeTimer(),
 		runtime:   newFakeRuntime(),
 		router:    newFakeRouter(),
 		scheduler: &fakeScheduler{},
 	}
 	s.admins = service.NewAdminService(service.AdminDeps{
 		Credentials: store,
-		Hasher:      fakeHasher{},
+		Hasher:      s.hasher,
 		Now:         s.clock.Now,
+		After:       s.hashWait.After,
 	})
 	s.apps = service.NewAppService(store)
 	s.deployer = service.NewDeployer(service.DeployerDeps{
@@ -91,6 +96,7 @@ func newSeam(t *testing.T) *seam {
 		Apps:          s.apps,
 		Deployer:      s.deployer,
 		Sessions:      s.admins,
+		Hostname:      "node",
 		AdminToken:    adminToken,
 		WebhookSecret: "test-secret",
 		Dashboard:     dash,

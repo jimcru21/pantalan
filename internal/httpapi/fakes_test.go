@@ -41,13 +41,25 @@ func (c *fakeClock) advance(d time.Duration) {
 
 // fakeHasher keeps the password in the "hash", so signing in costs nothing.
 // The real Argon2id hasher takes 64 MiB and most of a second per call.
-type fakeHasher struct{}
+// hold makes every Verify wait, so a test can keep the hash slots busy.
+type fakeHasher struct {
+	mu      sync.Mutex
+	release chan struct{} // while non-nil, Verify waits for it to close
+	waiting chan struct{} // gets a value as each held Verify starts waiting
+}
 
 const fakeHashPrefix = "fake$"
 
-func (fakeHasher) Hash(pw string) (string, error) { return fakeHashPrefix + pw, nil }
+func (*fakeHasher) Hash(pw string) (string, error) { return fakeHashPrefix + pw, nil }
 
-func (fakeHasher) Verify(pw, hash string) (bool, error) {
+func (h *fakeHasher) Verify(pw, hash string) (bool, error) {
+	h.mu.Lock()
+	release, waiting := h.release, h.waiting
+	h.mu.Unlock()
+	if release != nil {
+		waiting <- struct{}{}
+		<-release
+	}
 	stored, ok := strings.CutPrefix(hash, fakeHashPrefix)
 	if !ok {
 		return false, errors.New("not a fake hash")
@@ -55,7 +67,43 @@ func (fakeHasher) Verify(pw, hash string) (bool, error) {
 	return stored == pw, nil
 }
 
-func (fakeHasher) NeedsRehash(string) bool { return false }
+func (*fakeHasher) NeedsRehash(string) bool { return false }
+
+// hold makes every Verify from now on wait until the returned func is
+// called. Each one sends on waiting as it starts to wait.
+func (h *fakeHasher) hold() (waiting <-chan struct{}, release func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.release, h.waiting = make(chan struct{}), make(chan struct{}, 16)
+	ch := h.release
+	return h.waiting, sync.OnceFunc(func() {
+		h.mu.Lock()
+		h.release = nil
+		h.mu.Unlock()
+		close(ch)
+	})
+}
+
+// fakeTimer is AdminService's wait for a hash slot. Its waits run out
+// only when a test calls expire, and from then on at once.
+type fakeTimer struct {
+	mu      sync.Mutex
+	expired chan time.Time
+}
+
+func newFakeTimer() *fakeTimer { return &fakeTimer{expired: make(chan time.Time)} }
+
+func (t *fakeTimer) After(time.Duration) <-chan time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.expired
+}
+
+func (t *fakeTimer) expire() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	close(t.expired)
+}
 
 // fakeSource "checks out" any ref as the commit "commit-of-<ref>".
 type fakeSource struct{}
