@@ -1,4 +1,10 @@
+---
+status: superseded by ADR-0003
+---
+
 # Server-rendered Dashboard with htmx and no build step
+
+> Superseded by [ADR 0003](0003-react-spa-dashboard.md): the Dashboard becomes a React SPA over `/api/v1`. This record stays to explain why the first Dashboard was server-rendered.
 
 The Dashboard is rendered by Go `html/template` and made live with htmx 2.x. Templates, one hand-written stylesheet, a small `app.js` and a vendored, minified htmx are embedded into the binary from `web/`, and the session-only handlers live in `internal/dashboard`. There is no Node toolchain, bundler or `package.json`. The v1 Dashboard is read-only and refreshes by polling server-rendered fragments, which is htmx's core feature. Cookies and same-origin requests already satisfy `http.CrossOriginProtection`, and keeping the frontend in Go means the binary and the repo need nothing beyond the Go toolchain.
 
