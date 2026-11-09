@@ -1,6 +1,7 @@
 // A real Deployment through the binary: git, docker build, the container's
 // health check and go-live on this machine's Docker, watched in the
-// browser as its Deployment Log streams to done. Needs `git` and `docker`
+// browser as its Deployment Log streams to done; then the live container's
+// App Log, read through the Engine API. Needs `git` and `docker`
 // (with its socket) where the binary runs; make smoke-docker hands the
 // container both.
 import { execFile } from "node:child_process";
@@ -14,10 +15,11 @@ import { expect, test } from "./fixtures";
 
 const run = promisify(execFile);
 
-// The smoke App: a web server that answers on its port, so it goes live.
+// The smoke App: a web server that answers on its port, so it goes live,
+// after a line on stdout and one on stderr for its App Log.
 const dockerfile = `FROM busybox:latest
 RUN echo "building the smoke App"
-CMD ["httpd", "-f", "-p", "8080", "-h", "/tmp"]
+CMD ["sh", "-c", "echo 'the smoke App on stdout'; echo 'the smoke App on stderr' >&2; exec httpd -f -p 8080 -h /tmp"]
 `;
 
 /** A git repository with the smoke App's Dockerfile committed on main. */
@@ -66,9 +68,15 @@ test.describe("the Deployment Log", () => {
       ]);
       const containers = ids.stdout.split("\n").filter(Boolean);
       if (containers.length) await run("docker", ["rm", "--force", ...containers]);
-      await run("docker", ["rmi", "--force", `pantalan/${deployed.app_id}:${deployed.id}`]).catch(
-        () => {}, // the build never got that far
-      );
+      // Every Deployment's image, if its build got that far.
+      const images = await run("docker", [
+        "images",
+        "--quiet",
+        "--filter",
+        `reference=pantalan/${deployed.app_id}`,
+      ]);
+      const built = [...new Set(images.stdout.split("\n").filter(Boolean))];
+      if (built.length) await run("docker", ["rmi", "--force", ...built]);
     }
     if (repo) await rm(repo, { recursive: true, force: true });
   });
@@ -110,5 +118,30 @@ test.describe("the Deployment Log", () => {
     const whole = await page.request.get(`/api/v1/apps/${app.id}/deployments/${deployed.id}/log`);
     expect(whole.headers()["content-type"]).toBe("text/plain; charset=utf-8");
     expect(await whole.text()).toContain(`==> live at ${app.domain}\n`);
+  });
+
+  test("then the App's page follows its App Log, to the next Deployment", async ({
+    page,
+    admin,
+  }) => {
+    test.skip(deployed === undefined, "the Deployment didn't go live");
+    test.setTimeout(120_000);
+    await page.goto(`/apps/${deployed?.app_id}`);
+    await page.getByLabel("Username").fill(admin.username);
+    await page.getByLabel("Password").fill(admin.password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+
+    const log = page.getByRole("log", { name: "App Log" });
+    await expect(log).toContainText("the smoke App on stdout");
+    await expect(log).toContainText("the smoke App on stderr");
+
+    // A new Deployment replaces the container the log follows.
+    await page.getByRole("button", { name: "Deploy" }).click();
+    const region = page.getByRole("region", { name: "App Log" });
+    await expect(region).toContainText("A new Deployment replaced the container", {
+      timeout: 100_000,
+    });
+    await page.getByRole("button", { name: "Follow the new Deployment" }).click();
+    await expect(log).toContainText("the smoke App on stdout");
   });
 });

@@ -15,6 +15,7 @@ import (
 type Deps struct {
 	Apps     *service.AppService
 	Deployer *service.Deployer
+	AppLogs  *service.AppLogs
 	Sessions Sessions // signs in and out, and checks the session cookie on /api/v1
 	Hostname string   // the Node's, for the sign-in screen
 	// Host, Docker and Events are what the Node overview reads; nil
@@ -64,6 +65,7 @@ func NewHandler(deps Deps) http.Handler {
 	api.HandleFunc("POST /api/v1/apps/{id}/deployments/{deploymentID}/redeploy", h.redeploy)
 	api.HandleFunc("GET /api/v1/apps/{id}/deployments/{deploymentID}/log", h.deploymentLog)
 	api.HandleFunc("GET /api/v1/apps/{id}/deployments/{deploymentID}/log/stream", h.streamDeploymentLog)
+	api.HandleFunc("GET /api/v1/apps/{id}/log/stream", h.streamAppLog)
 	api.HandleFunc("GET /api/v1/deployments/{id}/logs", h.deploymentLogs)
 	api.HandleFunc("GET /api/v1/node", h.node)
 	api.HandleFunc("GET /api/v1/node/containers", h.nodeContainers)

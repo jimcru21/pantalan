@@ -162,6 +162,7 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, wo
 	api := httpapi.NewHandler(httpapi.Deps{
 		Apps:          apps,
 		Deployer:      deployer,
+		AppLogs:       service.NewAppLogs(service.AppLogDeps{Apps: store, Deployments: store, Containers: dockerAPI}),
 		Sessions:      admins,
 		Hostname:      hostname,
 		Host:          sampler,

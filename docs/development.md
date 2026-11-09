@@ -186,7 +186,8 @@ make smoke          # on this machine: make build, then npm run smoke in web/app
 use `make smoke-docker`, which runs the suite in
 `mcr.microsoft.com/playwright` at the version in `package.json`, as your
 own user. One test deploys a real App (a `busybox` web server committed to
-a throwaway git repo) and watches its Deployment Log stream to `done`, so
+a throwaway git repo), watches its Deployment Log stream to `done` and then
+reads the live container's App Log on the App's page, so
 the suite needs `git` and Docker: `make smoke-docker` hands the container
 this machine's Docker socket and `docker` CLI and runs it on the host
 network. The test removes the App's container and image afterwards. Off CI
@@ -275,6 +276,7 @@ curl -sk -X POST $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN
 curl -sk $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN"
 curl -sk $API/apps/<app-id>/deployments/<deployment-id>/log -H "Authorization: Bearer $TOKEN"
 curl -skN $API/apps/<app-id>/deployments/<deployment-id>/log/stream -H "Authorization: Bearer $TOKEN"
+curl -skN $API/apps/<app-id>/log/stream -H "Authorization: Bearer $TOKEN"  # App Log
 
 # Hit the app through the proxy
 curl -s -H "Host: hello.localhost" localhost:8080

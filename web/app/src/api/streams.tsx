@@ -52,6 +52,7 @@ type Entry = {
   snapshot: LogStream;
   listeners: Set<() => void>;
   keepRunning: boolean;
+  events: string[];
 };
 
 /** The open streams, by URL. */
@@ -78,20 +79,43 @@ class Streams {
     return this.entries.get(url)?.snapshot;
   }
 
+  /**
+   * Follows url's stream afresh, from the server's first answer: for a
+   * stream that is done, to follow what comes next (the App Log of a new
+   * Deployment). Whoever shows the old stream shows the new one.
+   */
+  restart(url: string): void {
+    const entry = this.entries.get(url);
+    if (!entry) return;
+    entry.source.close();
+    entry.source = new EventSource(url);
+    entry.snapshot = notOpen;
+    this.listen(url, entry);
+    entry.listeners.forEach((l) => l());
+  }
+
   closeAll(): void {
     for (const [url, entry] of this.entries) this.drop(url, entry);
   }
 
   private open(url: string, { keepRunning = false, events = [] }: StreamOptions): Entry {
-    const source = new EventSource(url);
     const entry: Entry = {
-      source,
-      snapshot: { text: "", omitted: false, state: "open", events: {} },
+      source: new EventSource(url),
+      snapshot: notOpen,
       listeners: new Set(),
       keepRunning,
+      events,
     };
     this.entries.set(url, entry);
+    this.listen(url, entry);
+    return entry;
+  }
+
+  // Gathers what entry's EventSource sends into its snapshot.
+  private listen(url: string, entry: Entry): void {
+    const source = entry.source;
     const update = (change: Partial<LogStream>) => {
+      if (entry.source !== source) return; // restarted since
       entry.snapshot = { ...entry.snapshot, ...change };
       entry.listeners.forEach((l) => l());
       // Nobody is looking and nothing more will come: let it go.
@@ -104,7 +128,7 @@ class Streams {
       source.close(); // or the browser would reconnect
       update({ state: "done", done: e.data });
     });
-    for (const name of events) {
+    for (const name of entry.events) {
       source.addEventListener(name, (e) =>
         update({ events: { ...entry.snapshot.events, [name]: e.data } }),
       );
@@ -115,7 +139,6 @@ class Streams {
       // stream means the session has ended (a 401).
       if (source.readyState === EventSource.CLOSED) update({ state: "signed-out" });
     });
-    return entry;
   }
 
   private drop(url: string, entry: Entry): void {
@@ -165,4 +188,16 @@ export function useLogStream(url: string | undefined, options: StreamOptions = {
     [streams, url],
   );
   return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/**
+ * A function that follows the stream at `url` afresh (see
+ * Streams.restart), for a view that shows it with useLogStream.
+ */
+export function useRestartLogStream(url: string | undefined): () => void {
+  const streams = useContext(StreamsContext);
+  if (!streams) throw new Error("useRestartLogStream needs a <StreamsProvider>");
+  return useCallback(() => {
+    if (url) streams.restart(url);
+  }, [streams, url]);
 }

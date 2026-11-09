@@ -136,6 +136,7 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 	s.srv = httptest.NewTLSServer(httpapi.NewHandler(httpapi.Deps{
 		Apps:          s.apps,
 		Deployer:      s.deployer,
+		AppLogs:       service.NewAppLogs(service.AppLogDeps{Apps: store, Deployments: store, Containers: s.runtime}),
 		Sessions:      s.admins,
 		Hostname:      "node",
 		Host:          s.host,
