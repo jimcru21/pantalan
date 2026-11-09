@@ -1,14 +1,11 @@
 // The App Log on an App's page: what its live container prints, followed
 // live from its last 200 lines.
 import { useEffect, useRef } from "react";
+import { AppLogNoLiveDeployment, AppLogReplaced } from "@/api/generated/httpapi";
 import { useLogStream, useRestartLogStream } from "@/api/streams";
 import { buttonClass } from "@/components/form";
 import { Panel } from "@/components/panel";
 import { LogView } from "@/logs/LogView";
-
-// The done event's data: why the server ended the stream.
-const replaced = "replaced"; // a new Deployment replaced the container
-const noLiveDeployment = "no-live-deployment"; // there was nothing to follow
 
 /**
  * Follows the App Log of the App with ID `appID`. The stream closes when
@@ -25,7 +22,7 @@ export function AppLog({ appID, liveID }: { appID: string; liveID?: string }) {
   useEffect(() => {
     const wentLive = liveID !== undefined && liveID !== knownLive.current;
     knownLive.current = liveID;
-    if (wentLive && ended === noLiveDeployment) followAgain();
+    if (wentLive && ended === AppLogNoLiveDeployment) followAgain();
   }, [liveID, ended, followAgain]);
 
   return (
@@ -34,9 +31,9 @@ export function AppLog({ appID, liveID }: { appID: string; liveID?: string }) {
         stream={stream}
         label="App Log"
         end={
-          ended === noLiveDeployment ? (
+          ended === AppLogNoLiveDeployment ? (
             "No live Deployment, so nothing to follow. Deploy the App to see what it prints."
-          ) : ended === replaced ? (
+          ) : ended === AppLogReplaced ? (
             <span className="flex flex-wrap items-center gap-3">
               A new Deployment replaced the container this log was following.
               <button type="button" className={buttonClass.small} onClick={followAgain}>

@@ -16,6 +16,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { StreamDone, StreamOmitted } from "@/api/generated/httpapi";
 
 /**
  * How much text a log keeps: 1 MiB, the server's first replay. Older
@@ -123,8 +124,8 @@ class Streams {
     };
 
     source.addEventListener("message", (e) => update(append(entry.snapshot, e.data)));
-    source.addEventListener("omitted", () => update({ omitted: true }));
-    source.addEventListener("done", (e) => {
+    source.addEventListener(StreamOmitted, () => update({ omitted: true }));
+    source.addEventListener(StreamDone, (e) => {
       source.close(); // or the browser would reconnect
       update({ state: "done", done: e.data });
     });

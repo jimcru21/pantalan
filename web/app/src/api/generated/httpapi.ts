@@ -400,3 +400,38 @@ export interface SignInRequest {
   username: string;
   password: string;
 }
+
+//////////
+// source: stream_events.go
+
+/**
+ * StreamEvent names a Server-Sent Event of a log stream. Output itself
+ * comes in unnamed "message" events.
+ */
+export type StreamEvent = string;
+/**
+ * StreamOmitted comes first when a Deployment Log stream skipped the
+ * start of the log; its data is how many bytes it left out.
+ */
+export const StreamOmitted: StreamEvent = "omitted";
+/**
+ * StreamDone ends a stream for good: the browser must not reconnect.
+ * Its data is a Deployment Log's final Deployment status, or one of
+ * the StreamEnd reasons.
+ */
+export const StreamDone: StreamEvent = "done";
+/**
+ * StreamEnd is a done event's data when a stream ends for a reason other
+ * than its Deployment finishing.
+ */
+export type StreamEnd = string;
+/**
+ * AppLogReplaced: a new Deployment replaced the container the App Log
+ * was following.
+ */
+export const AppLogReplaced: StreamEnd = "replaced";
+/**
+ * AppLogNoLiveDeployment: the App has no live Deployment, so its App
+ * Log has no container to follow.
+ */
+export const AppLogNoLiveDeployment: StreamEnd = "no-live-deployment";

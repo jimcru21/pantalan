@@ -202,7 +202,10 @@ configured in `tygo.yaml`. They're committed, and CI fails when they're
 stale: after changing a response struct, or adding one to `tygo.yaml`, run
 `make types` and commit the result. Each Go package has one entry and one
 output file: tygo silently ignores a second entry for the same package, so
-add a new file to the package's `include_files` instead.
+add a new file to the package's `include_files` instead. Exported
+constants come through too: a string the SPA must match exactly, like a
+stream's event names, belongs in a Go constant the SPA imports, never
+copied by hand.
 
 ### Frontend dependencies
 

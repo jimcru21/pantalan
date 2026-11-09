@@ -147,7 +147,7 @@ func (h *handler) streamDeploymentLog(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if finished {
-			_ = es.send("done", "", string(dep.Status))
+			_ = es.send(StreamDone, "", string(dep.Status))
 			return
 		}
 		select {
@@ -180,7 +180,7 @@ func (h *handler) sendNewOutput(ctx context.Context, es *eventStream, tail *logT
 		}
 		if omitted > 0 {
 			off := strconv.FormatInt(omitted, 10)
-			if err := es.send("omitted", off, off); err != nil {
+			if err := es.send(StreamOmitted, off, off); err != nil {
 				return err
 			}
 		}
@@ -192,7 +192,7 @@ func (h *handler) sendNewOutput(ctx context.Context, es *eventStream, tail *logT
 		}
 		if chunk, end := tail.take(finished && !more); len(chunk) > 0 {
 			if text := cleanText(chunk); text != "" {
-				if err := es.send("", strconv.FormatInt(end, 10), text); err != nil {
+				if err := es.send(message, strconv.FormatInt(end, 10), text); err != nil {
 					return err
 				}
 			}

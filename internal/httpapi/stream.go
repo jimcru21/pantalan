@@ -45,13 +45,13 @@ func openEventStream(w http.ResponseWriter) (*eventStream, error) {
 	return es, es.rc.Flush()
 }
 
-// send writes one event and flushes it. An empty event is the unnamed
-// "message"; an empty id leaves the browser's last event ID as it was.
+// send writes one event and flushes it. The event message is the unnamed
+// one; an empty id leaves the browser's last event ID as it was.
 // Each line of data goes on its own data: line, which the browser joins
 // again with "\n", so data arrives exactly as given.
-func (es *eventStream) send(event, id, data string) error {
+func (es *eventStream) send(event StreamEvent, id, data string) error {
 	var b strings.Builder
-	if event != "" {
+	if event != message {
 		fmt.Fprintf(&b, "event: %s\n", event)
 	}
 	if id != "" {

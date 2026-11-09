@@ -135,6 +135,9 @@ shadcn/ui components style it, and Recharts draws the sparklines.
 - **API types.** The TypeScript types of the API's responses are generated
   from the Go structs with `tygo` (`make types`, configured in `tygo.yaml`)
   into `web/app/src/api/generated`, and CI fails when they are stale.
+  The log streams' event names and `done` reasons are generated the same
+  way (`internal/httpapi/stream_events.go`), so a rename on either side
+  fails the SPA's type check.
 - **Development.** `make web-dev`, or the compose stack's `web` service,
   runs Vite with hot reload and proxies `/api` to Pantalan. Vite serves
   `index.html` for every path, so the page gate and the CSP don't apply
