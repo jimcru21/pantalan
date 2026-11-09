@@ -1,565 +1,336 @@
+<div align="center">
+
 # Pantalan
 
-A self-hosted platform for deploying apps from git, in the spirit of Coolify,
-Dokploy and Tugport. It ships as one Go binary that runs next to Docker.
+**Your own little Heroku. Push to git, get a running app.**
 
-See [docs/architecture.md](docs/architecture.md) for the design.
+A self-hosted platform that builds your apps from git and runs them as Docker
+containers on a server you own. One Go binary, one install command.
 
-## Install
+[![CI](https://github.com/jimcru21/pantalan/actions/workflows/ci.yml/badge.svg)](https://github.com/jimcru21/pantalan/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/jimcru21/pantalan)](https://github.com/jimcru21/pantalan/releases/latest)
+[![Go](https://img.shields.io/github/go-mod/go-version/jimcru21/pantalan)](go.mod)
 
-On a fresh Debian 12, Debian 13, Ubuntu 24.04 LTS or Ubuntu 26.04 LTS
-server (amd64 or arm64), as a user who can `sudo`, download the installer,
-then run it:
+[Quick start](#-quick-start) •
+[Deploy your first app](#-deploy-your-first-app) •
+[Push to deploy](#-push-to-deploy) •
+[Docs](#-documentation) •
+[Contributing](#-contributing)
+
+</div>
+
+---
+
+## 🤔 What is Pantalan?
+
+*Pantalan* is Filipino for **pier**: the place where boats come in and get
+unloaded. Your git repos are the boats.
+
+You give Pantalan a git repository with a `Dockerfile`. It clones it, builds
+an image, starts the container, checks that it's healthy, and routes your
+domain to it. Push a new commit and it does it all again, **without
+downtime**: the old version keeps serving until the new one is ready.
+
+It's in the same family as [Coolify](https://coolify.io),
+[Dokploy](https://dokploy.com) and Tugport, but deliberately small: one
+binary next to Docker, a SQLite file, and a systemd service. Nothing else to
+run.
+
+## ✨ Features
+
+- 🚀 **Deploy from git.** Any public repo with a `Dockerfile` at its root.
+- 🔁 **Zero-downtime deploys.** Blue-green swap: the new container must pass
+  a health check before it gets traffic.
+- 🪝 **Push to deploy.** A GitHub webhook redeploys every app tracking the
+  pushed branch.
+- 🌐 **Built-in reverse proxy.** Routes each domain to its app, no Nginx or
+  Traefik needed.
+- 📊 **Dashboard.** See your server's CPU, memory, disk, containers, images
+  and Docker events at a glance.
+- 🔌 **REST API.** Everything the Dashboard can't do yet, the API can.
+- 🛡️ **Secure by default.** HTTPS Dashboard, generated passwords, throttled
+  sign-ins, and a firewall that's configured for you.
+- 📦 **One-command install, upgrade and repair.** The same command does all
+  three.
+
+> [!NOTE]
+> Pantalan is young (v0.x). Today it manages **one server**, apps are
+> created through the **API** (the Dashboard shows the server's health), and
+> apps are served over **plain HTTP** on port 80. Automatic HTTPS for apps
+> and app management in the Dashboard are on the way.
+
+## 📋 Requirements
+
+| | |
+|---|---|
+| **OS** | A fresh Debian 12, Debian 13, Ubuntu 24.04 LTS or Ubuntu 26.04 LTS |
+| **CPU** | amd64 or arm64 |
+| **Access** | A user who can `sudo` |
+| **Ports** | 80, 443 and 8443 free (8443 is the Dashboard, and can be changed) |
+
+Docker, git and the firewall are set up by the installer. If Docker CE 28 or
+newer is already installed, it's used as it is.
+
+## 🚀 Quick start
+
+### 1. Install
+
+SSH into your server and run:
 
 ```sh
 curl -fL --max-time 120 -o install.sh https://github.com/jimcru21/pantalan/releases/latest/download/install.sh
 sudo sh install.sh
 ```
 
-Downloading first is the safer way to run it:
+It asks for an Admin username, then does the rest. It takes a minute or
+two. When it's done you'll see a summary like this:
 
-- **A failed download doesn't hang silently.** You see the progress and any
-  error. If GitHub's download servers accept the connection and then send
-  nothing, `--max-time` stops the download instead of waiting forever.
-- **You can read or check it before it runs as root.** To check it against
-  the release's checksums:
+```text
+Pantalan v0.1.0 is running on this Node.
 
-  ```sh
-  curl -fL --max-time 120 -O https://github.com/jimcru21/pantalan/releases/latest/download/SHA256SUMS
-  sha256sum -c --ignore-missing SHA256SUMS
-  ```
-
-The installer's own downloads (the binary and `SHA256SUMS`) give up after
-four tries on a server that stops sending, rather than hanging.
-
-Flags go after `install.sh`, for example for cloud-init or CI, where there's
-no terminal to ask on:
-
-```sh
-sudo sh install.sh --admin-user alice --dashboard-port 8443
+  Dashboard       https://203.0.113.10:8443
+  Fingerprint     SHA256:AB:CD:...  (compare this with what your browser shows when it warns)
+  Admin           alice
+  Admin password  XXXXXXXXXXXXXXXXXXXXXXXXXX  (shown only now: sign in and keep it safe)
+  Admin Token     in /etc/pantalan/pantalan.env (PANTALAN_ADMIN_TOKEN)
+  Lost password   sudo pantalan admin reset-password
+  Firewall        ...
 ```
 
-The one-line form `curl -fsSL <url> | sudo sh -s -- [flags]` also works.
+> [!IMPORTANT]
+> **Save the Admin password now.** It's shown only once. Lost it? Run
+> `sudo pantalan admin reset-password` for a new one.
 
-| Flag | |
+### 2. Open the Dashboard
+
+Go to `https://<your-server-ip>:8443`.
+
+Your browser will warn you about the certificate. That's expected: the
+Dashboard uses a self-signed certificate. Check that the fingerprint your
+browser shows matches the one in the summary, then continue.
+
+### 3. Sign in
+
+Use the Admin username and the password from the summary. You'll land on
+the Node overview, showing your server's health.
+
+🎉 **That's it, Pantalan is running.**
+
+> [!TIP]
+> Using a cloud provider (AWS, Hetzner, DigitalOcean, ...)? Its firewall or
+> security group sits in front of your server: open ports **80**, **443**
+> and **8443** there too.
+
+## 📦 Deploy your first app
+
+Apps are created through the API for now. You'll need:
+
+- a **git repo** with a `Dockerfile` at its root,
+- the **port** your app listens on inside its container,
+- a **domain** whose DNS `A` record points at your server.
+
+**1. Get your Admin Token** (on the server):
+
+```sh
+sudo grep PANTALAN_ADMIN_TOKEN /etc/pantalan/pantalan.env
+```
+
+**2. Set two shortcuts** (on the server, or anywhere that can reach it):
+
+```sh
+TOKEN=<your-admin-token>
+API=https://<your-server-ip>:8443/api/v1
+```
+
+**3. Create the app:**
+
+```sh
+curl -sk $API/apps \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "name": "hello",
+    "repo_url": "https://github.com/<you>/<repo>.git",
+    "branch": "main",
+    "domain": "hello.example.com",
+    "port": 8080
+  }'
+```
+
+The response includes the app's `id`. Optional fields: `branch` (defaults to
+`main`) and `env`, an object of environment variables such as
+`{"DATABASE_URL": "..."}`.
+
+**4. Deploy it:**
+
+```sh
+curl -sk -X POST $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN"
+```
+
+To deploy a specific branch, tag or commit, send `{"ref": "<branch|tag|sha>"}`
+as the body.
+
+**5. Watch it go live:**
+
+```sh
+curl -sk $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN"     # status
+curl -sk $API/deployments/<deployment-id>/logs -H "Authorization: Bearer $TOKEN"  # Deployment Log
+```
+
+A Deployment goes `queued` → `building` → `starting` → `live`. If the new
+version fails its health check, it's marked `failed` and the old one keeps
+serving.
+
+**6. Open it:** visit `http://hello.example.com`. 🎉
+
+> [!NOTE]
+> `-k` tells curl to accept the Dashboard's self-signed certificate.
+
+<details>
+<summary><b>All API endpoints</b></summary>
+
+All under `/api/v1`, with `Authorization: Bearer <Admin Token>`.
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/apps` | List apps |
+| `POST` | `/apps` | Create an app |
+| `GET` | `/apps/{id}` | Get one app |
+| `GET` | `/apps/{id}/deployments` | List an app's Deployments |
+| `POST` | `/apps/{id}/deployments` | Deploy (body optional: `{"ref": "..."}`) |
+| `GET` | `/deployments/{id}/logs` | A Deployment's log |
+
+`GET /healthz` needs no credentials and answers `200` when the service is up.
+
+</details>
+
+## 🪝 Push to deploy
+
+Make every `git push` redeploy your app automatically.
+
+**1. Pick a webhook secret** and add it to the server's settings:
+
+```sh
+echo "PANTALAN_WEBHOOK_SECRET=$(openssl rand -hex 32)" | sudo tee -a /etc/pantalan/pantalan.env
+sudo systemctl restart pantalan
+sudo grep PANTALAN_WEBHOOK_SECRET /etc/pantalan/pantalan.env   # copy this value
+```
+
+**2. Add the webhook on GitHub**, in your repo's **Settings → Webhooks →
+Add webhook**:
+
+| Field | Value |
 |---|---|
-| `--admin-user NAME` | The Admin's username. Asked for on the terminal when missing; with no terminal, the install stops and names the flag. When an Admin already exists it is kept, and a differing `--admin-user` is ignored with a warning saying so. |
-| `--dashboard-port N` | The Dashboard's HTTPS port, default `8443`. Ports below 1024 (80 and 443 among them), the ports SSH listens on and the app proxy's port (`PANTALAN_PROXY_ADDR` in the env file, `80` when unset) are refused. When the default is taken and the flag wasn't given, the installer names what holds it and asks on the terminal, suggesting the next free port; with no terminal, it stops and names the flag. It never picks a port by itself. |
-| `--version vX.Y.Z` | Install that release instead of the one the script came with. |
-| `--no-firewall` | Leave the firewall entirely alone, on this run and every re-run (stored as `PANTALAN_FIREWALL=off`). |
+| Payload URL | `https://<your-server-ip>:8443/webhooks/github` |
+| Content type | `application/json` |
+| Secret | the value of `PANTALAN_WEBHOOK_SECRET` |
+| SSL verification | **Disable** (the Dashboard's certificate is self-signed) |
+| Events | Just the `push` event |
 
-Once installed, the env file holds the settings: a re-run reads the
-Dashboard port and firewall mode from it, and a flag that disagrees with it
-stops the run before changing anything. To change one, edit
-`/etc/pantalan/pantalan.env`, then `sudo systemctl restart pantalan`. For
-the Dashboard port, run the installer again (without the flag) instead of
-restarting, so its firewall rule moves too.
+Now pushing to the app's branch starts a Deployment of that commit. The
+app's `repo_url` must be the repo's `https://github.com/....git` clone URL
+for the push to find it.
 
-Running the command is the consent: there's no "continue?" prompt. The
-installer first checks this Node without changing anything (root, the
-distro and architecture, systemd, Docker, and that the app proxy's port
-(80, unless `PANTALAN_PROXY_ADDR` in the env file moves it), 443 and the
-Dashboard port are free), then downloads the release binary and verifies it
-against the release's `SHA256SUMS`, and checks the Admin username with it.
-Only then does it change the Node:
+> [!NOTE]
+> Disabling SSL verification only stops GitHub checking *who* it's talking
+> to. The traffic is still encrypted, and Pantalan rejects any payload
+> whose signature doesn't match your secret.
 
-- installs `git` and `ca-certificates`, and Docker CE from Docker's apt
-  repository when no Docker is installed (with `"live-restore": true`, so
-  app containers survive Docker upgrades). An existing Docker CE 28 or newer
-  is used as it is and never upgraded; any other Docker (`docker.io`,
-  `podman-docker`, snap, Docker CE older than 28) stops the install, and
-  nothing is removed.
-- creates the `pantalan` system user (no login shell, in the `docker`
-  group) and these files:
+## 🧰 Everyday commands
 
-  | Path | Owner, mode | |
-  |---|---|---|
-  | `/usr/local/bin/pantalan` | root, `0755` | the binary, replaced atomically |
-  | `/etc/pantalan/pantalan.env` | root:pantalan, `0640` | settings, including a generated Admin Token |
-  | `/var/lib/pantalan/` | pantalan, `0750` | the database, `tls/`, `builds/` |
-  | `/etc/systemd/system/pantalan.service` | root, `0644` | owned by the installer and rewritten on every run: put your changes in `pantalan.service.d/` |
-  | `/var/log/pantalan-install.log` | root, `0600` | the install's full output, minus the Admin password |
+Run these on the server.
 
-- creates the Admin with a generated password, starts the service and waits
-  for it to answer on HTTPS (printing the service's last 50 log lines if it
-  doesn't).
-- last, configures ufw so only SSH, 80, 443 and the Dashboard port are
-  reachable (see [Firewall](#firewall)).
-
-It ends with a summary: the version, the Dashboard URL, the certificate
-fingerprint to compare with your browser's warning, the Admin and the
-one-time Admin password, where the Admin Token is, how to recover a lost
-password, and what happened to the firewall. The Admin Token is never
-printed. The password is shown only on the terminal and kept out of the
-install log, but an install with no terminal (cloud-init, CI) leaves it in
-that tool's own log: run `sudo pantalan admin reset-password` afterwards if
-that matters.
-
-If a step fails, the installer names it and the log; fix the cause and run
-the same command again.
-
-**The `docker` group is effectively root.** The service runs as `pantalan`
-in a hardened unit (`ProtectSystem=strict`, `NoNewPrivileges`, only
-`CAP_NET_BIND_SERVICE`), but anything that can talk to Docker can get root
-on the Node, so that hardening is defence in depth, not a boundary.
-
-### Firewall
-
-The installer allows SSH, 80, 443 and the Dashboard port (TCP, IPv4 and
-IPv6) in ufw, installing ufw if needed. Its rules carry the comment
-`pantalan` (80, 443, the Dashboard port: made to match those on every run,
-so moving the Dashboard moves its rule) or `pantalan-ssh` (one per SSH
-port, only ever added, `allow` rather than `limit` so automation isn't
-throttled). SSH ports are everything sshd and `ssh.socket` listen on,
-every `Port` in `sshd -T` and the port your session came in on, all
-allowed before ufw is enabled, so enabling it doesn't lock you out. It
-never runs `ufw disable` or `ufw reset`, never edits `/etc/default/ufw` and
-adds no `DOCKER-USER` rules. What it does depends on the Node:
-
-| Node | What happens |
+| Task | Command |
 |---|---|
-| ufw inactive | Rules added, ufw enabled. A re-run enables it again if you disabled it by hand. |
-| ufw already active | Rules added only. Your rules and default policies are left as they are (a rule of yours for the same port stands in for Pantalan's); a default incoming policy other than deny or reject gets a warning. |
-| firewalld active, or `nftables.service` enabled with your own ruleset | ufw skipped: not installed, no rules. Open 80, 443 and the Dashboard port in that firewall. (The stock `/etc/nftables.conf` that Docker CE's dependencies bring doesn't count.) |
-| `MANAGE_BUILTINS=yes` or `IPV6=no` (with a global IPv6 address) in `/etc/default/ufw`, Docker's nftables firewall backend, or no SSH server found | Rules staged: added, but ufw left off. Check SSH, then run `sudo ufw --force enable`. |
-| `--no-firewall` (`PANTALAN_FIREWALL=off`) | Nothing at all. |
+| Upgrade to the latest release | `sudo sh install.sh` (download it again first) |
+| Repair a broken install | `sudo sh install.sh` |
+| New Admin password | `sudo pantalan admin reset-password` |
+| Show the Admin's username | `sudo pantalan admin show` |
+| Check the Dashboard certificate | `sudo pantalan tls fingerprint` |
+| Installed version | `pantalan version` |
+| Service status | `sudo systemctl status pantalan` |
+| Service logs | `sudo journalctl -u pantalan -f` |
+| Restart after editing settings | `sudo systemctl restart pantalan` |
+| Uninstall (keeps your data) | `sudo sh install.sh --uninstall` |
+| Remove everything | `sudo sh install.sh --purge` |
 
-Staged and skipped firewalls still end the install with success, since
-Pantalan is running. `PANTALAN_FIREWALL` is read only by the installer; set
-it to `off` in the env file to stop it managing the firewall.
+Re-running the installer is always safe: it checks what's there and only
+does what's missing. See the [installation guide](docs/installation.md) for
+upgrades, rollbacks and what uninstall keeps.
 
-Two things are outside ufw's reach:
+## 🔧 Configuration
 
-- **Ports Docker publishes bypass ufw.** Docker forwards them itself, ahead
-  of ufw, so a container published on `0.0.0.0` (Docker's default) is
-  reachable from anywhere whatever ufw says. Pantalan's own app containers
-  publish on `127.0.0.1` only; the summary warns about any running
-  container that doesn't, whatever the firewall mode (Docker forwards those
-  ports ahead of firewalld or an nftables ruleset too, and with
-  `--no-firewall` nothing filters them).
-- **Cloud security groups are separate.** A provider's firewall in front of
-  the server knows nothing of ufw: open 80, 443 and the Dashboard port
-  there too.
+Settings live in `/etc/pantalan/pantalan.env`. After changing one, run
+`sudo systemctl restart pantalan`.
 
-### Upgrade and repair
+| Variable | Default | What it does |
+|---|---|---|
+| `PANTALAN_ADMIN_TOKEN` | *(generated)* | Bearer token for the API |
+| `PANTALAN_DASHBOARD_ADDR` | `:8443` | Dashboard, API, webhooks (HTTPS) |
+| `PANTALAN_PROXY_ADDR` | `:80` | Where apps are served |
+| `PANTALAN_DATA_DIR` | `/var/lib/pantalan` | Database, builds, logs, certificate |
+| `PANTALAN_WEBHOOK_SECRET` | *(empty: webhooks off)* | GitHub webhook secret |
+| `PANTALAN_WORKERS` | `2` | How many Deployments run at once |
+| `PANTALAN_FIREWALL` | `ufw` | Installer only: `off` leaves the firewall alone |
 
-Run the install command again. There's no separate upgrade mode: every step
-checks what's already there and does only what's missing, so the same
-command installs, upgrades, repairs a damaged install (a deleted unit, say)
-and resumes one that failed part-way. It needs no flags and no terminal,
-since the Admin, the Admin Token and the settings already exist; the Admin
-prompt appears only when there's no Admin.
+> [!TIP]
+> To move the Dashboard to another port, run the installer with
+> `--dashboard-port N` instead of editing the file, so the firewall rule
+> moves too.
 
-The installer compares the release it installs (the latest, or
-`--version vX.Y.Z`) with what `pantalan version` says is installed:
+## 📚 Documentation
 
-- **Newer:** the binary is replaced atomically and the service restarted.
-  The Admin, sessions, apps and the certificate carry over. If the new
-  release changes the database schema, the service snapshots the database
-  to `/var/lib/pantalan/pantalan.db.bak-<schema version>` before migrating
-  it (the two most recent snapshots are kept). The summary opens with
-  `Upgraded vA → vB` and has no Admin or password lines.
-- **The same:** a repair. Anything missing is put back, and the service is
-  restarted.
-- **Older:** refused, before anything changes. See
-  [Rolling back](#rolling-back).
+| Guide | For |
+|---|---|
+| [Installation](docs/installation.md) | Install flags, what the installer changes, firewall, upgrade, rollback, uninstall, verifying releases |
+| [Administration](docs/administration.md) | The Admin account, sign-in rules, the Dashboard certificate, all settings |
+| [Development](docs/development.md) | Running Pantalan locally, testing the installer, releasing, code layout |
+| [Architecture](docs/architecture.md) | How Pantalan is built and how a Deployment works |
+| [Glossary](GLOSSARY.md) | What we mean by Node, App, Deployment, Admin, ... |
+| [Decisions](docs/adr) | Why things are the way they are |
 
-The unit file is rewritten on every run; your own changes in
-`/etc/systemd/system/pantalan.service.d/` are left alone.
+## 🔒 Security
 
-### Rolling back
+- The Dashboard is **HTTPS only**, with a self-signed certificate. Always
+  compare its fingerprint (`sudo pantalan tls fingerprint`) with what your
+  browser shows before signing in.
+- The **Admin password** is always generated, never chosen. Repeated failed
+  sign-ins are slowed down, up to 15 minutes between attempts.
+- The **Admin Token** works only for the API, never for the Dashboard. Keep
+  it secret: anyone with it can deploy containers on your server.
+- App containers listen only on `127.0.0.1`, reachable through the proxy.
+- Anything in the `docker` group is effectively root on the server. Only
+  run code you trust.
 
-The installer doesn't downgrade, because a newer release may have migrated
-the database to a schema the older one doesn't know (an older binary
-refuses such a database rather than damage it). To go back, remove the
-newer binary, restore the snapshot taken when the database was migrated,
-and install the older release (with `install.sh` downloaded as in
-[Install](#install)):
+More in [Administration](docs/administration.md).
 
-```sh
-sudo sh install.sh --uninstall
-sudo ls -l /var/lib/pantalan/   # pick the pantalan.db.bak-<version> taken at the upgrade you're undoing
-sudo install -m 0600 -o pantalan -g pantalan /var/lib/pantalan/pantalan.db.bak-<version> /var/lib/pantalan/pantalan.db
-sudo rm -f /var/lib/pantalan/pantalan.db-wal /var/lib/pantalan/pantalan.db-shm
-sudo sh install.sh --version v1.2.3
-```
+## 🤝 Contributing
 
-`--uninstall` stops the service and removes the binary but keeps the data,
-config and Admin (see [Uninstall and purge](#uninstall-and-purge)), and with
-no binary installed there's nothing to compare against, so the older
-release installs. Removing the `-wal` and `-shm` files matters: they belong
-to the newer database. Anything that changed after the snapshot was taken
-(apps, deployments, a new password) is lost. With no snapshot, the database
-was never migrated in place: skip the restore. If the older release still
-can't read the database, the install stops at "Checking the Admin username"
-with the database's error and changes nothing else.
-
-### Uninstall and purge
-
-With `install.sh` downloaded as in [Install](#install):
+The quickest way to hack on Pantalan only needs Docker:
 
 ```sh
-sudo sh install.sh --uninstall
-```
-
-`--uninstall` stops and disables the service and removes its unit and
-`/usr/local/bin/pantalan`. It keeps everything else and lists what it kept:
-`/etc/pantalan/` (settings and the Admin Token), `/var/lib/pantalan/` (the
-database, TLS certificate and builds), your `pantalan.service.d/` drop-ins,
-the app containers (`label=pantalan.app`, which listen only on loopback),
-the `pantalan/*` images and the `pantalan` user. Running the install command
-again brings it all back as it was: the same Admin and password, Admin
-Token, certificate and apps, with no `--admin-user` needed.
-
-```sh
-sudo sh install.sh --purge
-```
-
-`--purge` does what `--uninstall` does and also deletes what it keeps: the
-drop-ins, `/etc/pantalan/`, `/var/lib/pantalan/`, the app containers, the
-`pantalan/*` images and the `pantalan` user. There's no undo, so it asks you
-to type `purge` on the terminal. With no terminal it refuses unless you add
-`--yes` (`--purge --yes`); `--yes` is accepted only with `--purge`.
-
-Both delete Pantalan's `pantalan` ufw rules. They keep the `pantalan-ssh`
-rules, and ufw as active as it was, because removing an SSH rule from an
-active ufw locks out your next login; the summary lists them and how to
-delete them (`sudo ufw status numbered`, then `sudo ufw delete N`).
-
-Neither ever removes Docker, ufw or git, which other things on the server may
-use. The install log, `/var/log/pantalan-install.log`, stays too.
-
-### Verify a release
-
-The installer checks the binary it downloads against the release's
-`SHA256SUMS`, which ships in the same release. To check a release out of
-band, with the [GitHub CLI](https://cli.github.com/), download its assets
-and verify them against GitHub's signed attestations:
-
-```sh
-gh release download v1.2.3 --repo jimcru21/pantalan
-sha256sum -c SHA256SUMS
-
-# The asset is the one published in release v1.2.3 (releases are immutable:
-# once published, neither the assets nor the tag can change).
-gh release verify-asset v1.2.3 pantalan_v1.2.3_linux_amd64 --repo jimcru21/pantalan
-
-# The binary was built by this repository's release workflow, from the tag.
-gh attestation verify pantalan_v1.2.3_linux_amd64 --repo jimcru21/pantalan \
-  --signer-workflow jimcru21/pantalan/.github/workflows/release.yml \
-  --source-ref refs/tags/v1.2.3
-```
-
-Each release has four assets: `pantalan_vX.Y.Z_linux_amd64`,
-`pantalan_vX.Y.Z_linux_arm64`, `install.sh` (with that version built in) and
-`SHA256SUMS` over the other three. `gh release verify-asset` works for all
-of them; the build provenance that `gh attestation verify` checks covers the
-two binaries.
-
-## Requirements for building from source
-
-- Go 1.26+
-- Docker
-- git
-
-Apps build from the Dockerfile at the root of their repository. Nixpacks
-isn't part of a Node: the installer doesn't install it, so an app with
-`build_type: nixpacks` fails to build with "nixpacks not installed on this
-Node".
-
-## Run locally
-
-### Set up a fresh VPS for development
-
-[dev/setup-vps.sh](dev/setup-vps.sh) gets a fresh Debian or Ubuntu server
-(amd64 or arm64) ready for both ways of developing below. It installs Go
-(the newest patch release of the version in `go.mod`, checksum-verified,
-in `/usr/local/go`), Docker CE with the buildx and Compose plugins from
-Docker's apt repository, git, make, gcc (for `go test -race`), shellcheck,
-jq and the GitHub CLI. It also adds you to the `docker` group.
-
-For working on the repo with Claude Code, it also installs, in your home:
-
-- [Claude Code](https://code.claude.com/docs/en/setup), with its native
-  installer (it updates itself).
-- [colgrep](https://github.com/lightonai/next-plaid/tree/main/colgrep),
-  semantic code search, with its Claude Code hooks.
-- [semble](https://github.com/MinishLab/semble), code search, installed
-  with uv and set up as a Claude Code MCP server and sub-agent.
-- [Matt Pocock's skills](https://github.com/mattpocock/skills), from a
-  checkout of their newest release in `~/.local/share/mattpocock-skills`,
-  linked into `~/.claude/skills`. This isn't the Claude Code plugin, which
-  trails the releases. Their per-repo setup is already in
-  [docs/agents](docs/agents).
-
-Run it as your normal user with sudo, so that user is the one it sets up:
-
-```sh
-curl -fL --max-time 120 -o setup-vps.sh https://raw.githubusercontent.com/jimcru21/pantalan/main/dev/setup-vps.sh
-sudo sh setup-vps.sh --clone ~/pantalan
-```
-
-or `sudo sh dev/setup-vps.sh` from a checkout. `--user NAME` sets up a
-user other than the one who ran sudo, `--go-version 1.26.1` pins a Go
-release, and `--no-agent-tools` skips Claude Code and its tools. Run it
-again any time: it moves Go, colgrep, semble and the skills to their newest
-releases and leaves everything else as it is. It never touches the
-firewall, and it refuses to replace a Docker that isn't Docker CE
-(`docker.io`, snap). Then log out and back in so the `docker` group and
-the new `PATH` apply, and run `claude` to sign in.
-
-### Develop with Docker
-
-The easiest way: all you need is Docker with Compose (no Go, git or
-anything else on your machine).
-
-```sh
+git clone https://github.com/jimcru21/pantalan.git
+cd pantalan
 docker compose up
 ```
 
-The first start builds the dev image, then prints the Dashboard URL, the
-dev Admin (`dev`) and its password (shown once) and the Admin Token. Sign
-in at https://localhost:8443 and accept the browser's warning about the
-self-signed certificate. Edit any `.go`, template, CSS, JS, SVG or
-migration file and Pantalan rebuilds and restarts within seconds
-([air](https://github.com/air-verse/air) watches the checkout): refresh the
-browser to see it. A change that doesn't compile prints the error and keeps
-the last good build running.
+It prints the dev Admin's password and Admin Token, serves the Dashboard on
+https://localhost:8443, and rebuilds within seconds whenever you save a
+file. Apps you deploy are served at http://localhost:8080.
 
-Apps you deploy run in the stack's own Docker daemon (Docker-in-Docker, the
-`docker` service), not in your machine's Docker, and are reachable through
-the app proxy at http://localhost:8080 with their domain as the `Host`
-header (`curl -H 'Host: myapp.example.com' http://localhost:8080`).
+Before opening a pull request:
 
 ```sh
-docker compose up -d                                             # in the background
-docker compose logs -f pantalan                                  # follow the build and server output
-docker compose exec pantalan pantalan admin reset-password       # a new Admin password
-docker compose exec pantalan cat /data/dev-secrets.env           # the Admin Token and webhook secret
-docker compose down                                              # stop (data, apps and caches stay)
-docker compose down -v                                           # stop and wipe everything: a fresh start
+make check   # go vet, race tests and gofmt
 ```
 
-The stack's settings go in a `.env` file next to `compose.yaml` (ignored by
-git). [.env.example](.env.example) lists them all with their defaults:
+Commit titles follow [Conventional Commits](https://www.conventionalcommits.org/)
+(`feat(proxy): route requests by Host header`). See
+[Development](docs/development.md) for everything else, and
+[open an issue](https://github.com/jimcru21/pantalan/issues) for bugs and
+ideas.
 
-```sh
-cp .env.example .env
-```
+## 🙏 Inspiration
 
-**On a VPS**, to open the Dashboard from your own browser, make the ports
-listen on every address in `.env`:
-
-```sh
-PANTALAN_DEV_BIND=0.0.0.0
-PANTALAN_DEV_HOST=203.0.113.10   # the VPS's public IP, for the printed URLs
-```
-
-then `docker compose up -d` and open `https://<public-ip>:8443`. Docker's
-published ports bypass ufw, so the provider's firewall or security group is
-what decides who can reach them: open 8443 (and 8080 to try the app proxy),
-ideally only to your own IP. The Admin Token and webhook secret are random,
-made on first start and kept in the data volume, because anyone who can
-reach the API with the token can deploy containers on the VPS.
-
-The `docker` service runs privileged, which Docker-in-Docker needs.
-
-### Without Docker
-
-With Go 1.26+, git and Docker on your machine:
-
-```sh
-make run      # Dashboard + API on https://localhost:8443, app proxy on :8080
-make check    # vet + race tests + gofmt
-```
-
-`make run` doesn't rebuild on changes: stop it and run it again.
-
-### Test the installer
-
-`deploy/installtest` runs `deploy/install.sh` end to end in privileged
-systemd containers, one fresh container per path, against two fake
-releases built from your working tree (`v0.0.1` and `v0.0.2`, for the
-upgrade and downgrade paths). It needs Docker and network access to the
-distro and Docker apt repositories, and takes a minute or two per distro.
-
-```sh
-make shellcheck                                 # lint the script (needs shellcheck)
-make installtest                                # all four distros, on this machine's arch
-INSTALLTEST_DISTROS=debian-12 make installtest  # one distro
-```
-
-The VM tier runs the paths containers can't (a real reboot, a global
-IPv6 address with ufw's `IPV6=no`, snap Docker on Ubuntu 24.04,
-`ssh.socket`, the upgrade from the previous published release) on KVM
-VMs booted from each distro's official x64 cloud image.
-`.github/workflows/installer-vm.yml` runs it nightly, by hand, and as the
-release gate. Locally it needs x64 Linux with `/dev/kvm`, libvirt's
-default network, `virt-install`, `qemu-img` and `cloud-localds`; without
-them every path skips:
-
-```sh
-INSTALLTEST_VM_DIR=/var/lib/libvirt/images/pantalan-installtest make installtest-vm
-```
-
-### Release
-
-Push a `vX.Y.Z` tag. `.github/workflows/release.yml` refuses any other tag
-(no pre-releases), runs the same checks as a PR, builds the assets with
-`deploy/release.sh`, runs the installer's VM tier on exactly those assets,
-attests the binaries' provenance, and creates a draft release, uploads
-every asset and publishes it last, with generated notes. If the VM tier
-fails, no draft is created.
-To build the same assets locally, from a clean checkout of the tag:
-
-```sh
-deploy/release.sh build v1.2.3 /tmp/pantalan-v1.2.3
-```
-
-## Try it
-
-The Dashboard port speaks HTTPS with a self-signed certificate (see
-[Dashboard certificate](#dashboard-certificate)), so these local examples
-pass `-k`. `TOKEN=dev` is `make run`'s token; with the Docker dev stack,
-use the Admin Token it prints (also in `/data/dev-secrets.env`).
-
-```sh
-TOKEN=dev
-API=https://localhost:8443/api/v1
-
-# Register an app (repo needs a Dockerfile at its root)
-curl -sk $API/apps \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"name":"hello","repo_url":"https://github.com/<you>/<repo>.git","domain":"hello.localhost","port":8080}'
-
-# Deploy it (body optional: {"ref":"<branch|tag|sha>"})
-curl -sk -X POST $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN"
-
-# Watch status and logs
-curl -sk $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN"
-curl -sk $API/deployments/<deployment-id>/logs -H "Authorization: Bearer $TOKEN"
-
-# Hit the app through the proxy
-curl -s -H "Host: hello.localhost" localhost:8080
-```
-
-### Push to deploy
-
-Point a GitHub webhook (content type `application/json`) at
-`https://<node-ip>:8443/webhooks/github` and use `PANTALAN_WEBHOOK_SECRET`
-as its secret. GitHub can't verify the self-signed certificate, so untick
-**SSL verification** on the hook. That only stops GitHub checking who it's
-talking to: every payload is still signed with the secret, and Pantalan
-rejects any whose HMAC signature doesn't match. The traffic stays encrypted.
-
-## Dashboard certificate
-
-The Dashboard, `/api/v1`, `/webhooks/github` and `/healthz` share one HTTPS
-listener on `PANTALAN_DASHBOARD_ADDR`. TLS is always on. A plain `http://`
-request to that port is redirected to the same URL over `https://`.
-
-When `$PANTALAN_DATA_DIR/tls/cert.pem` or `key.pem` is missing, the service
-creates a self-signed certificate at startup. It covers `127.0.0.1`, `::1`,
-every global IP on the Node's interfaces at that moment, and the Node's
-hostname, and is valid for 825 days. The service checks it at startup and
-daily, and with fewer than 30 days left replaces it without a restart and
-logs the new fingerprint. It is not regenerated when the Node's IPs change.
-
-Your browser will warn that it doesn't know the certificate. Before you click
-through, check that the fingerprint it shows is the Node's. On the server:
-
-```sh
-sudo pantalan tls fingerprint
-# SHA256:AB:CD:...
-```
-
-The same value is in the service log at startup (`journalctl -u pantalan`).
-From another machine you can read the fingerprint the port actually serves:
-
-```sh
-openssl s_client -connect <node-ip>:8443 </dev/null 2>/dev/null \
-  | openssl x509 -noout -fingerprint -sha256
-```
-
-If the two differ, something between you and the Node is presenting its own
-certificate: don't sign in.
-
-To rotate the certificate (after a key leak, or to cover a new IP):
-
-```sh
-sudo pantalan tls regenerate   # prints the new fingerprint
-sudo systemctl restart pantalan
-```
-
-The app proxy is unaffected: it stays on port 80, and a request there for an
-unknown host (including the Node's bare IP) gets a 404, never a redirect to
-the Dashboard.
-
-## Admin account
-
-The Admin is the one account that signs in to the Dashboard. Its password is
-always generated (26 base32 characters) and printed once; you can't choose
-one. Run these on the server:
-
-```sh
-sudo pantalan admin create --username alice   # prints the password; refuses if an Admin exists
-sudo pantalan admin show                      # prints the username; exits 3 when there is no Admin; only reads
-sudo pantalan admin reset-password            # prints a new password
-```
-
-`reset-password` also signs out every Dashboard session and clears the
-sign-in throttling, in one step, and works while the service is running.
-
-Sign in at `https://<node-ip>:8443` with the username and the printed
-password. A session lasts while you use it: it ends after an hour without a
-request, and 24 hours after sign-in in any case. Up to 20 browsers can be
-signed in at once; signing in a 21st ends the oldest session. After five
-failed sign-ins, each further attempt has to wait, starting at a second and
-doubling up to 15 minutes; the login page says how long, and
-`reset-password` clears it. The Admin Token is for
-`/api/v1` only and is refused by the Dashboard; a Dashboard session cookie
-is no credential on `/api/v1`.
-`admin create --username NAME --check` only validates the name and never
-touches the database. Usernames are 1 to 32 characters of `a-z`, `0-9`, `.`,
-`_` and `-`, starting with a letter, and are lowercased. The Admin can't be
-renamed.
-
-## Configuration
-
-The service reads `PANTALAN_*` environment variables. An installed Node
-keeps them in `/etc/pantalan/pantalan.env`; after editing it, run
-`sudo systemctl restart pantalan`.
-
-| Variable | Default | |
-|---|---|---|
-| `PANTALAN_ADMIN_TOKEN` | *(required)* | Bearer token for `/api` |
-| `PANTALAN_DASHBOARD_ADDR` | `:8443` | HTTPS: Dashboard, API, webhooks, `/healthz` |
-| `PANTALAN_PROXY_ADDR` | `:80` | Public app traffic |
-| `PANTALAN_DATA_DIR` | `/var/lib/pantalan` | The database (`pantalan.db`), build checkouts, logs, `tls/` |
-| `PANTALAN_WEBHOOK_SECRET` | *(empty: webhooks off)* | GitHub HMAC secret |
-| `PANTALAN_WORKERS` | `2` | Concurrent deployments |
-| `PANTALAN_FIREWALL` | `ufw` | Installer only, ignored by the service: `off` leaves the firewall alone (see [Firewall](#firewall)) |
-
-## Layout
-
-```
-cmd/pantalan/            entrypoint + wiring
-compose.yaml, dev/        the Docker dev stack (docker compose up)
-deploy/install.sh       the installer (a release asset)
-deploy/release.sh       builds the release assets (used by release.yml)
-deploy/installtest/     installer harness (build tag installtest)
-internal/domain/        entities and rules
-internal/service/       use cases + port interfaces
-internal/httpapi/       REST API, webhooks, middleware
-internal/dashtls/       Dashboard certificate + HTTPS listener
-internal/dashboard/     Dashboard login, sessions and pages (html/template + htmx)
-internal/store/sqlite/  SQLite repositories + migrations
-internal/source/        git
-internal/build/         dockerfile, nixpacks
-internal/runtime/docker container lifecycle
-internal/health/        readiness probe
-internal/proxy/         reverse proxy
-internal/queue/         deploy job queue
-web/                    Dashboard templates and static files, embedded (no build step)
-docs/                   architecture notes
-```
+Pantalan stands on the shoulders of [Coolify](https://coolify.io),
+[Dokploy](https://dokploy.com) and Tugport, which showed how pleasant
+self-hosting can be.
