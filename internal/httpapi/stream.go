@@ -79,8 +79,8 @@ var ansiEscape = regexp.MustCompile("\x1b\\[[0-?]*[ -/]*[@-~]|\x1b\\][^\x07\x1b]
 var newlines = strings.NewReplacer("\r\n", "\n", "\r", "\n")
 
 // cleanText is log output as the Dashboard shows it: ANSI escape codes
-// stripped (the colours aren't rendered, ADR 0003) and line ends made
-// "\n". It works on any span of whole lines, since no escape spans one.
+// stripped (the Dashboard shows logs as plain text and doesn't render
+// colours; spec #68, user story 62) and line ends made "\n". It works on any span of whole lines, since no escape spans one.
 func cleanText(b []byte) string {
 	s := string(b)
 	if strings.IndexByte(s, '\x1b') >= 0 {
