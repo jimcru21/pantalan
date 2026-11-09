@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { onSignedOut, SignedOutError } from "@/api/client";
+import { StreamsProvider } from "@/api/streams";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { loginPath } from "@/lib/return-to";
 import { AppPage } from "@/pages/AppPage";
@@ -64,9 +65,11 @@ export function App({ queryClient }: { queryClient?: QueryClient }) {
 
   return (
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <RouterProvider router={router} />
-      </TooltipProvider>
+      <StreamsProvider>
+        <TooltipProvider>
+          <RouterProvider router={router} />
+        </TooltipProvider>
+      </StreamsProvider>
     </QueryClientProvider>
   );
 }

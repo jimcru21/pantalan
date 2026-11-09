@@ -60,7 +60,10 @@ export default async function globalSetup() {
     });
   }
 
-  Object.assign(process.env, serverEnv({ url, username, password }));
+  Object.assign(
+    process.env,
+    serverEnv({ url, username, password, adminToken: env.PANTALAN_ADMIN_TOKEN }),
+  );
   return stop;
 }
 

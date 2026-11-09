@@ -46,7 +46,8 @@ type seam struct {
 	host      *fakeHost
 	docker    *fakeDocker
 	events    *fakeEvents
-	dataDir   string // the Deployer's: Deployment Logs and build checkouts
+	stopping  chan struct{} // close it to shut the service down
+	dataDir   string        // the Deployer's: Deployment Logs and build checkouts
 }
 
 // The built frontend the seam's Dashboard serves: what `vite build`
@@ -104,6 +105,7 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		scheduler: &fakeScheduler{},
 		host:      &fakeHost{},
 		events:    &fakeEvents{},
+		stopping:  make(chan struct{}),
 	}
 	s.builder = &fakeBuilder{docker: s.runtime}
 	s.docker = &fakeDocker{clock: s.clock}
@@ -140,6 +142,8 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		Docker:        s.docker,
 		Events:        s.events,
 		Now:           s.clock.Now,
+		After:         s.clock.After,
+		Stopping:      s.stopping,
 		AdminToken:    adminToken,
 		WebhookSecret: "test-secret",
 		Dashboard:     dash,
@@ -235,4 +239,20 @@ func (s *seam) runQueued() {
 	for _, id := range s.scheduler.take() {
 		_ = s.deployer.Run(s.t.Context(), id) // a failed Deployment is stored as failed
 	}
+}
+
+// runQueuedInBackground is runQueued on its own goroutine, for a test
+// that watches a Deployment while it runs; done closes when it's over.
+func (s *seam) runQueuedInBackground() (done <-chan struct{}) {
+	ids := s.scheduler.take()
+	ch := make(chan struct{})
+	go func() {
+		defer close(ch)
+		for _, id := range ids {
+			_ = s.deployer.Run(s.t.Context(), id)
+		}
+	}()
+	// Before the store closes: cleanups run last registered first.
+	s.t.Cleanup(func() { <-ch })
+	return ch
 }

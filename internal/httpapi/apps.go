@@ -93,21 +93,3 @@ func (h *handler) redeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	h.writeJSON(w, http.StatusAccepted, dep)
 }
-
-// TODO: stream with Server-Sent Events while the deployment is running.
-func (h *handler) deploymentLogs(w http.ResponseWriter, r *http.Request) {
-	f, err := h.deps.Deployer.OpenLog(r.Context(), r.PathValue("id"))
-	if err != nil {
-		h.writeError(w, err)
-		return
-	}
-	defer func() {
-		if err := f.Close(); err != nil {
-			h.deps.Log.Warn("close log", "err", err)
-		}
-	}()
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if _, err := io.Copy(w, f); err != nil {
-		h.deps.Log.Warn("send log", "err", err)
-	}
-}

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/pantalan/pantalan/internal/domain"
@@ -21,9 +23,16 @@ import (
 // server's goroutines.
 
 // fakeClock is the clock the services read; tests move it with advance.
+// Its After channels fire only when advance reaches them.
 type fakeClock struct {
-	mu  sync.Mutex
-	now time.Time
+	mu     sync.Mutex
+	now    time.Time
+	timers []clockTimer
+}
+
+type clockTimer struct {
+	at time.Time
+	c  chan time.Time
 }
 
 func newFakeClock() *fakeClock {
@@ -40,6 +49,47 @@ func (c *fakeClock) advance(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.now = c.now.Add(d)
+	pending := c.timers[:0]
+	for _, t := range c.timers {
+		if t.at.After(c.now) {
+			pending = append(pending, t)
+			continue
+		}
+		t.c <- c.now
+	}
+	c.timers = pending
+}
+
+// After fires once advance has moved the clock d past now.
+func (c *fakeClock) After(d time.Duration) <-chan time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ch := make(chan time.Time, 1)
+	if d <= 0 {
+		ch <- c.now
+		return ch
+	}
+	c.timers = append(c.timers, clockTimer{at: c.now.Add(d), c: ch})
+	return ch
+}
+
+// waitForTimer waits until something waits on After, so a test moves the
+// clock only once the timer it means to fire is set.
+func (c *fakeClock) waitForTimer(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.mu.Lock()
+		n := len(c.timers)
+		c.mu.Unlock()
+		if n > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("nothing waited on the clock within 5s")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // fakeHasher keeps the password in the "hash", so signing in costs nothing.
@@ -126,48 +176,76 @@ func (fakeSource) Fetch(_ context.Context, _, ref, _ string) (string, error) {
 }
 
 // fakeBuilder builds every image at once, into docker's images:
-// successfully, until a test calls fail.
+// successfully, until a test calls fail. Each build writes its output (see writes) to the
+// Deployment Log, and while a test holds builds, waits for it mid-build.
 type fakeBuilder struct {
 	mu     sync.Mutex
 	reason string // non-empty: every build fails with it
+	output string // what every build writes to its log
+	held   *heldBuilds
 	docker *fakeRuntime
-	// While release is non-nil, each Build sends on building, then waits
-	// for release to close.
-	release  chan struct{}
-	building chan struct{}
 }
 
-// hold makes every build from now on wait, mid-build, until release is
-// called. building gets a value as each held build starts to wait.
-func (b *fakeBuilder) hold() (building <-chan struct{}, release func()) {
+func (b *fakeBuilder) Build(ctx context.Context, req service.BuildRequest) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.release, b.building = make(chan struct{}), make(chan struct{}, 16)
-	ch := b.release
-	return b.building, sync.OnceFunc(func() {
-		b.mu.Lock()
-		b.release = nil
-		b.mu.Unlock()
-		close(ch)
-	})
-}
-
-func (b *fakeBuilder) Build(_ context.Context, req service.BuildRequest) error {
-	b.mu.Lock()
-	release, building := b.release, b.building
+	reason, output, held := b.reason, b.output, b.held
 	b.mu.Unlock()
-	if release != nil {
-		building <- struct{}{}
-		<-release
+	if _, err := io.WriteString(req.Logs, output); err != nil {
+		return err
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.reason != "" {
-		return errors.New(b.reason)
+	if held != nil {
+		held.logs <- req.Logs
+		select {
+		case <-held.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if reason != "" {
+		return errors.New(reason)
 	}
 	b.docker.addImage(req.Image)
 	return nil
 }
+
+// writes makes every build from now on write output to its log.
+func (b *fakeBuilder) writes(output string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.output = output
+}
+
+// hold makes every build from now on wait, mid-build, until the test
+// calls finish on what it returns, so its Deployment stays building.
+func (b *fakeBuilder) hold() *heldBuilds {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.held = &heldBuilds{logs: make(chan io.Writer, 16), release: make(chan struct{})}
+	return b.held
+}
+
+// heldBuilds are the builds a test holds.
+type heldBuilds struct {
+	logs    chan io.Writer // each held build's log, as it starts to wait
+	release chan struct{}
+	once    sync.Once
+}
+
+// started waits for the next held build and returns its Deployment Log,
+// for the test to write to as the build would.
+func (h *heldBuilds) started(t *testing.T) io.Writer {
+	t.Helper()
+	select {
+	case w := <-h.logs:
+		return w
+	case <-time.After(5 * time.Second):
+		t.Fatal("no build started within 5s")
+		return nil
+	}
+}
+
+// finish lets every held build end.
+func (h *heldBuilds) finish() { h.once.Do(func() { close(h.release) }) }
 
 // fail makes every build from now on fail with reason.
 func (b *fakeBuilder) fail(reason string) {

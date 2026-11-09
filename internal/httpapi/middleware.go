@@ -25,6 +25,9 @@ type Sessions interface {
 	// Authenticate returns service.ErrNoSession unless token names a live
 	// session, and extends it.
 	Authenticate(ctx context.Context, token string) error
+	// CheckSession is Authenticate without extending the session: an
+	// open stream re-checks its session with it.
+	CheckSession(ctx context.Context, token string) error
 	// SignOut ends the session token names, if there is one.
 	SignOut(ctx context.Context, token string) error
 }

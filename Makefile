@@ -74,11 +74,16 @@ smoke: build
 
 # The smoke tests in Playwright's own image, which has Chromium and its
 # libraries, at the version in package.json. The binary is built static so
-# it runs in the image.
+# it runs in the image. A Deployment needs Docker: the container gets this
+# machine's socket and docker CLI, and shares its network, so the binary
+# reaches the App's published port on 127.0.0.1.
 PLAYWRIGHT_VERSION = $(shell node -p "require('./web/app/package.json').devDependencies['@playwright/test']")
+DOCKER_SOCKET = /var/run/docker.sock
 smoke-docker:
 	CGO_ENABLED=0 $(MAKE) build
-	docker run --rm --init --ipc=host --user "$$(id -u):$$(id -g)" -e HOME=/tmp -e CI \
+	docker run --rm --init --ipc=host --network host --user "$$(id -u):$$(id -g)" -e HOME=/tmp -e CI \
+		--group-add "$$(stat -c %g $(DOCKER_SOCKET))" -v "$(DOCKER_SOCKET):/var/run/docker.sock" \
+		-v "$$(command -v docker):/usr/local/bin/docker:ro" \
 		-v "$(CURDIR):/repo" -w /repo/web/app \
 		mcr.microsoft.com/playwright:v$(PLAYWRIGHT_VERSION)-noble npm run smoke
 

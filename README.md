@@ -184,7 +184,8 @@ as the body.
 
 ```sh
 curl -sk $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN"     # status
-curl -sk $API/deployments/<deployment-id>/logs -H "Authorization: Bearer $TOKEN"  # Deployment Log
+curl -sk $API/apps/<app-id>/deployments/<deployment-id>/log -H "Authorization: Bearer $TOKEN"  # Deployment Log
+curl -skN $API/apps/<app-id>/deployments/<deployment-id>/log/stream -H "Authorization: Bearer $TOKEN"  # ...followed live
 ```
 
 A Deployment goes `queued` → `building` → `starting` → `live`. If the new
@@ -214,7 +215,9 @@ All under `/api/v1`, with `Authorization: Bearer <Admin Token>`.
 | `POST` | `/apps/{id}/deployments` | Deploy (body optional: `{"ref": "..."}`) |
 | `GET` | `/apps/{id}/deployments/{deployment-id}` | One Deployment: its ref, commit, image, timing, status and error |
 | `POST` | `/apps/{id}/deployments/{deployment-id}/redeploy` | Roll back: a new Deployment of that Deployment's commit (`409` if it never resolved one) |
-| `GET` | `/deployments/{id}/logs` | A Deployment's log |
+| `GET` | `/apps/{id}/deployments/{deployment-id}/log` | A Deployment's whole Deployment Log, as plain text |
+| `GET` | `/apps/{id}/deployments/{deployment-id}/log/stream` | The Deployment Log as Server-Sent Events: the last 1 MiB, then live until the Deployment is live or failed (`done`). Each event's `id` is a byte offset; send it back as `Last-Event-ID` to resume |
+| `GET` | `/deployments/{id}/logs` | The plain-text Deployment Log, by the Deployment's ID alone (older address) |
 
 Errors answer `{"error": "..."}`. When the error is about one field of the
 body (a `400`, or a `409` for a domain another app has), it also names it:

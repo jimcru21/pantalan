@@ -85,8 +85,13 @@ func TestDeletingAnAppRemovesItsContainerImagesRouteLogsAndRecords(t *testing.T)
 			t.Errorf("Deployment Logs after the delete = %v, want only kept's %s", files, keptDep)
 		}
 		for _, id := range goneDeps {
-			if got := s.get("/api/v1/deployments/"+id+"/logs", withSession(session)); got.status != http.StatusNotFound {
-				t.Errorf("GET the Deployment Log of %s = %d %q, want 404", id, got.status, got.body)
+			for _, path := range []string{
+				"/api/v1/deployments/" + id + "/logs",
+				"/api/v1/apps/" + gone + "/deployments/" + id + "/log",
+			} {
+				if got := s.get(path, withSession(session)); got.status != http.StatusNotFound {
+					t.Errorf("GET %s = %d %q, want 404", path, got.status, got.body)
+				}
 			}
 		}
 	})
@@ -146,15 +151,15 @@ func TestDeletingAnAppWhileADeploymentOfItIsInFlightIsAConflictThatChangesNothin
 		}},
 		{"building", func(s *seam, app string) func() {
 			s.deploy(app, "v2")
-			building, release := s.builder.hold()
+			held := s.builder.hold()
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
 				s.runQueued()
 			}()
-			<-building
+			held.started(s.t)
 			return func() {
-				release()
+				held.finish()
 				<-done
 			}
 		}},
