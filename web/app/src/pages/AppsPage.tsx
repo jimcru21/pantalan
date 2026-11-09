@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { useApps } from "@/api/apps";
 import { DeploymentStatus } from "@/apps/DeploymentStatus";
+import { buttonClass } from "@/components/form";
 import { Alert, Table, Td } from "@/components/panel";
 import { Page } from "@/shell/Page";
 
@@ -12,7 +13,14 @@ export function AppsPage() {
   const { data, error } = useApps();
 
   return (
-    <Page title="Apps">
+    <Page
+      title="Apps"
+      actions={
+        <Link to="/apps/new" className={buttonClass.primary}>
+          New App
+        </Link>
+      }
+    >
       {error && !data && (
         <div className="rounded-lg border bg-card shadow-xs">
           <Alert>{error.message}</Alert>
