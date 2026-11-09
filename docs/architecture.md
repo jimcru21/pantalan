@@ -432,7 +432,7 @@ uploads and publishes last.
 |---|---|
 | `cmd/pantalan` | Entrypoint, config and dependency wiring |
 | `internal/domain` | Entities (`App`, `Deployment`, `Admin`), validation, sentinel errors |
-| `internal/service` | Use cases (`AppService`, `AdminService`, `Deployer`) and the port interfaces; `AdminService` owns every rule about the Admin, for both the Dashboard and `pantalan admin` (`admin show` only reads the store) |
+| `internal/service` | Use cases (`AppService`, `AdminService`, `Deployer`, `AppLogs`) and the port interfaces; `AdminService` owns every rule about the Admin, for both the Dashboard and `pantalan admin` (`admin show` only reads the store). `AppLogs` follows an App Log through the `ContainerLogs` port. Deleting an App is `Deployer.DeleteApp`, not `AppService`'s: it removes the route, containers, images and Deployment Logs, so it needs the runtime, the router and the data dir that only the Deployer has, and it takes the lock `Start` read-locks, so no Deployment can be queued between its in-flight check and the removal |
 | `internal/httpapi` | REST API (Admin Token or session cookie), sign-in and the session cookie, the Node overview's JSON, GitHub webhook, `/healthz`; mounts the Dashboard at `/` |
 | `internal/dashtls` | Dashboard certificate (generate, load, renew) and the listener that redirects plain HTTP |
 | `internal/password` | Argon2id hashing of the Admin password into a PHC string |
@@ -441,12 +441,12 @@ uploads and publishes last.
 | `internal/build` | Dockerfile builder; the Nixpacks builder fails with "nixpacks not installed on this Node" unless a hand-built setup has nixpacks on the PATH |
 | `internal/runtime/docker` | Container lifecycle through the docker CLI |
 | `internal/health` | HTTP readiness probe |
-| `internal/proxy` | Host-based reverse proxy |
+| `internal/proxy` | Host-based reverse proxy (the `Router` port) |
 | `internal/queue` | In-process job queue |
 | `internal/execx` | Shared helpers for running external commands |
 | `internal/sessioncookie` | The Dashboard's session cookie (name, attributes, read, set, clear), shared by `httpapi` and `dashboard` so neither imports the other |
 | `internal/dashboard` | Serves the embedded SPA: `index.html` for every page behind the session gate, the hashed assets, the "frontend not built" page, and the security and cache headers |
-| `internal/nodeinfo` | Read-only Node information: host health from `/proc` and `statfs`, the background sampler's ring, Docker through the Engine API on its unix socket, and the container event ring fed by its `/events` stream |
+| `internal/nodeinfo` | Read-only Node information: host health from `/proc` and `statfs`, the background sampler's ring, Docker through the Engine API on its unix socket, and the container event ring fed by its `/events` stream. It also follows a container's output for the App Log (`Docker.FollowLogs`, the `service.ContainerLogs` port) |
 | `web` | The Dashboard SPA: its source in `web/app` (React, Vite, TypeScript) and the build in `web/dist`, which package `web` embeds into the binary |
 
 ## Decisions
