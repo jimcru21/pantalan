@@ -13,6 +13,11 @@ import (
 
 type AppRepository interface {
 	CreateApp(ctx context.Context, app domain.App) error
+	// UpdateApp replaces the settings (name, repository, branch, build
+	// type, domain, port) of the App with app.ID, keeping its env vars and
+	// creation time. It returns domain.ErrNotFound when there is no such
+	// App, and a domain.ErrConflict when another App has the domain.
+	UpdateApp(ctx context.Context, app domain.App) error
 	GetApp(ctx context.Context, id string) (domain.App, error)
 	ListApps(ctx context.Context) ([]domain.App, error)
 	FindAppsByRepo(ctx context.Context, repoURL, branch string) ([]domain.App, error)

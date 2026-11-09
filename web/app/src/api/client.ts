@@ -5,17 +5,23 @@
 // sign-in screen itself uses `requestPublic`, where a 401 is a wrong
 // password, not a signed-out browser.
 
-/** An API answer other than 2xx: its status, its {"error"} message, and Retry-After. */
+/**
+ * An API answer other than 2xx: its status, its {"error"} message, the
+ * request body field the error is about (if any), and Retry-After.
+ */
 export class ApiError extends Error {
   readonly status: number;
   /** Retry-After, in seconds, when the response had one. */
   readonly retryAfter?: number;
+  /** The JSON name of the body field the error is about, e.g. "domain". */
+  readonly field?: string;
 
-  constructor(status: number, message: string, retryAfter?: number) {
+  constructor(status: number, message: string, retryAfter?: number, field?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.retryAfter = retryAfter;
+    this.field = field;
   }
 }
 
@@ -71,22 +77,27 @@ export async function requestPublic<T>(
     body: json === undefined ? undefined : JSON.stringify(json),
   });
   if (!res.ok) {
-    throw new ApiError(res.status, await errorMessage(res), retryAfter(res));
+    const { message, field } = await errorBody(res);
+    throw new ApiError(res.status, message, retryAfter(res), field);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
-// The API's {"error": "..."} body, or the status text when there's none
-// (e.g. the plain-text 401 or the cross-origin 403).
-async function errorMessage(res: Response): Promise<string> {
+// The API's ErrorResponse body, {"error": "...", "field"?: "..."}, or the
+// status text when there's none (e.g. the plain-text 401 or the
+// cross-origin 403).
+async function errorBody(res: Response): Promise<{ message: string; field?: string }> {
   try {
-    const body = (await res.json()) as { error?: unknown };
-    if (typeof body.error === "string") return body.error;
+    const body = (await res.json()) as { error?: unknown; field?: unknown };
+    if (typeof body.error === "string") {
+      const field = typeof body.field === "string" && body.field !== "" ? body.field : undefined;
+      return { message: body.error, field };
+    }
   } catch {
     // not JSON
   }
-  return res.statusText || `HTTP ${res.status}`;
+  return { message: res.statusText || `HTTP ${res.status}` };
 }
 
 function retryAfter(res: Response): number | undefined {

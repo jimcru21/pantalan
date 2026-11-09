@@ -3,15 +3,18 @@ import { Link } from "react-router";
 
 /**
  * A page's frame inside the shell: its heading, then its content. `up`
- * links to the page above this one (e.g. the Apps list from an App).
+ * links to the page above this one (e.g. the Apps list from an App);
+ * `actions` sit at the heading's end (e.g. a "New App" link).
  */
 export function Page({
   title,
   up,
+  actions,
   children,
 }: {
   title: string;
   up?: { to: string; label: string };
+  actions?: ReactNode;
   children?: ReactNode;
 }) {
   return (
@@ -23,7 +26,10 @@ export function Page({
             {up.label}
           </Link>
         )}
-        <h1 className="text-xl font-semibold">{title}</h1>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-xl font-semibold">{title}</h1>
+          {actions && <div className="flex gap-2">{actions}</div>}
+        </div>
       </div>
       {children}
     </main>
