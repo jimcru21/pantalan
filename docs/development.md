@@ -9,6 +9,9 @@ the README has the two-minute version.
 - Go 1.26+
 - Docker
 - git
+- Node 24.22.2 with npm (the version in `web/app/.nvmrc`), for the
+  Dashboard SPA in `web/app` and for `make check`. `go build` and `go test`
+  don't need it, so Go-only work never waits on Node.
 
 Apps build from the Dockerfile at the root of their repository. Nixpacks
 isn't part of a Node: the installer doesn't install it, so an app with
@@ -74,6 +77,12 @@ migration file and Pantalan rebuilds and restarts within seconds
 browser to see it. A change that doesn't compile prints the error and keeps
 the last good build running.
 
+The new Dashboard, the React SPA in `web/app` (ADR 0003), runs beside it
+on Vite's dev server at https://localhost:5173, with the same certificate
+and `/api` proxied to Pantalan. Edits under `web/app/src` show up in the
+open page at once (hot reload), with no refresh. The binary doesn't serve
+the SPA yet: until it does, 8443 keeps today's Dashboard.
+
 Apps you deploy run in the stack's own Docker daemon (Docker-in-Docker, the
 `docker` service), not in your machine's Docker, and are reachable through
 the app proxy at http://localhost:8080 with their domain as the `Host`
@@ -82,6 +91,7 @@ header (`curl -H 'Host: myapp.example.com' http://localhost:8080`).
 ```sh
 docker compose up -d                                             # in the background
 docker compose logs -f pantalan                                  # follow the build and server output
+docker compose logs -f web                                       # the SPA dev server's output
 docker compose exec pantalan pantalan admin reset-password       # a new Admin password
 docker compose exec pantalan cat /data/dev-secrets.env           # the Admin Token and webhook secret
 docker compose down                                              # stop (data, apps and caches stay)
@@ -103,10 +113,11 @@ PANTALAN_DEV_BIND=0.0.0.0
 PANTALAN_DEV_HOST=203.0.113.10   # the VPS's public IP, for the printed URLs
 ```
 
-then `docker compose up -d` and open `https://<public-ip>:8443`. Docker's
-published ports bypass ufw, so the provider's firewall or security group is
-what decides who can reach them: open 8443 (and 8080 to try the app proxy),
-ideally only to your own IP. The Admin Token and webhook secret are random,
+then `docker compose up -d` and open `https://<public-ip>:8443` (and
+`https://<public-ip>:5173` for the SPA). Docker's published ports bypass
+ufw, so the provider's firewall or security group is what decides who can
+reach them: open 8443 and 5173 (and 8080 to try the app proxy), ideally
+only to your own IP. The Admin Token and webhook secret are random,
 made on first start and kept in the data volume, because anyone who can
 reach the API with the token can deploy containers on the VPS.
 
@@ -114,14 +125,57 @@ The `docker` service runs privileged, which Docker-in-Docker needs.
 
 ### Without Docker
 
-With Go 1.26+, git and Docker on your machine:
+With Go 1.26+, git and Docker on your machine (and Node for the SPA):
 
 ```sh
 make run      # Dashboard + API on https://localhost:8443, app proxy on :8080
-make check    # vet + race tests + gofmt
+make web-dev  # the SPA with hot reload on https://localhost:5173, /api proxied to make run
+make check    # Go: vet, race tests, gofmt; SPA: type check, ESLint, Prettier, tests
 ```
 
 `make run` doesn't rebuild on changes: stop it and run it again.
+`make web-dev` uses the certificate `make run` keeps in `./data/tls`, so
+start `make run` first.
+
+### The Dashboard SPA
+
+The Dashboard's frontend is a React, Vite and TypeScript SPA in `web/app`
+([ADR 0003](adr/0003-react-spa-dashboard.md)), styled with Tailwind v4 and
+shadcn/ui (`components.json`; add a component with
+`npx shadcn@latest add <name>` in `web/app`). Pages are routed by React
+Router and fetch through TanStack Query; log streams use `EventSource`.
+The CSP forbids `<style>` elements, so nothing may inject one: no CSS-in-JS,
+no shadcn/ui chart wrapper. React's `style` prop is fine.
+
+```sh
+make web-deps   # npm ci --ignore-scripts, from the lockfile (make does it when needed)
+make web-check  # tsc, ESLint, Prettier and the tests (part of make check)
+make web        # build into web/dist
+make types      # regenerate the API's TypeScript types from the Go structs
+```
+
+In `web/app`, `npm run format` fixes formatting and `npx vitest` runs the
+tests in watch mode.
+
+**Tests** render the whole app at a route with Vitest and React Testing
+Library, and stub only `fetch` and `EventSource`
+(`src/test/render.tsx` and `src/test/network.ts`). No hook or component is
+mocked. A request no test handler answers fails the test. Fixtures are
+typed by the generated API types (`src/test/fixtures.ts`).
+
+**API types** in `web/app/src/api/generated` are generated from the Go
+structs by [tygo](https://github.com/gzuidhof/tygo), a Go tool dependency
+configured in `tygo.yaml`. They're committed, and CI fails when they're
+stale: after changing a response struct, or adding one to `tygo.yaml`, run
+`make types` and commit the result.
+
+### Frontend dependencies
+
+CI and the release install with `npm ci --ignore-scripts`, so no package
+runs code at install. Dependabot opens one grouped npm update a week. A
+pull request that adds a runtime dependency (one in `dependencies`, which
+ends up in the bundle) must say why it's needed and why the platform or an
+existing dependency won't do. Dev tooling in `devDependencies` is exempt.
 
 ### Test the installer
 
@@ -221,5 +275,7 @@ internal/health/        readiness probe
 internal/proxy/         reverse proxy
 internal/queue/         deploy job queue
 web/                    Dashboard templates and static files, embedded (no build step)
+web/app/                the Dashboard SPA (React, Vite, TypeScript), not embedded yet
+tygo.yaml               API types generated into web/app/src/api/generated (make types)
 docs/                   architecture notes
 ```
