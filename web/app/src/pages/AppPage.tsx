@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router";
 import type { Deployment } from "@/api/generated/domain";
 import type { App } from "@/api/generated/httpapi";
 import { isNotFound, useApp, useDeployments } from "@/api/apps";
+import { AppLog } from "@/apps/AppLog";
 import { DeployButton } from "@/apps/DeployButton";
 import { DeploymentStatus } from "@/apps/DeploymentStatus";
 import { DeploymentLink, Queue } from "@/apps/Queue";
@@ -60,6 +61,7 @@ export function AppPage() {
               deployment={deployments.data.find((d) => d.status === "live")}
               action={<DeployButton appID={appId} />}
             />
+            <AppLog appID={appId} liveID={deployments.data.find((d) => d.status === "live")?.id} />
             <Queue deployments={deployments.data} />
             <History deployments={deployments.data} />
           </>
