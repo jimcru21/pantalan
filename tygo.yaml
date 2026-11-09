@@ -18,6 +18,9 @@ packages:
   - path: github.com/pantalan/pantalan/internal/httpapi
     output_path: web/app/src/api/generated/httpapi.ts
     include_files:
+      - app_types.go
       - node_types.go
       - sessions.go
     preserve_comments: types
+    frontmatter: |
+      import type * as domain from "./domain";

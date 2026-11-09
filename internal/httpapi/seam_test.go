@@ -40,6 +40,7 @@ type seam struct {
 	apps      *service.AppService
 	deployer  *service.Deployer
 	runtime   *fakeRuntime
+	builder   *fakeBuilder
 	router    *fakeRouter
 	scheduler *fakeScheduler
 	host      *fakeHost
@@ -97,6 +98,7 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		hasher:    &fakeHasher{},
 		hashWait:  newFakeTimer(),
 		runtime:   newFakeRuntime(),
+		builder:   &fakeBuilder{},
 		router:    newFakeRouter(),
 		scheduler: &fakeScheduler{},
 		host:      &fakeHost{},
@@ -114,7 +116,7 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		Apps:        store,
 		Deployments: store,
 		Source:      fakeSource{},
-		Builders:    map[domain.BuildType]service.Builder{domain.BuildDockerfile: fakeBuilder{}, domain.BuildNixpacks: fakeBuilder{}},
+		Builders:    map[domain.BuildType]service.Builder{domain.BuildDockerfile: s.builder, domain.BuildNixpacks: s.builder},
 		Runtime:     s.runtime,
 		Health:      fakeHealth{},
 		Router:      s.router,
