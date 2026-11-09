@@ -4,10 +4,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { App, Deployment } from "@/api/generated/domain";
 import { appKeys, isInProgress, isNotFound, useApp, useDeployments } from "@/api/apps";
 import { useDeployment } from "@/api/deployments";
+import { useLogStream } from "@/api/streams";
 import { DeploymentStatus } from "@/apps/DeploymentStatus";
 import { RedeployButton } from "@/apps/RedeployButton";
 import { Alert, Facts, Panel } from "@/components/panel";
 import { formatDuration, formatUTCDateTime } from "@/lib/format";
+import { LogView } from "@/logs/LogView";
 import { NotFoundPage, Page } from "@/shell/Page";
 
 /**
@@ -76,7 +78,27 @@ export function DeploymentPage() {
           <StillServing live={live} app={app.data} />
         )}
       </Panel>
+      <DeploymentLog appID={appId} deploymentID={deploymentId} />
     </Page>
+  );
+}
+
+// The Deployment's own output, streamed live while it runs. The stream
+// keeps going while the Admin is on another page, until it's done.
+function DeploymentLog({ appID, deploymentID }: { appID: string; deploymentID: string }) {
+  const log = `/api/v1/apps/${encodeURIComponent(appID)}/deployments/${encodeURIComponent(deploymentID)}/log`;
+  const stream = useLogStream(`${log}/stream`, { keepRunning: true });
+  return (
+    <Panel
+      title="Deployment Log"
+      action={
+        <a href={log} target="_blank" rel="noreferrer" className="text-[13px]">
+          Full log as plain text
+        </a>
+      }
+    >
+      <LogView stream={stream} label="Deployment Log" />
+    </Panel>
   );
 }
 
