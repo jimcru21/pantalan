@@ -3,82 +3,76 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"html"
 	"net/http"
-	"regexp"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/pantalan/pantalan/internal/httpapi"
 )
 
-// text is GET path's visible text, failing the test unless it is a 200.
-func (b *browser) text(path string) string {
+// The Node overview's Docker endpoints, end to end: the real Engine
+// client against the fake Engine.
+
+// containers is GET /api/v1/node/containers.
+func (b *browser) containers() []httpapi.NodeContainer {
 	b.t.Helper()
-	got := b.fragment(path)
-	if got.StatusCode != http.StatusOK {
-		b.t.Fatalf("GET %s = %d, want 200:\n%s", path, got.StatusCode, got.body)
-	}
-	return text(got.body)
+	return getJSON[[]httpapi.NodeContainer](b, "/api/v1/node/containers")
 }
 
-func TestTheStatBandShowsContainersDockerAndDockersRootDisk(t *testing.T) {
+// byID is containers by their ID.
+func byID(cs []httpapi.NodeContainer) map[string]httpapi.NodeContainer {
+	out := map[string]httpapi.NodeContainer{}
+	for _, c := range cs {
+		out[c.ID] = c
+	}
+	return out
+}
+
+func TestTheNodeEndpointCountsContainersAndGivesDockersRootDisk(t *testing.T) {
 	fp := newFakeProc(t)
 	_, b, fe := serveWithEngine(t, fp)
 
-	for _, path := range []string{"/", "/fragments/band"} {
-		got := b.text(path)
-		for _, want := range []string{
-			"Containers 2/3 running",
-			"Docker 28.5.1",
-			"Disk /var/lib/docker 150.0 GiB free of 200.0 GiB",
-			// / is on another filesystem, so it keeps its tile.
-			"Disk / 50.0 GiB free of 100.0 GiB",
-		} {
-			if !strings.Contains(got, want) {
-				t.Errorf("GET %s lacks %q:\n%s", path, want, got)
-			}
-		}
-		if strings.Contains(got, "unhealthy") {
-			t.Errorf("GET %s counts unhealthy containers when there are none:\n%s", path, got)
-		}
+	n := b.node()
+	if want := (httpapi.ContainerCounts{Running: 2, Total: 3}); !n.Docker.Reachable || n.Docker.Version != "28.5.1" || n.Docker.Containers == nil || *n.Docker.Containers != want {
+		t.Errorf("docker = %s, want reachable 28.5.1 with %s", asJSON(n.Docker), asJSON(want))
+	}
+	// / is on another filesystem, so it keeps its tile.
+	wantDisks := []httpapi.DiskTile{{Path: "/var/lib/docker", Total: 200 << 30, Free: 150 << 30}, {Path: "/", Total: 100 << 30, Free: 50 << 30}}
+	if !slices.Equal(n.Host.Disks, wantDisks) {
+		t.Errorf("disks = %s, want %s", asJSON(n.Host.Disks), asJSON(wantDisks))
 	}
 
-	fe.set(func(s *engineState) {
-		s.Containers[1].Status = "Up 2 hours (unhealthy)"
-		s.Containers[1].Health = &engineHealth{Status: "unhealthy"}
-	})
-	if got, want := b.text("/fragments/band"), "Containers 2/3 running 1 unhealthy"; !strings.Contains(got, want) {
-		t.Errorf("band lacks %q:\n%s", want, got)
+	for _, c := range []struct {
+		name          string
+		makeUnhealthy func(*engineContainer)
+	}{
+		{name: "from its health", makeUnhealthy: func(c *engineContainer) { c.Health = &engineHealth{Status: "unhealthy"} }},
+		// Before API 1.52 the list has no health; its status says it.
+		{name: "from its status", makeUnhealthy: func(c *engineContainer) { c.Health, c.Status = nil, "Up 2 hours (unhealthy)" }},
+	} {
+		fe.set(func(s *engineState) {
+			*s = defaultEngineState()
+			c.makeUnhealthy(&s.Containers[1])
+		})
+		if got := b.node().Docker.Containers; got == nil || got.Unhealthy != 1 {
+			t.Errorf("unhealthy %s: containers = %s, want 1 unhealthy", c.name, asJSON(got))
+		}
 	}
 
 	// Docker's data on the filesystem holding /: one tile for both.
 	fp.set(func(h *hostState) { h.DockerOnRoot = true })
-	got := b.text("/fragments/band")
-	if want := "Disk /var/lib/docker 50.0 GiB free of 100.0 GiB"; !strings.Contains(got, want) {
-		t.Errorf("band lacks %q:\n%s", want, got)
-	}
-	if strings.Contains(got, "Disk / ") {
-		t.Errorf("band shows / as well as the Docker root dir on the same filesystem:\n%s", got)
+	wantDisks = []httpapi.DiskTile{{Path: "/var/lib/docker", Total: 100 << 30, Free: 50 << 30}}
+	if got := b.node().Host.Disks; !slices.Equal(got, wantDisks) {
+		t.Errorf("disks with Docker's root dir on / = %s, want %s", asJSON(got), asJSON(wantDisks))
 	}
 
 	if n := fe.callCount("/system/df"); n != 0 {
-		t.Errorf("the band called system/df %d times, want never", n)
+		t.Errorf("the Node endpoint called system/df %d times, want never", n)
 	}
-}
-
-var tableRow = regexp.MustCompile(`(?s)<tr[ >].*?</tr>`)
-
-// tableRows is the visible text of each body row of the tables in doc.
-func tableRows(doc string) []string {
-	var rows []string
-	for _, tr := range tableRow.FindAllString(doc, -1) {
-		if !strings.Contains(tr, "<th") {
-			rows = append(rows, text(tr))
-		}
-	}
-	return rows
 }
 
 // createApp creates an app through /api/v1 and returns its ID.
@@ -96,62 +90,50 @@ func createApp(t *testing.T, s *running, name string) string {
 	return app.ID
 }
 
-var badge = regexp.MustCompile(`<span class="badge"[^>]*>([^<]*)</span>`)
-
-func TestTheContainersTabListsEveryContainerAndBadgesPantalanApps(t *testing.T) {
+func TestTheContainersEndpointListsEveryContainerWithItsApp(t *testing.T) {
 	fp := newFakeProc(t)
 	s, b, fe := serveWithEngine(t, fp)
 	appID := createApp(t, s, "shop")
+	created := time.Date(2026, 11, 6, 9, 30, 0, 0, time.UTC)
 	fe.set(func(st *engineState) {
 		st.Containers = []engineContainer{
-			{ID: "a1", Names: []string{"/pantalan-" + appID + "-d1"}, Image: "pantalan/" + appID + ":d1", State: "running", Status: "Up 3 hours",
+			{ID: "a1", Names: []string{"/pantalan-" + appID + "-d1"}, Image: "pantalan/" + appID + ":d1", Created: created.Unix(), State: "running", Status: "Up 3 hours",
 				Labels: map[string]string{"pantalan.app": appID, "pantalan.deployment": "d1"},
 				Ports:  []enginePort{{IP: "127.0.0.1", PrivatePort: 8080, PublicPort: 49153, Type: "tcp"}}},
-			{ID: "c1", Names: []string{"/db"}, Image: "postgres:17", State: "running", Status: "Up 2 days (healthy)", Health: &engineHealth{Status: "healthy"},
+			{ID: "c1", Names: []string{"/db"}, Image: "postgres:17", Created: created.Unix(), State: "running", Status: "Up 2 days (healthy)", Health: &engineHealth{Status: "healthy"},
 				Ports: []enginePort{{PrivatePort: 5432, Type: "tcp"}}},
-			{ID: "c2", Names: []string{"/proxy"}, Image: "nginx:1.27", State: "running", Status: "Up 5 minutes",
+			{ID: "c2", Names: []string{"/proxy"}, Image: "nginx:1.27", Created: created.Unix(), State: "running", Status: "Up 5 minutes",
 				Ports: []enginePort{
 					{IP: "0.0.0.0", PrivatePort: 80, PublicPort: 8081, Type: "tcp"},
 					{IP: "::", PrivatePort: 80, PublicPort: 8081, Type: "tcp"},
 					{IP: "0.0.0.0", PrivatePort: 53, PublicPort: 5353, Type: "udp"},
 				}},
-			{ID: "c3", Names: []string{"/migrate"}, Image: "postgres:17", State: "exited", Status: "Exited (1) 2 hours ago"},
-			{ID: "c4", Names: []string{"/legacy"}, Labels: map[string]string{"pantalan.app": "gone"}, Image: "pantalan/gone:d0", State: "created", Status: "Created"},
+			{ID: "c3", Names: []string{"/migrate"}, Image: "postgres:17", Created: created.Unix(), State: "exited", Status: "Exited (1) 2 hours ago"},
+			{ID: "c4", Names: []string{"/legacy"}, Labels: map[string]string{"pantalan.app": "gone"}, Image: "pantalan/gone:d0", Created: created.Unix(), State: "created", Status: "Created"},
 		}
 	})
 
-	want := []string{
-		// name, app badge, image, state/health, ports, uptime
-		"pantalan-" + appID + "-d1 shop pantalan/" + appID + ":d1 running 127.0.0.1:49153→8080/tcp 3 hours",
-		"db postgres:17 running · healthy 5432/tcp 2 days",
+	at := "2026-11-06T09:30:00Z"
+	want := []httpapi.NodeContainer{
+		{ID: "a1", Name: "pantalan-" + appID + "-d1", Image: "pantalan/" + appID + ":d1", Created: at, State: "running", Status: "Up 3 hours",
+			Ports: []httpapi.ContainerPort{{IP: "127.0.0.1", PrivatePort: 8080, PublicPort: 49153, Type: "tcp"}},
+			App:   &httpapi.ContainerApp{ID: appID, Name: "shop"}},
+		{ID: "c1", Name: "db", Image: "postgres:17", Created: at, State: "running", Health: "healthy", Status: "Up 2 days (healthy)",
+			Ports: []httpapi.ContainerPort{{PrivatePort: 5432, Type: "tcp"}}},
 		// The IPv6 twin of a published port is left out.
-		"proxy nginx:1.27 running 0.0.0.0:8081→80/tcp, 0.0.0.0:5353→53/udp 5 minutes",
-		"migrate postgres:17 Exited (1) 2 hours ago – –",
-		// An app the store doesn't have is badged with its label.
-		"legacy gone pantalan/gone:d0 Created – –",
+		{ID: "c2", Name: "proxy", Image: "nginx:1.27", Created: at, State: "running", Status: "Up 5 minutes",
+			Ports: []httpapi.ContainerPort{{IP: "0.0.0.0", PrivatePort: 80, PublicPort: 8081, Type: "tcp"}, {IP: "0.0.0.0", PrivatePort: 53, PublicPort: 5353, Type: "udp"}}},
+		{ID: "c3", Name: "migrate", Image: "postgres:17", Created: at, State: "exited", Status: "Exited (1) 2 hours ago", Ports: []httpapi.ContainerPort{}},
+		// An app the store doesn't have keeps its label's ID.
+		{ID: "c4", Name: "legacy", Image: "pantalan/gone:d0", Created: at, State: "created", Status: "Created", Ports: []httpapi.ContainerPort{},
+			App: &httpapi.ContainerApp{ID: "gone"}},
 	}
-	for _, path := range []string{"/", "/fragments/containers"} {
-		got := b.fragment(path)
-		if got.StatusCode != http.StatusOK {
-			t.Fatalf("GET %s = %d", path, got.StatusCode)
-		}
-		rows := tableRows(got.body)
-		if len(rows) != len(want) {
-			t.Fatalf("GET %s has %d container rows, want %d:\n%s", path, len(rows), len(want), strings.Join(rows, "\n"))
-		}
-		for i := range want {
-			if !strings.HasPrefix(rows[i], want[i]) {
-				t.Errorf("GET %s row %d = %q, want it to start %q", path, i, rows[i], want[i])
-			}
-		}
-		badges := badge.FindAllStringSubmatch(got.body, -1)
-		if len(badges) != 2 || badges[0][1] != "shop" || badges[1][1] != "gone" {
-			t.Errorf("GET %s badges = %q, want shop and gone", path, badges)
-		}
+	if got := b.containers(); !reflect.DeepEqual(got, want) {
+		t.Errorf("containers =\n%s\nwant\n%s", asJSON(got), asJSON(want))
 	}
 }
 
-func TestContainerCPUIsADeltaFromTheFirstViewAndMemoryLeavesOutInactiveFile(t *testing.T) {
+func TestContainerCPUIsADeltaFromTheFirstReadAndMemoryLeavesOutInactiveFile(t *testing.T) {
 	fp := newFakeProc(t)
 	_, b, fe := serveWithEngine(t, fp)
 	const sec = uint64(time.Second)
@@ -166,20 +148,28 @@ func TestContainerCPUIsADeltaFromTheFirstViewAndMemoryLeavesOutInactiveFile(t *t
 		}
 	})
 
-	cpuAndMemory := func(path string) []string {
+	check := func(read string, wantCPU map[string]float64) {
 		t.Helper()
-		rows := tableRows(b.fragment(path).body)
-		if len(rows) != 3 {
-			t.Fatalf("GET %s has %d rows, want 3: %q", path, len(rows), rows)
+		got := byID(b.containers())
+		for id, wantMem := range map[string][2]uint64{"c1": {256 << 20, 1 << 30}, "c2": {64 << 20, 8 << 30}} {
+			st := got[id].Stats
+			if st == nil {
+				t.Errorf("%s read: %s has no stats", read, id)
+				continue
+			}
+			if st.MemoryUsed != wantMem[0] || st.MemoryLimit != wantMem[1] {
+				t.Errorf("%s read: %s memory = %d of %d, want %d of %d", read, id, st.MemoryUsed, st.MemoryLimit, wantMem[0], wantMem[1])
+			}
+			if want, ok := wantCPU[id]; ok != (st.CPU != nil) || ok && !near(*st.CPU, want) {
+				t.Errorf("%s read: %s stats = %s, want cpu %v (missing: %v)", read, id, asJSON(st), want, !ok)
+			}
 		}
-		return rows
-	}
-	first := cpuAndMemory("/")
-	for i, want := range []string{"– 256.0 MiB / 1.0 GiB", "– 64.0 MiB / 8.0 GiB", "– –"} {
-		if !strings.HasSuffix(first[i], want) {
-			t.Errorf("first view, row %d = %q, want it to end %q", i, first[i], want)
+		if st := got["c3"].Stats; st != nil {
+			t.Errorf("%s read: the exited container has stats %s", read, asJSON(st))
 		}
 	}
+	// The first read of a container has no delta.
+	check("first", nil)
 
 	fe.set(func(st *engineState) {
 		c1, c2 := st.Stats["c1"], st.Stats["c2"]
@@ -189,12 +179,8 @@ func TestContainerCPUIsADeltaFromTheFirstViewAndMemoryLeavesOutInactiveFile(t *t
 		c2.CPUTotal, c2.SystemCPU = c2.CPUTotal+sec/2, c2.SystemCPU+40*sec
 		st.Stats["c1"], st.Stats["c2"] = c1, c2
 	})
-	next := cpuAndMemory("/fragments/containers")
-	for i, want := range []string{"20.0% 256.0 MiB / 1.0 GiB", "2.5% 64.0 MiB / 8.0 GiB", "– –"} {
-		if !strings.HasSuffix(next[i], want) {
-			t.Errorf("next view, row %d = %q, want it to end %q", i, next[i], want)
-		}
-	}
+	check("next", map[string]float64{"c1": 0.2, "c2": 0.025})
+
 	if n := fe.callCount("/containers/c3/stats"); n != 0 {
 		t.Errorf("stats of the exited container were asked for %d times, want never", n)
 	}
@@ -217,7 +203,7 @@ func TestNoMoreThan8StatsRequestsRunAtOnce(t *testing.T) {
 	fe.mu.Unlock()
 
 	done := make(chan page)
-	go func() { done <- b.fragment("/fragments/containers") }()
+	go func() { done <- b.get("/api/v1/node/containers") }()
 	inFlight := func() int {
 		fe.mu.Lock()
 		defer fe.mu.Unlock()
@@ -245,29 +231,22 @@ func TestNoMoreThan8StatsRequestsRunAtOnce(t *testing.T) {
 			t.Errorf("container c%02d had %d stats requests, want 1", i, n)
 		}
 	}
-	if rows := tableRows(got.body); len(rows) != 20 || !strings.HasSuffix(rows[19], "1.0 MiB / 1.0 GiB") {
-		t.Errorf("containers tab after the stats = %q, want 20 rows with memory", rows)
+	var cs []httpapi.NodeContainer
+	if err := json.Unmarshal([]byte(got.body), &cs); err != nil || got.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/v1/node/containers = %d %v:\n%s", got.StatusCode, err, got.body)
 	}
-}
-
-var tabButton = regexp.MustCompile(`<button [^>]*role="tab"[^>]*aria-selected="(true|false)"[^>]*hx-get="/fragments/(\w+)"[^>]*>`)
-
-// openTab is the tab a fragment's tab bar marks selected, and the tabs
-// it offers.
-func openTab(t *testing.T, doc string) (string, []string) {
-	t.Helper()
-	var selected string
-	var all []string
-	for _, m := range tabButton.FindAllStringSubmatch(doc, -1) {
-		all = append(all, m[2])
-		if m[1] == "true" {
-			selected = m[2]
+	withStats := 0
+	for _, c := range cs {
+		if c.Stats != nil && c.Stats.MemoryUsed == 1<<20 {
+			withStats++
 		}
 	}
-	return selected, all
+	if len(cs) != 20 || withStats != 20 {
+		t.Errorf("containers after the stats = %d, %d of them with memory, want 20 with memory", len(cs), withStats)
+	}
 }
 
-func TestTheImagesTabListsImagesWithSizeCreatedAndUseAndPollsEvery30s(t *testing.T) {
+func TestTheImagesEndpointListsImagesWithSizeCreatedAndUse(t *testing.T) {
 	fp := newFakeProc(t)
 	_, b, fe := serveWithEngine(t, fp)
 	fe.set(func(st *engineState) {
@@ -277,112 +256,19 @@ func TestTheImagesTabListsImagesWithSizeCreatedAndUseAndPollsEvery30s(t *testing
 		)
 	})
 
-	// The tab bar of the page's open tab offers it.
-	if open, all := openTab(t, b.get("/").body); open != "containers" || !slices.Contains(all, "images") {
-		t.Fatalf("the page's tab bar has %q open of %q, want containers with images on offer", open, all)
+	// In use is by any container, running or not.
+	want := []httpapi.NodeImage{
+		{ID: "sha256:pg", Tags: []string{"postgres:17"}, Size: 450 << 20, Created: "2026-10-01T12:00:00Z", InUse: true},
+		{ID: "sha256:redis", Tags: []string{"redis:7"}, Size: 120 << 20, Created: "2026-09-15T08:30:00Z", InUse: true},
+		{ID: "sha256:old", Tags: []string{"shop:1", "shop:latest"}, Size: 2 << 30, Created: "2025-01-02T03:04:00Z"},
+		{ID: "sha256:dangling", Tags: []string{}, Size: 512 << 10, Created: "2026-11-01T00:00:00Z"},
 	}
-
-	got := b.fragment("/fragments/images")
-	if got.StatusCode != http.StatusOK {
-		t.Fatalf("GET /fragments/images = %d", got.StatusCode)
-	}
-	if open, _ := openTab(t, got.body); open != "images" {
-		t.Errorf("the images tab marks %q open", open)
-	}
-	want := []string{
-		"postgres:17 450.0 MiB 2026-10-01 In use",
-		"redis:7 120.0 MiB 2026-09-15 In use",
-		"shop:1, shop:latest 2.0 GiB 2025-01-02 Unused",
-		"<none>:<none> 512.0 KiB 2026-11-01 Unused",
-	}
-	if rows := tableRows(got.body); !slices.Equal(rows, want) {
-		t.Errorf("images tab rows =\n%q\nwant\n%q", rows, want)
-	}
-	regions := polled.FindAllStringSubmatch(got.body, -1)
-	if len(regions) != 1 || regions[0][2] != "/fragments/images" || regions[0][3] != "every 30s" || regions[0][4] != "outerHTML" {
-		t.Errorf("the images tab polls %q, want itself every 30s", regions)
+	if got := getJSON[[]httpapi.NodeImage](b, "/api/v1/node/images"); !reflect.DeepEqual(got, want) {
+		t.Errorf("images =\n%s\nwant\n%s", asJSON(got), asJSON(want))
 	}
 }
 
-func TestTheStatusDotIsRedWhenDockerIsUnreachableAndAmberForUnhealthyRestartingOrWarnings(t *testing.T) {
-	fp := newFakeProc(t)
-	_, b, fe := serveWithEngine(t, fp)
-
-	for _, c := range []struct {
-		name    string
-		engine  func(*engineState)
-		host    func(*hostState)
-		down    bool // the fake socket closed
-		want    string
-		reasons []string // a reason ending in "…" is a prefix
-	}{
-		{name: "healthy", want: "ok", reasons: []string{"Healthy"}},
-		{name: "unhealthy container", want: "warn", reasons: []string{"Container cache is unhealthy"}, engine: func(s *engineState) {
-			s.Containers[1].Status, s.Containers[1].Health = "Up 2 hours (unhealthy)", &engineHealth{Status: "unhealthy"}
-		}},
-		{name: "unhealthy before API 1.52, from the status", want: "warn", reasons: []string{"Container cache is unhealthy"}, engine: func(s *engineState) {
-			s.Containers[1].Status = "Up 2 hours (unhealthy)"
-		}},
-		{name: "restarting container", want: "warn", reasons: []string{"Container cache is restarting"}, engine: func(s *engineState) {
-			s.Containers[1].State, s.Containers[1].Status = "restarting", "Restarting (1) 3 seconds ago"
-		}},
-		{name: "Docker warnings", want: "warn", reasons: []string{"Docker: WARNING: No swap limit support"}, engine: func(s *engineState) {
-			s.Info.Warnings = []string{"WARNING: No swap limit support"}
-		}},
-		{name: "Docker's disk under 10% free", want: "warn", reasons: []string{"Disk /var/lib/docker has under 10% free"}, host: func(h *hostState) {
-			h.DockerDiskFree = h.DockerDiskTotal / 20
-		}},
-		{name: "Docker unreachable", down: true, want: "down", reasons: []string{"Docker unreachable: …"}},
-		{name: "red beats amber", down: true, want: "down", reasons: []string{"Docker unreachable: …", "Memory has under 10% available"}, host: func(h *hostState) {
-			h.MemAvailable = h.MemTotal / 20
-		}},
-		{name: "recovered", want: "ok", reasons: []string{"Healthy"}},
-	} {
-		fe.set(func(s *engineState) {
-			*s = defaultEngineState()
-			if c.engine != nil {
-				c.engine(s)
-			}
-		})
-		fp.set(func(h *hostState) {
-			h.MemTotal, h.MemAvailable = 8<<20, 4<<20
-			h.DockerDiskTotal, h.DockerDiskFree = 200<<30, 150<<30
-			if c.host != nil {
-				c.host(h)
-			}
-		})
-		if c.down {
-			fe.close()
-		} else if !fe.isOpen() {
-			fe.open()
-		}
-		fp.sample(b)
-
-		for _, path := range []string{"/", "/fragments/topbar"} {
-			m := statusDot.FindStringSubmatch(b.fragment(path).body)
-			if m == nil {
-				t.Fatalf("%s: GET %s has no status dot", c.name, path)
-			}
-			colour, reasons := m[1], strings.Split(html.UnescapeString(m[2]), "\n")
-			if colour != c.want {
-				t.Errorf("%s: GET %s status dot is %q, want %q (tooltip %q)", c.name, path, colour, c.want, reasons)
-			}
-			match := len(reasons) == len(c.reasons)
-			for i := 0; match && i < len(reasons); i++ {
-				if prefix, ok := strings.CutSuffix(c.reasons[i], "…"); ok {
-					match = strings.HasPrefix(reasons[i], prefix)
-				} else {
-					match = reasons[i] == c.reasons[i]
-				}
-			}
-			if !match {
-				t.Errorf("%s: GET %s tooltip lists %q, want %q", c.name, path, reasons, c.reasons)
-			}
-		}
-	}
-}
-
-func TestWithDockerDownTheHostTilesStillRenderAndDockerShowsUnreachable(t *testing.T) {
+func TestWithDockerDownTheNodeEndpointKeepsTheHostAndTheDockerTabsAnswer503(t *testing.T) {
 	fp := newFakeProc(t)
 	_, b, fe := serveWithEngine(t, fp)
 	fe.close()
@@ -390,34 +276,36 @@ func TestWithDockerDownTheHostTilesStillRenderAndDockerShowsUnreachable(t *testi
 	fp.set(func(h *hostState) { h.CPUBusy, h.CPUIdle = h.CPUBusy+250, h.CPUIdle+750 })
 	fp.sample(b) // the host keeps updating
 
-	band := b.text("/fragments/band")
-	for _, want := range []string{"CPU 25%", "Memory 50% 4.0 of 8.0 GiB", "Disk / 50.0 GiB free of 100.0 GiB", "Containers Docker unreachable", "Docker Docker unreachable"} {
-		if !strings.Contains(band, want) {
-			t.Errorf("band with Docker down lacks %q:\n%s", want, band)
-		}
+	n := b.node()
+	if !ratioIs(n.Host.CPU.Ratio, 0.25) || n.Host.Memory.Used != 4<<30 {
+		t.Errorf("host with Docker down = %s, want cpu 0.25 and 4 GiB of memory used", asJSON(n.Host))
 	}
-	if strings.Contains(band, "/var/lib/docker") {
-		t.Errorf("band with Docker down shows Docker's root dir:\n%s", band)
+	// Docker's root dir is unknown, so just /.
+	if want := []httpapi.DiskTile{{Path: "/", Total: 100 << 30, Free: 50 << 30}}; !slices.Equal(n.Host.Disks, want) {
+		t.Errorf("disks with Docker down = %s, want %s", asJSON(n.Host.Disks), asJSON(want))
 	}
-
-	for _, path := range []string{"/", "/fragments/containers", "/fragments/images", "/fragments/docker"} {
-		got := b.fragment(path)
-		if got.StatusCode != http.StatusOK {
-			t.Fatalf("GET %s with Docker down = %d, want 200", path, got.StatusCode)
-		}
-		cards := strings.Count(got.body, `class="panel empty" role="alert"`)
-		if cards != 1 || !strings.Contains(text(got.body), "Docker unreachable") || !strings.Contains(got.body, "<code>systemctl status docker</code>") {
-			t.Errorf("GET %s with Docker down has %d error cards, want one with the systemctl hint:\n%s", path, cards, text(got.body))
-		}
-		if _, all := openTab(t, got.body); len(all) != 4 {
-			t.Errorf("GET %s with Docker down offers tabs %q, want all four", path, all)
-		}
+	if d := n.Docker; d.Reachable || d.Error == "" || d.Containers != nil || d.Version != "" {
+		t.Errorf("docker while it is down = %s, want unreachable with an error", asJSON(d))
+	}
+	if n.Status.Level != httpapi.StatusDown || len(n.Status.Reasons) == 0 || !strings.HasPrefix(n.Status.Reasons[0], "Docker unreachable: ") {
+		t.Errorf("status with Docker down = %s, want down, first because Docker is unreachable", asJSON(n.Status))
 	}
 
-	// Back up: the open tab's next poll shows the containers again.
+	for _, path := range []string{"/api/v1/node/containers", "/api/v1/node/images", "/api/v1/node/docker"} {
+		got := b.get(path)
+		var body struct{ Error string }
+		if err := json.Unmarshal([]byte(got.body), &body); got.StatusCode != http.StatusServiceUnavailable || err != nil || !strings.HasPrefix(body.Error, "Docker unreachable: ") {
+			t.Errorf("GET %s with Docker down = %d %s, want 503 with a Docker unreachable error", path, got.StatusCode, got.body)
+		}
+	}
+	if got := b.get("/api/v1/node/events"); got.StatusCode != http.StatusOK {
+		t.Errorf("GET /api/v1/node/events with Docker down = %d, want 200", got.StatusCode)
+	}
+
+	// Back up: the next read has the containers again.
 	fe.open()
-	if rows := tableRows(b.fragment("/fragments/containers").body); len(rows) != 3 {
-		t.Errorf("containers tab after Docker came back has rows %q, want the 3 containers", rows)
+	if cs := b.containers(); len(cs) != 3 {
+		t.Errorf("containers after Docker came back = %s, want the 3 containers", asJSON(cs))
 	}
 }
 
@@ -431,40 +319,44 @@ func (fe *fakeEngine) usedVersions() []string {
 	return v
 }
 
+// dockerInfo is GET /api/v1/node/docker.
+func (b *browser) dockerInfo() httpapi.NodeDockerInfo {
+	b.t.Helper()
+	return getJSON[httpapi.NodeDockerInfo](b, "/api/v1/node/docker")
+}
+
 func TestTheAPIVersionIsWhatPingReportsCappedAtTheNewestPantalanKnows(t *testing.T) {
 	fp := newFakeProc(t)
 	_, b, fe := serveWithEngine(t, fp)
-	visit := func() string {
+	visit := func() httpapi.NodeDockerInfo {
 		t.Helper()
-		for _, path := range []string{"/", "/fragments/topbar", "/fragments/band", "/fragments/containers", "/fragments/images"} {
-			b.fragment(path)
-		}
-		return b.text("/fragments/docker")
+		b.node()
+		b.containers()
+		getJSON[[]httpapi.NodeImage](b, "/api/v1/node/images")
+		return b.dockerInfo()
 	}
 	fe.set(func(st *engineState) {
 		st.Stats["c1"] = engineStats{CPUTotal: 1, SystemCPU: 1, OnlineCPUs: 1, MemUsage: 1 << 20, MemLimit: 1 << 30}
 	})
 	fe.usedVersions()
 
-	// A daemon newer than Pantalan.
-	fe.set(func(st *engineState) { st.APIVersion = "1.99" })
-	doc := visit()
-	if got := fe.usedVersions(); !slices.Equal(got, []string{"1.56"}) {
-		t.Errorf("with a daemon at API 1.99, requests used versions %q, want only the cap 1.56", got)
-	}
-	if want := "API version 1.56 daemon accepts 1.24–1.99"; !strings.Contains(doc, want) {
-		t.Errorf("Docker tab lacks %q:\n%s", want, doc)
-	}
-
-	// An older daemon: its own version, as the daemon is upgraded or
-	// downgraded under a running Pantalan.
-	fe.set(func(st *engineState) { st.APIVersion = "1.48" })
-	doc = visit()
-	if got := fe.usedVersions(); !slices.Equal(got, []string{"1.48"}) {
-		t.Errorf("with a daemon at API 1.48, requests used versions %q, want 1.48", got)
-	}
-	if want := "API version 1.48 daemon accepts 1.24–1.48"; !strings.Contains(doc, want) {
-		t.Errorf("Docker tab lacks %q:\n%s", want, doc)
+	for _, c := range []struct {
+		name, daemon string
+		want         string
+	}{
+		{name: "a daemon newer than Pantalan", daemon: "1.99", want: "1.56"},
+		// Its own version, as the daemon is upgraded or downgraded under
+		// a running Pantalan.
+		{name: "an older daemon", daemon: "1.48", want: "1.48"},
+	} {
+		fe.set(func(st *engineState) { st.APIVersion = c.daemon })
+		info := visit()
+		if got := fe.usedVersions(); !slices.Equal(got, []string{c.want}) {
+			t.Errorf("with %s at API %s, requests used versions %q, want only %s", c.name, c.daemon, got, c.want)
+		}
+		if info.APIVersion != c.want || info.MinAPIVersion != "1.24" || info.MaxAPIVersion != c.daemon {
+			t.Errorf("with %s, api versions = %s, %s–%s, want %s, 1.24–%s", c.name, info.APIVersion, info.MinAPIVersion, info.MaxAPIVersion, c.want, c.daemon)
+		}
 	}
 }
 
@@ -481,16 +373,63 @@ func TestAnOlderDaemonsSystemDFIsWorkedOutFromItsItemLists(t *testing.T) {
 			"BuildCache":[{"Size":104857600,"InUse":false,"Shared":false},{"Size":52428800,"InUse":true,"Shared":false}]}`
 	})
 
+	du := b.dockerInfo().DiskUsage
+	if du == nil {
+		t.Fatal("the Docker endpoint has no disk usage")
+	}
 	// As docker system df counts: an image's reclaimable space is the
 	// layers no container's image needs, net of shared layers.
-	want := []string{
-		"Images 2 1 1.0 GiB 524.0 MiB",
-		"Containers 2 1 6.0 MiB 2.0 MiB",
-		"Volumes 2 1 1.5 GiB 512.0 MiB",
-		"Build cache 2 1 150.0 MiB 100.0 MiB",
+	want := httpapi.DockerDiskUsage{
+		Images:     httpapi.DockerDiskUse{Total: 2, Active: 1, Size: 1 << 30, Reclaimable: 524 << 20},
+		Containers: httpapi.DockerDiskUse{Total: 2, Active: 1, Size: 6 << 20, Reclaimable: 2 << 20},
+		Volumes:    httpapi.DockerDiskUse{Total: 2, Active: 1, Size: 1536 << 20, Reclaimable: 512 << 20},
+		BuildCache: httpapi.DockerDiskUse{Total: 2, Active: 1, Size: 150 << 20, Reclaimable: 100 << 20},
+		At:         du.At,
 	}
-	if rows := tableRows(b.fragment("/fragments/docker").body); !slices.Equal(rows, want) {
-		t.Errorf("Docker tab disk usage =\n%q\nwant\n%q", rows, want)
+	if *du != want {
+		t.Errorf("disk usage =\n%s\nwant\n%s", asJSON(du), asJSON(want))
+	}
+}
+
+func TestTheDockerEndpointGivesTheEngineAndItsDiskUsage(t *testing.T) {
+	fp := newFakeProc(t)
+	_, b, fe := serveWithEngine(t, fp)
+	fe.set(func(st *engineState) {
+		st.Info.Warnings = []string{"WARNING: No swap limit support", "WARNING: bridge-nf-call-iptables is disabled"}
+		st.DiskUsage = `{
+			"ImageUsage":{"ActiveCount":2,"TotalCount":3,"TotalSize":1610612736,"Reclaimable":536870912},
+			"ContainerUsage":{"ActiveCount":2,"TotalCount":3,"TotalSize":10485760,"Reclaimable":1048576},
+			"VolumeUsage":{"ActiveCount":1,"TotalCount":2,"TotalSize":3221225472,"Reclaimable":1073741824},
+			"BuildCacheUsage":{"ActiveCount":0,"TotalCount":5,"TotalSize":838860800,"Reclaimable":838860800}}`
+	})
+
+	got := b.dockerInfo()
+	if got.DiskUsage == nil {
+		t.Fatalf("the Docker endpoint has no disk usage: %s", asJSON(got))
+	}
+	if _, err := time.Parse(time.RFC3339, got.DiskUsage.At); err != nil {
+		t.Errorf("disk usage at = %q, want an RFC 3339 time", got.DiskUsage.At)
+	}
+	want := httpapi.NodeDockerInfo{
+		Version:       "28.5.1",
+		APIVersion:    "1.51",
+		MinAPIVersion: "1.24",
+		MaxAPIVersion: "1.51",
+		Driver:        "overlay2",
+		CgroupVersion: "2",
+		CgroupDriver:  "systemd",
+		RootDir:       "/var/lib/docker",
+		Warnings:      []string{"WARNING: No swap limit support", "WARNING: bridge-nf-call-iptables is disabled"},
+		DiskUsage: &httpapi.DockerDiskUsage{
+			Images:     httpapi.DockerDiskUse{Total: 3, Active: 2, Size: 1536 << 20, Reclaimable: 512 << 20},
+			Containers: httpapi.DockerDiskUse{Total: 3, Active: 2, Size: 10 << 20, Reclaimable: 1 << 20},
+			Volumes:    httpapi.DockerDiskUse{Total: 2, Active: 1, Size: 3 << 30, Reclaimable: 1 << 30},
+			BuildCache: httpapi.DockerDiskUse{Total: 5, Active: 0, Size: 800 << 20, Reclaimable: 800 << 20},
+			At:         got.DiskUsage.At,
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GET /api/v1/node/docker =\n%s\nwant\n%s", asJSON(got), asJSON(want))
 	}
 }
 
@@ -505,95 +444,35 @@ func serveWithEngineAt(t *testing.T, fp *fakeProc, clock *fakeClock) (*running, 
 	return s, b, fe
 }
 
-func TestTheDockerTabShowsTheEngineAndItsDiskUsageAndLoadsOnlyWhenOpened(t *testing.T) {
-	fp := newFakeProc(t)
-	_, b, fe := serveWithEngine(t, fp)
-	fe.set(func(st *engineState) {
-		st.Info.Warnings = []string{"WARNING: No swap limit support", "WARNING: bridge-nf-call-iptables is disabled"}
-		st.DiskUsage = `{
-			"ImageUsage":{"ActiveCount":2,"TotalCount":3,"TotalSize":1610612736,"Reclaimable":536870912},
-			"ContainerUsage":{"ActiveCount":2,"TotalCount":3,"TotalSize":10485760,"Reclaimable":1048576},
-			"VolumeUsage":{"ActiveCount":1,"TotalCount":2,"TotalSize":3221225472,"Reclaimable":1073741824},
-			"BuildCacheUsage":{"ActiveCount":0,"TotalCount":5,"TotalSize":838860800,"Reclaimable":838860800}}`
-	})
-
-	if open, all := openTab(t, b.get("/").body); open != "containers" || !slices.Contains(all, "docker") {
-		t.Fatalf("the page's tab bar has %q open of %q, want containers with docker on offer", open, all)
-	}
-	if n := fe.callCount("/system/df"); n != 0 {
-		t.Errorf("the page called system/df %d times before the Docker tab was opened", n)
-	}
-
-	got := b.fragment("/fragments/docker")
-	if got.StatusCode != http.StatusOK {
-		t.Fatalf("GET /fragments/docker = %d", got.StatusCode)
-	}
-	if open, _ := openTab(t, got.body); open != "docker" {
-		t.Errorf("the Docker tab marks %q open", open)
-	}
-	doc := text(got.body)
-	for _, want := range []string{
-		"Version 28.5.1",
-		"API version 1.51",
-		"Storage driver overlay2",
-		"Cgroup v2 (systemd)",
-		"Root dir /var/lib/docker",
-		"WARNING: No swap limit support",
-		"WARNING: bridge-nf-call-iptables is disabled",
-	} {
-		if !strings.Contains(doc, want) {
-			t.Errorf("Docker tab lacks %q:\n%s", want, doc)
-		}
-	}
-	// kind, total, active, size, reclaimable
-	wantRows := []string{
-		"Images 3 2 1.5 GiB 512.0 MiB",
-		"Containers 3 2 10.0 MiB 1.0 MiB",
-		"Volumes 2 1 3.0 GiB 1.0 GiB",
-		"Build cache 5 0 800.0 MiB 800.0 MiB",
-	}
-	if rows := tableRows(got.body); !slices.Equal(rows, wantRows) {
-		t.Errorf("Docker tab disk usage =\n%q\nwant\n%q", rows, wantRows)
-	}
-
-	// It doesn't poll; a Refresh button reloads it.
-	if regions := polled.FindAllStringSubmatch(got.body, -1); len(regions) != 0 {
-		t.Errorf("the Docker tab polls: %q", regions)
-	}
-	if !regexp.MustCompile(`<button [^>]*hx-get="/fragments/docker"[^>]*>\s*Refresh\s*</button>`).MatchString(got.body) {
-		t.Errorf("the Docker tab has no Refresh button:\n%s", got.body)
-	}
-
-	fe.set(func(st *engineState) { st.Info.Warnings = nil })
-	if doc := b.text("/fragments/docker"); !strings.Contains(doc, "Warnings None") {
-		t.Errorf("Docker tab without warnings lacks %q:\n%s", "Warnings None", doc)
-	}
-}
-
 func TestSystemDFIsCalledAtMostOnceA60SecondsAcrossRequests(t *testing.T) {
 	fp := newFakeProc(t)
 	clock := newFakeClock()
 	_, b, fe := serveWithEngineAt(t, fp, clock)
+	start := clock.Now()
 
 	var wg sync.WaitGroup
 	for range 5 {
-		wg.Go(func() { b.fragment("/fragments/docker") })
+		wg.Go(func() { b.get("/api/v1/node/docker") })
 	}
 	wg.Wait()
-	b.fragment("/fragments/band")
-	b.fragment("/")
+	b.node()
+	b.containers()
 	if n := fe.callCount("/system/df"); n != 1 {
 		t.Fatalf("5 Docker tabs at once made %d system/df calls, want 1", n)
 	}
 
 	clock.advance(59 * time.Second)
-	b.fragment("/fragments/docker")
+	if at := b.dockerInfo().DiskUsage.At; at != start.Format(time.RFC3339) {
+		t.Errorf("a Docker tab 59 s later has disk usage at %s, want the shared one from %s", at, start.Format(time.RFC3339))
+	}
 	if n := fe.callCount("/system/df"); n != 1 {
 		t.Errorf("a Docker tab 59 s later made %d system/df calls in all, want still 1", n)
 	}
 	clock.advance(2 * time.Second)
-	b.fragment("/fragments/docker")
-	b.fragment("/fragments/docker")
+	b.dockerInfo()
+	if at, want := b.dockerInfo().DiskUsage.At, clock.Now().Format(time.RFC3339); at != want {
+		t.Errorf("a Docker tab 61 s later has disk usage at %s, want a fresh one at %s", at, want)
+	}
 	if n := fe.callCount("/system/df"); n != 2 {
 		t.Errorf("Docker tabs 61 s later made %d system/df calls in all, want 2", n)
 	}

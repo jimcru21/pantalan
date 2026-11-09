@@ -1,21 +1,21 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"html"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/pantalan/pantalan/internal/httpapi"
 )
 
 // hostState is what a fixture /proc root and the fake statfs report.
@@ -147,11 +147,61 @@ func (fp *fakeProc) write() {
 	}
 }
 
+// getJSON is GET path decoded as JSON, failing the test unless it is a
+// 200.
+func getJSON[T any](b *browser, path string) T {
+	b.t.Helper()
+	got := b.get(path)
+	if got.StatusCode != http.StatusOK {
+		b.t.Fatalf("GET %s = %d, want 200:\n%s", path, got.StatusCode, got.body)
+	}
+	var v T
+	if err := json.Unmarshal([]byte(got.body), &v); err != nil {
+		b.t.Fatalf("GET %s: %v\n%s", path, err, got.body)
+	}
+	return v
+}
+
+// node is GET /api/v1/node: the top bar and the stat band.
+func (b *browser) node() httpapi.Node {
+	b.t.Helper()
+	return getJSON[httpapi.Node](b, "/api/v1/node")
+}
+
+// asJSON is v as JSON, for failure messages.
+func asJSON(v any) string {
+	out, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%+v", v)
+	}
+	return string(out)
+}
+
+// near reports whether two ratios are the same, give or take rounding.
+func near(got, want float64) bool { return math.Abs(got-want) < 1e-9 }
+
+// ratioIs reports whether a ratio the API may leave out is want.
+func ratioIs(got *float64, want float64) bool { return got != nil && near(*got, want) }
+
+func sameSeries(got, want []float64) bool {
+	return slices.EqualFunc(got, want, near)
+}
+
+// hostReading is what a sample changes on the Node endpoint: the host's
+// uptime, or the error of a failed read.
+func hostReading(n httpapi.Node) string {
+	if n.Host == nil {
+		return n.HostError
+	}
+	return fmt.Sprint(n.Host.UptimeSeconds, " ", n.HostError)
+}
+
 // sample makes the sampler take one sample of the fixture as it is now,
-// a minute after the previous one, and waits until the Dashboard shows it.
+// a minute after the previous one, and waits until the Node endpoint
+// gives it.
 func (fp *fakeProc) sample(b *browser) {
 	b.t.Helper()
-	before := b.fragment("/fragments/topbar").body
+	before := hostReading(b.node())
 	fp.set(func(h *hostState) { h.Uptime += time.Minute })
 	select {
 	case fp.ticks <- time.Now():
@@ -159,9 +209,9 @@ func (fp *fakeProc) sample(b *browser) {
 		b.t.Fatal("the sampler took no tick")
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for b.fragment("/fragments/topbar").body == before {
+	for hostReading(b.node()) == before {
 		if time.Now().After(deadline) {
-			b.t.Fatal("the top bar never showed the new sample")
+			b.t.Fatal("the Node endpoint never gave the new sample")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -169,7 +219,7 @@ func (fp *fakeProc) sample(b *browser) {
 
 // serveOverview runs serve on the fixture host, with a healthy fake
 // Engine as its Docker, and signs in, once the sampler's first sample is
-// on the Node overview.
+// on the Node endpoint.
 func serveOverview(t *testing.T, fp *fakeProc) (*running, *browser) {
 	t.Helper()
 	s, b, _ := serveWithEngine(t, fp)
@@ -183,37 +233,16 @@ func serveNodeOverview(t *testing.T, fp *fakeProc, world World) (*running, *brow
 	s := startServeOn(t, serveEnv(t), world)
 	b := signedIn(t, s)
 	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(b.get("/").body, html.EscapeString(fp.state.Hostname)) {
+	for b.node().Host == nil {
 		if time.Now().After(deadline) {
-			t.Fatalf("the Node overview never showed the first sample:\n%s", b.get("/").body)
+			t.Fatalf("the Node endpoint never gave the first sample:\n%s", b.get("/api/v1/node").body)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 	return s, b
 }
 
-// fragment is a GET the way htmx makes it when it polls.
-func (b *browser) fragment(path string) page {
-	b.t.Helper()
-	req, err := http.NewRequest(http.MethodGet, b.base+path, nil)
-	if err != nil {
-		b.t.Fatal(err)
-	}
-	req.Header.Set("HX-Request", "true")
-	return b.do(req)
-}
-
-var (
-	tags   = regexp.MustCompile(`<[^>]*>`)
-	spaces = regexp.MustCompile(`\s+`)
-)
-
-// text is the visible text of an HTML document, whitespace collapsed.
-func text(doc string) string {
-	return strings.TrimSpace(spaces.ReplaceAllString(html.UnescapeString(tags.ReplaceAllString(doc, " ")), " "))
-}
-
-func TestTheTopBarShowsTheNodeFromProc(t *testing.T) {
+func TestTheNodeEndpointGivesTheHostFromProc(t *testing.T) {
 	fp := newFakeProc(t)
 	fp.set(func(h *hostState) {
 		h.Hostname = "web-01"
@@ -224,20 +253,23 @@ func TestTheTopBarShowsTheNodeFromProc(t *testing.T) {
 	s, b := serveOverview(t, fp)
 	ip, _, _ := strings.Cut(s.addr(t, "dashboard"), ":")
 
-	for _, path := range []string{"/", "/fragments/topbar"} {
-		got := b.fragment(path)
-		if got.StatusCode != http.StatusOK {
-			t.Fatalf("GET %s = %d, want 200", path, got.StatusCode)
-		}
-		for _, want := range []string{"web-01", ip, "Linux 6.8.0-49-generic", runtime.GOARCH, "up 12d 4h 17m", "load 0.42 0.38 0.31"} {
-			if !strings.Contains(text(got.body), want) {
-				t.Errorf("GET %s lacks %q:\n%s", path, want, text(got.body))
-			}
-		}
+	n := b.node()
+	if n.IP != ip || n.Arch != runtime.GOARCH {
+		t.Errorf("ip, arch = %q, %q, want %q, %q", n.IP, n.Arch, ip, runtime.GOARCH)
+	}
+	h := n.Host
+	if h.Hostname != "web-01" || h.OS != "Linux 6.8.0-49-generic" {
+		t.Errorf("hostname, os = %q, %q, want %q, %q", h.Hostname, h.OS, "web-01", "Linux 6.8.0-49-generic")
+	}
+	if want := int64(12*24*3600 + 4*3600 + 17*60 + 33); h.UptimeSeconds != want {
+		t.Errorf("uptime_seconds = %d, want %d", h.UptimeSeconds, want)
+	}
+	if want := [3]float64{0.42, 0.38, 0.31}; h.Load != want {
+		t.Errorf("load = %v, want %v", h.Load, want)
 	}
 }
 
-func TestTheStatBandShowsCPUMemoryAndDisk(t *testing.T) {
+func TestTheNodeEndpointGivesCPUFromTheSecondSampleMemoryAndDisk(t *testing.T) {
 	fp := newFakeProc(t)
 	fp.set(func(h *hostState) {
 		h.CPUBusy, h.CPUIdle = 1000, 9000
@@ -247,66 +279,34 @@ func TestTheStatBandShowsCPUMemoryAndDisk(t *testing.T) {
 	_, b := serveOverview(t, fp)
 
 	// One sample has no CPU delta yet.
-	if got := text(b.fragment("/fragments/band").body); !strings.Contains(got, "CPU –") {
-		t.Errorf("band after one sample lacks %q:\n%s", "CPU –", got)
+	if cpu := b.node().Host.CPU; cpu.Ratio != nil || len(cpu.History) != 0 {
+		t.Errorf("cpu after one sample = %s, want no ratio and no history", asJSON(cpu))
 	}
 
 	// 300 of the next 1000 ticks busy.
 	fp.set(func(h *hostState) { h.CPUBusy, h.CPUIdle = 1300, 9700 })
 	fp.sample(b)
 
-	for _, path := range []string{"/", "/fragments/band"} {
-		got := b.fragment(path)
-		if got.StatusCode != http.StatusOK {
-			t.Fatalf("GET %s = %d, want 200", path, got.StatusCode)
-		}
-		for _, want := range []string{"CPU 30%", "Memory 75% 6.0 of 8.0 GiB", "Disk / 25.0 GiB free of 100.0 GiB"} {
-			if !strings.Contains(text(got.body), want) {
-				t.Errorf("GET %s lacks %q:\n%s", path, want, text(got.body))
-			}
-		}
+	h := b.node().Host
+	if !ratioIs(h.CPU.Ratio, 0.3) {
+		t.Errorf("cpu = %s, want ratio 0.3", asJSON(h.CPU))
+	}
+	if want := (httpapi.MemoryTile{Total: 8 << 30, Available: 2 << 30, Used: 6 << 30}); h.Memory.Total != want.Total || h.Memory.Available != want.Available || h.Memory.Used != want.Used {
+		t.Errorf("memory = %s, want total 8 GiB, available 2 GiB, used 6 GiB", asJSON(h.Memory))
+	}
+	// Docker's root dir is on a filesystem of its own, so / is there too.
+	wantDisks := []httpapi.DiskTile{{Path: "/var/lib/docker", Total: 200 << 30, Free: 150 << 30}, {Path: "/", Total: 100 << 30, Free: 25 << 30}}
+	if !slices.Equal(h.Disks, wantDisks) {
+		t.Errorf("disks = %s, want %s", asJSON(h.Disks), asJSON(wantDisks))
 	}
 }
 
-// sparkline is the series a tile's sparkline draws, as percentages: its
-// SVG is 100 high and a point at y is a value of 100 − y.
-func sparkline(t *testing.T, doc, label string) []float64 {
-	t.Helper()
-	re := regexp.MustCompile(`<svg [^>]*aria-label="` + regexp.QuoteMeta(label) + `"[^>]*>\s*<polyline [^>]*points="([^"]*)"`)
-	m := re.FindStringSubmatch(doc)
-	if m == nil {
-		t.Fatalf("no sparkline labelled %q in:\n%s", label, doc)
-	}
-	var values []float64
-	for _, pt := range strings.Fields(m[1]) {
-		_, y, ok := strings.Cut(pt, ",")
-		v, err := strconv.ParseFloat(y, 64)
-		if !ok || err != nil {
-			t.Fatalf("sparkline %q has a bad point %q", label, pt)
-		}
-		values = append(values, 100-v)
-	}
-	return values
-}
-
-func sameSeries(got, want []float64) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if math.Abs(got[i]-want[i]) > 0.05 {
-			return false
-		}
-	}
-	return true
-}
-
-func TestSparklinesDrawTheLast120Samples(t *testing.T) {
+func TestTheNodeEndpointKeepsTheLast120SamplesAsHistory(t *testing.T) {
 	fp := newFakeProc(t)
 	// Memory and CPU in steps of whole percents: 100 MiB of RAM, and 100
 	// CPU ticks between samples.
-	memUsed := func(k int) float64 { return float64(k * 7 % 100) }
-	cpuBusy := func(k int) float64 { return float64(k % 100) }
+	memUsed := func(k int) float64 { return float64(k*7%100) / 100 }
+	cpuBusy := func(k int) uint64 { return uint64(k % 100) }
 	fp.set(func(h *hostState) { h.MemTotal, h.MemAvailable = 100<<10, 100<<10 })
 	_, b := serveOverview(t, fp)
 
@@ -314,186 +314,135 @@ func TestSparklinesDrawTheLast120Samples(t *testing.T) {
 	var wantMem, wantCPU []float64
 	for k := 1; k <= 124; k++ {
 		fp.set(func(h *hostState) {
-			h.MemAvailable = uint64(100-memUsed(k)) << 10
-			h.CPUBusy += uint64(cpuBusy(k))
-			h.CPUIdle += 100 - uint64(cpuBusy(k))
+			h.MemAvailable = uint64(100-k*7%100) << 10
+			h.CPUBusy += cpuBusy(k)
+			h.CPUIdle += 100 - cpuBusy(k)
 		})
 		fp.sample(b)
 		wantMem = append(wantMem, memUsed(k))
-		wantCPU = append(wantCPU, cpuBusy(k))
+		wantCPU = append(wantCPU, float64(cpuBusy(k))/100)
 		if k == 3 {
-			// Before the ring is full the lines are as long as the history;
-			// CPU has no point for the first sample.
-			band := b.fragment("/fragments/band").body
-			if got, want := sparkline(t, band, "Memory, last 10 minutes"), append([]float64{0}, wantMem...); !sameSeries(got, want) {
-				t.Errorf("memory sparkline after 4 samples = %v, want %v", got, want)
+			// Before the ring is full the history is as long as the
+			// samples; CPU has none for the first sample.
+			h := b.node().Host
+			if got, want := h.Memory.History, append([]float64{0}, wantMem...); !sameSeries(got, want) {
+				t.Errorf("memory history after 4 samples = %v, want %v", got, want)
 			}
-			if got := sparkline(t, band, "CPU, last 10 minutes"); !sameSeries(got, wantCPU) {
-				t.Errorf("CPU sparkline after 4 samples = %v, want %v", got, wantCPU)
+			if got := h.CPU.History; !sameSeries(got, wantCPU) {
+				t.Errorf("CPU history after 4 samples = %v, want %v", got, wantCPU)
 			}
 		}
 	}
 
-	for _, path := range []string{"/", "/fragments/band"} {
-		doc := b.fragment(path).body
-		if got, want := sparkline(t, doc, "Memory, last 10 minutes"), wantMem[len(wantMem)-120:]; !sameSeries(got, want) {
-			t.Errorf("GET %s: memory sparkline has %d points %v, want the last 120 samples %v", path, len(got), got, want)
-		}
-		if got, want := sparkline(t, doc, "CPU, last 10 minutes"), wantCPU[len(wantCPU)-120:]; !sameSeries(got, want) {
-			t.Errorf("GET %s: CPU sparkline has %d points %v, want the last 120 samples %v", path, len(got), got, want)
-		}
+	h := b.node().Host
+	if got, want := h.Memory.History, wantMem[len(wantMem)-120:]; !sameSeries(got, want) {
+		t.Errorf("memory history has %d samples %v, want the last 120 %v", len(got), got, want)
+	}
+	if got, want := h.CPU.History, wantCPU[len(wantCPU)-120:]; !sameSeries(got, want) {
+		t.Errorf("CPU history has %d samples %v, want the last 120 %v", len(got), got, want)
 	}
 }
 
-var polled = regexp.MustCompile(`<(\w+) [^>]*hx-get="([^"]+)" hx-trigger="([^"]+)" hx-swap="([^"]+)"`)
+// nodePaths are the Node overview's endpoints.
+var nodePaths = []string{"/api/v1/node", "/api/v1/node/containers", "/api/v1/node/images", "/api/v1/node/docker", "/api/v1/node/events"}
 
-func TestEachPolledRegionIsItsOwnFragmentThatKeepsPolling(t *testing.T) {
-	_, b := serveOverview(t, newFakeProc(t))
-
-	regions := polled.FindAllStringSubmatch(b.get("/").body, -1)
-	var paths []string
-	for _, m := range regions {
-		paths = append(paths, m[2])
-	}
-	// The open tab polls with the top bar and the band.
-	if want := []string{"/fragments/topbar", "/fragments/band", "/fragments/containers"}; !slices.Equal(paths, want) {
-		t.Fatalf("the Node overview polls %q, want %q", paths, want)
-	}
-	for _, m := range regions {
-		tag, path, trigger, swap := m[1], m[2], m[3], m[4]
-		if trigger != "every 5s" || swap != "outerHTML" {
-			t.Errorf("%s polls with hx-trigger=%q hx-swap=%q, want every 5s and outerHTML", path, trigger, swap)
-		}
-		got := b.fragment(path)
-		if got.StatusCode != http.StatusOK {
-			t.Errorf("GET %s = %d, want 200", path, got.StatusCode)
-			continue
-		}
-		if cc := got.Header.Get("Cache-Control"); cc != "no-store" {
-			t.Errorf("GET %s Cache-Control = %q, want no-store", path, cc)
-		}
-		if csp := got.Header.Get("Content-Security-Policy"); csp != wantCSP {
-			t.Errorf("GET %s CSP = %q, want %q", path, csp, wantCSP)
-		}
-		// The fragment is the region alone, and the region again, so
-		// swapping it in keeps the poll going.
-		if strings.Contains(got.body, "<html") || strings.Contains(got.body, `class="sidebar"`) {
-			t.Errorf("GET %s returns more than the region:\n%s", path, got.body)
-		}
-		again := polled.FindAllStringSubmatch(got.body, -1)
-		if len(again) != 1 || again[0][1] != tag || again[0][2] != path || again[0][3] != trigger || again[0][4] != swap {
-			t.Errorf("GET %s does not return the polling <%s> itself:\n%s", path, tag, got.body)
-		}
-		if strings.Contains(got.body, "style=") || strings.Contains(got.body, "<script") || strings.Contains(got.body, "hx-on") {
-			t.Errorf("GET %s has inline style, script or hx-on:\n%s", path, got.body)
-		}
-	}
-}
-
-func TestAFragmentWithoutALiveSessionGets401AndHXRedirectToLogin(t *testing.T) {
+func TestTheNodeEndpointsAnswer401WithoutALiveSession(t *testing.T) {
 	clock := newFakeClock()
 	fp := newFakeProc(t)
 	world := fp.world(t)
 	world.Clock = clock.Now
-	s := startServeOn(t, serveEnv(t), world)
-	expired := signedIn(t, s)
+	newFakeEngine(t, world.DockerSocket)
+	s, expired := serveNodeOverview(t, fp, world)
 	anon := newBrowser(t, s)
 	clock.advance(2 * time.Hour) // past the idle hour
 
 	for name, b := range map[string]*browser{"no session": anon, "expired session": expired} {
-		for _, path := range []string{"/fragments/topbar", "/fragments/band", "/fragments/containers", "/fragments/images", "/fragments/docker", "/fragments/events"} {
-			got := b.fragment(path)
-			if got.StatusCode != http.StatusUnauthorized || got.Header.Get("HX-Redirect") != "/login" {
-				t.Errorf("%s: GET %s = %d HX-Redirect %q, want 401 to /login", name, path, got.StatusCode, got.Header.Get("HX-Redirect"))
+		for _, path := range nodePaths {
+			got := b.get(path)
+			if got.StatusCode != http.StatusUnauthorized {
+				t.Errorf("%s: GET %s = %d, want 401", name, path, got.StatusCode)
 			}
-			if cc := got.Header.Get("Cache-Control"); cc != "no-store" {
-				t.Errorf("%s: GET %s Cache-Control = %q, want no-store", name, path, cc)
-			}
-			if strings.Contains(got.body, "node-1") {
-				t.Errorf("%s: GET %s leaks the Node's data:\n%s", name, path, got.body)
+			for _, secret := range []string{"node-1", "postgres", "28.5.1"} {
+				if strings.Contains(got.body, secret) {
+					t.Errorf("%s: GET %s leaks the Node's data:\n%s", name, path, got.body)
+				}
 			}
 		}
 	}
 }
 
-var statusDot = regexp.MustCompile(`<span class="dot (\w+)"[^>]* title="([^"]*)"`)
-
-func TestTheStatusDotTurnsAmberUnder10PercentFreeDiskOrMemory(t *testing.T) {
+// The status rules are the HTTP seam's (internal/httpapi); this checks
+// that the real sampler's readings reach them.
+func TestTheSamplersReadingsDecideTheNodeStatus(t *testing.T) {
 	fp := newFakeProc(t)
 	_, b := serveOverview(t, fp)
-	const (
-		diskReason = "Disk / has under 10% free"
-		memReason  = "Memory has under 10% available"
-	)
 
 	for _, c := range []struct {
 		name               string
 		diskFree, memAvail uint64 // of 100 GiB disk and 100 MiB RAM
-		want               string
+		want               httpapi.StatusLevel
 		reasons            []string
 	}{
-		{name: "both at 10%", diskFree: 10, memAvail: 10, want: "ok", reasons: []string{"Healthy"}},
-		{name: "disk under", diskFree: 9, memAvail: 50, want: "warn", reasons: []string{diskReason}},
-		{name: "memory under", diskFree: 50, memAvail: 9, want: "warn", reasons: []string{memReason}},
-		{name: "both under", diskFree: 1, memAvail: 1, want: "warn", reasons: []string{diskReason, memReason}},
-		{name: "recovered", diskFree: 50, memAvail: 50, want: "ok", reasons: []string{"Healthy"}},
+		{name: "both under 10% free", diskFree: 9, memAvail: 9, want: httpapi.StatusWarn,
+			reasons: []string{"Disk / has under 10% free", "Memory has under 10% available"}},
+		{name: "recovered", diskFree: 50, memAvail: 50, want: httpapi.StatusOK, reasons: []string{"Healthy"}},
 	} {
 		fp.set(func(h *hostState) {
 			h.DiskTotal, h.DiskFree = 100<<30, c.diskFree<<30
 			h.MemTotal, h.MemAvailable = 100<<10, c.memAvail<<10
 		})
 		fp.sample(b)
-		for _, path := range []string{"/", "/fragments/topbar"} {
-			m := statusDot.FindStringSubmatch(b.fragment(path).body)
-			if m == nil {
-				t.Fatalf("%s: GET %s has no status dot", c.name, path)
-			}
-			colour, tooltip := m[1], html.UnescapeString(m[2])
-			if colour != c.want {
-				t.Errorf("%s: GET %s status dot is %q, want %q (tooltip %q)", c.name, path, colour, c.want, tooltip)
-			}
-			if got := strings.Split(tooltip, "\n"); !slices.Equal(got, c.reasons) {
-				t.Errorf("%s: GET %s tooltip lists %q, want %q", c.name, path, got, c.reasons)
-			}
+		if got := b.node().Status; got.Level != c.want || !slices.Equal(got.Reasons, c.reasons) {
+			t.Errorf("%s: status = %s, want %q with %q", c.name, asJSON(got), c.want, c.reasons)
 		}
 	}
 }
 
-func TestAFailingHostReadTurnsTheDotAmberRatherThanShowStaleData(t *testing.T) {
+func TestAFailingHostReadKeepsTheLastReadingAndTurnsTheStatusAmber(t *testing.T) {
 	fp := newFakeProc(t)
 	_, b := serveOverview(t, fp)
+	good := b.node().Host
 
 	fp.set(func(h *hostState) { h.Missing = "meminfo" })
 	fp.sample(b)
 
-	m := statusDot.FindStringSubmatch(b.fragment("/fragments/topbar").body)
-	if m == nil || m[1] != "warn" || !strings.Contains(html.UnescapeString(m[2]), "Can't read the Node") {
-		t.Errorf("status dot after a failed read = %q, want amber with a can't-read reason", m)
+	n := b.node()
+	if n.HostError == "" {
+		t.Errorf("host_error after a failed read is empty")
+	}
+	if n.Host == nil || n.Host.UptimeSeconds != good.UptimeSeconds || n.Host.Memory.Total != good.Memory.Total {
+		t.Errorf("host after a failed read = %s, want the last good reading %s", asJSON(n.Host), asJSON(good))
+	}
+	if n.Status.Level != httpapi.StatusWarn || len(n.Status.Reasons) != 1 || !strings.HasPrefix(n.Status.Reasons[0], "Can't read the Node") {
+		t.Errorf("status after a failed read = %s, want amber with a can't-read reason", asJSON(n.Status))
+	}
+
+	// The next good read clears it.
+	fp.set(func(h *hostState) { h.Missing = "" })
+	fp.sample(b)
+	if n := b.node(); n.HostError != "" || n.Status.Level != httpapi.StatusOK {
+		t.Errorf("after the read recovered host_error = %q, status = %s, want none and ok", n.HostError, asJSON(n.Status))
 	}
 }
 
-func TestSwapShowsOnlyWhenInUse(t *testing.T) {
+func TestTheNodeEndpointGivesSwapFromMeminfo(t *testing.T) {
 	fp := newFakeProc(t)
-	fp.set(func(h *hostState) { h.SwapTotal, h.SwapFree = 0, 0 })
 	_, b := serveOverview(t, fp)
 
 	for _, step := range []struct {
-		name        string
-		total, free uint64 // KiB
-		want        string // "" means no swap line at all
+		name                string
+		total, free         uint64 // KiB
+		wantTotal, wantUsed uint64 // bytes
 	}{
-		{name: "no swap", total: 0, free: 0},
-		{name: "swap unused", total: 2 << 20, free: 2 << 20},
-		{name: "swap in use", total: 2 << 20, free: 3 << 19, want: "Swap 0.5 of 2.0 GiB"},
+		{name: "no swap"},
+		{name: "swap unused", total: 2 << 20, free: 2 << 20, wantTotal: 2 << 30},
+		{name: "swap in use", total: 2 << 20, free: 3 << 19, wantTotal: 2 << 30, wantUsed: 1 << 29},
 	} {
 		fp.set(func(h *hostState) { h.SwapTotal, h.SwapFree = step.total, step.free })
 		fp.sample(b)
-		got := text(b.fragment("/fragments/band").body)
-		if step.want == "" && strings.Contains(got, "Swap") {
-			t.Errorf("%s: band shows swap:\n%s", step.name, got)
-		}
-		if step.want != "" && !strings.Contains(got, step.want) {
-			t.Errorf("%s: band lacks %q:\n%s", step.name, step.want, got)
+		m := b.node().Host.Memory
+		if m.SwapTotal != step.wantTotal || m.SwapUsed != step.wantUsed {
+			t.Errorf("%s: swap_total, swap_used = %d, %d, want %d, %d", step.name, m.SwapTotal, m.SwapUsed, step.wantTotal, step.wantUsed)
 		}
 	}
 }

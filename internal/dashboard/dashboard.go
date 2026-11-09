@@ -1,201 +1,193 @@
-// Package dashboard serves the Dashboard: the login screen and the
-// session-only pages behind it, rendered with html/template from the
-// assets in package web and made live with htmx (ADR 0002). It calls the
-// service layer directly, never /api/v1, and accepts only the session
-// cookie: the Admin Token is refused here.
+// Package dashboard serves the Dashboard: the React SPA that package web
+// embeds (ADR 0003). It serves the SPA's index.html for every page behind
+// the session gate, the content-hashed assets, and the security and cache
+// headers on all of it. Everything the SPA shows and does goes through
+// /api/v1 (internal/httpapi), which also issues the session cookie.
 package dashboard
 
 import (
 	"context"
 	"errors"
-	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/pantalan/pantalan/internal/httpapi"
+	"github.com/pantalan/pantalan/internal/service"
 )
 
-// Auth is what the Dashboard needs to sign the Admin in and out and to
-// check sessions; service.AdminService provides it.
-type Auth interface {
-	AdminExists(ctx context.Context) (bool, error)
-	// SignIn returns a new session token, or why it refused one:
-	// service.ErrNoAdmin, service.ErrBadCredentials, or a
-	// *service.RetryLaterError carrying its own wait whose reason is
-	// service.ErrThrottled or service.ErrBusy. Any other error is the
-	// server's own failure.
-	SignIn(ctx context.Context, username, password string) (token string, err error)
+// Sessions checks the session cookie; service.AdminService provides it.
+type Sessions interface {
 	// Authenticate returns service.ErrNoSession unless token names a live
 	// session, and extends it.
 	Authenticate(ctx context.Context, token string) error
-	SignOut(ctx context.Context, token string) error
 }
 
 type Deps struct {
-	Auth Auth
-	// Host is the Node's host health for the Node overview; nil shows it
-	// as unavailable.
-	Host Host
-	// Docker is the Node's Docker for the Node overview; nil shows it as
-	// unreachable.
-	Docker Docker
-	// Events is Docker's recent container events for the Events tab; nil
-	// shows none.
-	Events Events
-	// Apps names the apps whose containers the Containers tab badges.
-	Apps Apps
-	// Templates and Static are web.Templates() and web.Static().
-	Templates fs.FS
-	Static    fs.FS
-	// AssetVersion is the path segment static files are served under,
-	// /static/<AssetVersion>/, and must change whenever they do.
-	AssetVersion string
-	// Hostname is the Node's, shown on the login card.
-	Hostname string
-	Log      *slog.Logger
+	Sessions Sessions
+	// Files is the built SPA, web.Dist(): index.html and assets/. Without
+	// index.html every page is the "frontend not built" page.
+	Files fs.FS
+	Log   *slog.Logger
 }
 
-// Dashboard is the http.Handler for every Dashboard route. Mount it at "/"
-// next to /api/v1, /webhooks and /healthz.
+// Dashboard is the http.Handler for every path outside /api/, /webhooks/
+// and /healthz. Mount it at "/" behind them.
 type Dashboard struct {
-	deps    Deps
-	log     *slog.Logger
-	views   *views
-	pages   []page
-	handler http.Handler
+	sessions Sessions
+	files    fs.FS
+	log      *slog.Logger
+	index    []byte // index.html, or the "frontend not built" page
+	handler  http.Handler
 }
 
-// page is one entry in the sidebar, served at path behind a session.
-// Its template is templates/pages/<name>.html, which defines "main".
-type page struct {
-	name  string
-	path  string // URL path; "/" is the Dashboard's home
-	label string
-	icon  string // templates/icons/<icon>.svg
-	// data is what the page's "main" template gets as its dot.
-	data func(*http.Request) (any, error)
-	// fragments are the page's polled regions. Each is served at
-	// GET /fragments/<name> from the template block of the same name in
-	// the page's file, which "main" also renders, so the first load and
-	// every poll share markup.
-	fragments []fragment
-}
-
-// fragment is one polled region of a page.
-type fragment struct {
-	name string
-	// data is the block's dot; nil means the page's data.
-	data func(*http.Request) (any, error)
-}
-
-// New parses the templates and builds the routes. A template that fails
-// to parse is an error here, so a broken template fails startup.
-func New(deps Deps) (*Dashboard, error) {
-	if deps.AssetVersion == "" {
-		return nil, errors.New("dashboard: AssetVersion is required")
-	}
-	d := &Dashboard{deps: deps, log: deps.Log}
+func New(deps Deps) *Dashboard {
+	d := &Dashboard{sessions: deps.Sessions, files: deps.Files, log: deps.Log}
 	if d.log == nil {
 		d.log = slog.New(slog.DiscardHandler)
 	}
-
-	// The sidebar, in order. Add a page here and in templates/pages/.
-	d.pages = []page{
-		{
-			name: "overview", path: "/", label: "Node overview", icon: "overview", data: d.overviewPage,
-			fragments: []fragment{
-				{name: "topbar", data: d.overviewData},
-				{name: "band", data: d.overviewData},
-				{name: "containers", data: d.containersData},
-				{name: "images", data: d.imagesData},
-				{name: "docker", data: d.dockerData},
-				{name: "events", data: d.eventsData},
-			},
-		},
-	}
-
-	names := make([]string, len(d.pages))
-	for i, p := range d.pages {
-		names[i] = p.name
-	}
 	var err error
-	if d.views, err = parseViews(deps.Templates, d.assetBase(), names); err != nil {
-		return nil, err
-	}
-	for _, p := range d.pages {
-		for _, f := range p.fragments {
-			if d.views.pages[p.name].Lookup(f.name) == nil {
-				return nil, fmt.Errorf("parse templates: pages/%s.html does not define fragment %q", p.name, f.name)
-			}
-		}
+	if d.index, err = fs.ReadFile(deps.Files, "index.html"); err != nil {
+		d.index = []byte(notBuiltPage)
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("GET /static/{version}/{file...}", d.static())
-
-	mux.Handle("GET /login", noStore(http.HandlerFunc(d.loginPage)))
-	mux.Handle("POST /login", noStore(http.HandlerFunc(d.login)))
-	mux.Handle("POST /logout", noStore(http.HandlerFunc(d.logout)))
-	for _, p := range d.pages {
-		pattern := "GET " + p.path
-		if p.path == "/" {
-			pattern = "GET /{$}"
+	// The sign-in screen is open to anyone; the SPA routes it.
+	mux.HandleFunc("GET /login", d.loginPage)
+	// Every other path is a page, but the hashed assets.
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if name, ok := strings.CutPrefix(r.URL.Path, "/assets/"); ok {
+			d.asset(w, r, "assets/"+name)
+			return
 		}
-		mux.Handle(pattern, noStore(d.requireSession(d.pageHandler(p))))
-		for _, f := range p.fragments {
-			mux.Handle("GET /fragments/"+f.name, noStore(d.requireSession(d.fragmentHandler(p, f))))
-		}
-	}
-	// Anything else is a 404, but only once signed in, so the route list
-	// isn't probed from outside.
-	mux.Handle("/", noStore(d.requireSession(http.NotFoundHandler())))
-
-	d.handler = securityHeaders(refuseAdminToken(http.NewCrossOriginProtection().Handler(mux)))
-	return d, nil
+		d.page(w, r)
+	})
+	d.handler = securityHeaders(refuseAdminToken(mux))
+	return d
 }
 
 func (d *Dashboard) ServeHTTP(w http.ResponseWriter, r *http.Request) { d.handler.ServeHTTP(w, r) }
 
-// shellData is what shell.html renders around a page.
-type shellData struct {
-	Title string
-	Nav   []navLink
-	Page  any // the page's own data, the dot of its "main"
-}
-
-type navLink struct {
-	Href, Label, Icon string
-	Active            bool
-}
-
-func (d *Dashboard) pageHandler(p page) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, err := p.data(r)
-		if err != nil {
-			d.log.Error("dashboard page", "page", p.name, "err", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		nav := make([]navLink, len(d.pages))
-		for i, q := range d.pages {
-			nav[i] = navLink{Href: q.path, Label: q.label, Icon: q.icon, Active: q.name == p.name}
-		}
-		d.render(w, http.StatusOK, d.views.pages[p.name], "base", shellData{Title: p.label, Nav: nav, Page: data})
-	})
-}
-
-// fragmentHandler serves one polled region of page p on its own.
-func (d *Dashboard) fragmentHandler(p page, f fragment) http.Handler {
-	data := f.data
-	if data == nil {
-		data = p.data
+// page serves index.html to a live session, and sends anyone else to the
+// sign-in screen before any app code loads, carrying the path asked for
+// in ?next= so sign-in can return there (the SPA's 401 redirect uses the
+// same parameter).
+func (d *Dashboard) page(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	ok, err := d.signedIn(w, r)
+	if err != nil {
+		d.serverError(w, err)
+		return
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		dot, err := data(r)
-		if err != nil {
-			d.log.Error("dashboard fragment", "fragment", f.name, "err", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		d.render(w, http.StatusOK, d.views.pages[p.name], f.name, dot)
-	})
+	if !ok {
+		http.Redirect(w, r, signInPath(r.URL), http.StatusSeeOther)
+		return
+	}
+	d.serveIndex(w)
 }
+
+// loginPage serves index.html, the SPA's sign-in screen, or sends a
+// signed-in Admin home.
+func (d *Dashboard) loginPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	ok, err := d.signedIn(w, r)
+	if err != nil {
+		d.serverError(w, err)
+		return
+	}
+	if ok {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	d.serveIndex(w)
+}
+
+// signedIn reports whether r carries a live session, and clears a cookie
+// that names a dead one.
+func (d *Dashboard) signedIn(w http.ResponseWriter, r *http.Request) (bool, error) {
+	token := httpapi.SessionToken(r)
+	if token == "" {
+		return false, nil
+	}
+	err := d.sessions.Authenticate(r.Context(), token)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, service.ErrNoSession):
+		httpapi.ClearSessionCookie(w)
+		return false, nil
+	}
+	return false, err
+}
+
+// signInPath is the sign-in screen's address, carrying u's path and query
+// to return to; home needs no carrying.
+func signInPath(u *url.URL) string {
+	next := u.EscapedPath()
+	if u.RawQuery != "" {
+		next += "?" + u.RawQuery
+	}
+	if next == "/" {
+		return "/login"
+	}
+	return "/login?" + url.Values{"next": {next}}.Encode()
+}
+
+func (d *Dashboard) serveIndex(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(d.index)
+}
+
+// asset serves one of the SPA's content-hashed files. Its name changes
+// whenever its content does, so it is cached for a year as immutable. A
+// missing one is a 404, not a page: a stale index.html must not get HTML
+// for its script.
+func (d *Dashboard) asset(w http.ResponseWriter, r *http.Request, name string) {
+	f, err := d.files.Open(name)
+	if err != nil || !fs.ValidPath(name) {
+		notFound(w, r)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	content, seekable := f.(io.ReadSeeker)
+	if err != nil || info.IsDir() || !seekable {
+		notFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	http.ServeContent(w, r, name, time.Time{}, content)
+}
+
+func notFound(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	http.NotFound(w, r)
+}
+
+func (d *Dashboard) serverError(w http.ResponseWriter, err error) {
+	d.log.Error("dashboard: authenticate", "err", err)
+	http.Error(w, "internal error", http.StatusInternalServerError)
+}
+
+// notBuiltPage stands in for index.html in a binary built without the
+// frontend, as `go build` without Node makes. The CSP allows no inline
+// style, so it is plain HTML.
+const notBuiltPage = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pantalan: frontend not built</title>
+</head>
+<body>
+<h1>Dashboard frontend not built</h1>
+<p>This pantalan binary was built without the Dashboard's frontend
+(frontend not built). Run <code>make web</code>, then rebuild and restart
+pantalan; <code>make build</code> does both.</p>
+</body>
+</html>
+`

@@ -1,0 +1,2 @@
+The Dashboard's built SPA goes here (`make web`). Only this placeholder is
+committed, so `go build` and `go test` work without Node; see web/embed.go.

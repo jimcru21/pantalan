@@ -2,38 +2,77 @@ package main
 
 import (
 	"fmt"
-	"net/http"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pantalan/pantalan/internal/httpapi"
 )
 
 // eventsAt is when the tests' events start.
 var eventsAt = time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC)
 
-// eventRows waits until the Events tab's newest row is newest and returns
-// its rows.
-func (b *browser) eventRows(newest string) []string {
+// reconnected is the row the tests write for an event's gap_before: the
+// stream reconnected and older events may be missing.
+const reconnected = "Stream reconnected: earlier events may be missing"
+
+// eventLog is GET /api/v1/node/events.
+func (b *browser) eventLog() httpapi.NodeEventLog {
+	b.t.Helper()
+	return getJSON[httpapi.NodeEventLog](b, "/api/v1/node/events")
+}
+
+// eventRows is the log as the tests write it, newest first: each event's
+// time (UTC), container, action, detail and image, with the reconnected
+// row below an event that may have a gap before it.
+func eventRows(t *testing.T, log httpapi.NodeEventLog) []string {
+	t.Helper()
+	var rows []string
+	for _, e := range log.Events {
+		at, err := time.Parse(time.RFC3339Nano, e.Time)
+		if err != nil {
+			t.Fatalf("event %s has a bad time: %v", asJSON(e), err)
+		}
+		row := []string{at.UTC().Format("15:04:05"), e.Container, e.Action}
+		if e.Health != "" {
+			row = append(row, e.Health)
+		}
+		if e.ExitCode != nil {
+			row = append(row, "exit code "+strconv.Itoa(*e.ExitCode))
+		}
+		if e.Signal != "" {
+			row = append(row, "signal "+e.Signal)
+		}
+		rows = append(rows, strings.Join(append(row, e.Image), " "))
+		if e.GapBefore {
+			rows = append(rows, reconnected)
+		}
+	}
+	return rows
+}
+
+// eventRows waits until the event log's newest row is newest and returns
+// the log and its rows.
+func (b *browser) eventRows(newest string) (httpapi.NodeEventLog, []string) {
 	b.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		got := b.fragment("/fragments/events")
-		if got.StatusCode != http.StatusOK {
-			b.t.Fatalf("GET /fragments/events = %d:\n%s", got.StatusCode, got.body)
-		}
-		rows := tableRows(got.body)
+		log := b.eventLog()
+		rows := eventRows(b.t, log)
 		if len(rows) > 0 && rows[0] == newest {
-			return rows
+			return log, rows
 		}
 		if time.Now().After(deadline) {
-			b.t.Fatalf("the Events tab never showed %q first:\n%s", newest, strings.Join(rows, "\n"))
+			b.t.Fatalf("the event log never had %q first:\n%s", newest, strings.Join(rows, "\n"))
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 }
 
-func TestTheEventsTabShowsContainerEventsNewestFirstWithExitCodes(t *testing.T) {
+func TestTheEventLogListsContainerEventsNewestFirstWithExitCodes(t *testing.T) {
 	fp := newFakeProc(t)
 	_, b, fe := serveWithEngine(t, fp)
 	fe.waitForStreams(t, 1)
@@ -42,10 +81,10 @@ func TestTheEventsTabShowsContainerEventsNewestFirstWithExitCodes(t *testing.T) 
 	fe.emit(
 		containerEvent(at(0), "start", "c1", "db", "postgres:17"),
 		containerEvent(at(1), "health_status: healthy", "c1", "db", "postgres:17"),
-		// Not one the tab shows: the stream's filter leaves it out.
+		// Not one the log keeps: the stream's filter leaves it out.
 		containerEvent(at(2), "exec_start: sh -c pg_isready", "c1", "db", "postgres:17"),
 		containerEvent(at(3), "kill", "c3", "migrate", "postgres:17", "signal", "15"),
-		containerEvent(at(4), "die", "c3", "migrate", "postgres:17", "exitCode", "137"),
+		containerEvent(at(4).Add(123456789), "die", "c3", "migrate", "postgres:17", "exitCode", "137"),
 		containerEvent(at(5), "stop", "c3", "migrate", "postgres:17"),
 		containerEvent(at(6), "oom", "c2", "cache", "redis:7"),
 		containerEvent(at(7), "restart", "c2", "cache", "redis:7"),
@@ -63,20 +102,17 @@ func TestTheEventsTabShowsContainerEventsNewestFirstWithExitCodes(t *testing.T) 
 		"09:00:01 db health_status healthy postgres:17",
 		"09:00:00 db start postgres:17",
 	}
-	if rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
-		t.Errorf("events tab rows =\n%q\nwant\n%q", rows, want)
+	log, rows := b.eventRows(want[0])
+	if !slices.Equal(rows, want) {
+		t.Errorf("event log rows =\n%q\nwant\n%q", rows, want)
 	}
-
-	got := b.fragment("/fragments/events")
-	if open, _ := openTab(t, got.body); open != "events" {
-		t.Errorf("the Events tab marks %q open", open)
+	code := 137
+	wantDie := httpapi.NodeEvent{Time: "2026-11-08T09:00:04.123456789Z", ContainerID: "c3", Container: "migrate", Image: "postgres:17", Action: "die", ExitCode: &code}
+	if got := log.Events[4]; !reflect.DeepEqual(got, wantDie) {
+		t.Errorf("the die event = %s, want %s", asJSON(got), asJSON(wantDie))
 	}
-	if open, all := openTab(t, b.get("/").body); open != "containers" || !slices.Contains(all, "events") {
-		t.Errorf("the page's tab bar has %q open of %q, want containers with events on offer", open, all)
-	}
-	regions := polled.FindAllStringSubmatch(got.body, -1)
-	if len(regions) != 1 || regions[0][2] != "/fragments/events" || regions[0][3] != "every 5s" || regions[0][4] != "outerHTML" {
-		t.Errorf("the Events tab polls %q, want itself every 5s", regions)
+	if log.StreamError != "" {
+		t.Errorf("stream_error with the stream up = %q, want none", log.StreamError)
 	}
 }
 
@@ -154,7 +190,7 @@ func TestADroppedStreamReconnectsWithBackoffFrom1To30sAndBackfillsWithSince(t *t
 		"09:00:01 cache start redis:7",
 		"09:00:00 db start postgres:17",
 	}
-	if rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
+	if _, rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
 		t.Errorf("after the reconnect the events are\n%q\nwant\n%q", rows, want)
 	}
 
@@ -165,8 +201,8 @@ func TestADroppedStreamReconnectsWithBackoffFrom1To30sAndBackfillsWithSince(t *t
 			t.Errorf("reconnect after %v, want %v", d, want*time.Second)
 		}
 	}
-	if got := b.text("/fragments/events"); !strings.Contains(got, "Not connected to Docker's event stream") || !strings.Contains(got, "09:00:02 cache die") {
-		t.Errorf("while Docker is down the Events tab should say so and keep its events:\n%s", got)
+	if log := b.eventLog(); log.StreamError == "" || !slices.Equal(eventRows(t, log), want) {
+		t.Errorf("while Docker is down the event log should say so and keep its events: %s", asJSON(log))
 	}
 	if n := len(fe.streams()); n != 2 {
 		t.Errorf("%d /events requests while Docker was down, want none", n-2)
@@ -181,11 +217,11 @@ func TestADroppedStreamReconnectsWithBackoffFrom1To30sAndBackfillsWithSince(t *t
 		t.Errorf("the reconnect asked for since=%q, want %q", got[2], since(at(2)))
 	}
 	want = append([]string{"09:00:03 cache start redis:7"}, want...)
-	if rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
+	if _, rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
 		t.Errorf("after Docker came back the events are\n%q\nwant\n%q", rows, want)
 	}
-	if got := b.text("/fragments/events"); strings.Contains(got, "Not connected") {
-		t.Errorf("the Events tab still says the stream is down:\n%s", got)
+	if log := b.eventLog(); log.StreamError != "" {
+		t.Errorf("the event log still says the stream is down: %q", log.StreamError)
 	}
 	fe.dropEvents()
 	if d := backoff.next(t); d != time.Second {
@@ -207,9 +243,7 @@ func TestAStreamThatDropsBeforeAnyEventBackfillsFromWhenItConnected(t *testing.T
 	b.eventRows(missed.UTC().Format("15:04:05") + " db start postgres:17")
 }
 
-const reconnected = "Stream reconnected: earlier events may be missing"
-
-func TestAGapTheDaemonsBufferNoLongerCoversShowsTheReconnectedMarker(t *testing.T) {
+func TestAGapTheDaemonsBufferNoLongerCoversIsMarked(t *testing.T) {
 	b, fe, backoff := serveWithEvents(t)
 	at := func(s int) time.Time { return eventsAt.Add(time.Duration(s) * time.Second) }
 	fe.emit(
@@ -238,7 +272,7 @@ func TestAGapTheDaemonsBufferNoLongerCoversShowsTheReconnectedMarker(t *testing.
 		"09:00:01 cache start redis:7",
 		"09:00:00 db start postgres:17",
 	}
-	if rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
+	if _, rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
 		t.Errorf("after an unbackfillable gap the events are\n%q\nwant\n%q", rows, want)
 	}
 
@@ -251,15 +285,15 @@ func TestAGapTheDaemonsBufferNoLongerCoversShowsTheReconnectedMarker(t *testing.
 	fe.waitForStreams(t, 3)
 	fe.emit(containerEvent(at(9), "start", "c1", "db", "postgres:17"))
 	want = append([]string{"09:00:09 db start postgres:17", reconnected}, want...)
-	if rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
+	if _, rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
 		t.Errorf("after the daemon restarted the events are\n%q\nwant\n%q", rows, want)
 	}
 }
 
-func TestADropBeforeAnyEventShowsTheReconnectedMarker(t *testing.T) {
+func TestADropBeforeAnyEventIsMarkedAsAGap(t *testing.T) {
 	b, fe, backoff := serveWithEvents(t)
 
-	// dockerd restarts before any event reached the tab, losing its
+	// dockerd restarts before any event reached the log, losing its
 	// buffer: with no event to check the replay against, nothing proves
 	// the gap was backfilled.
 	fe.close()
@@ -272,12 +306,12 @@ func TestADropBeforeAnyEventShowsTheReconnectedMarker(t *testing.T) {
 	fe.emit(containerEvent(next, "start", "c1", "db", "postgres:17"))
 
 	want := []string{next.UTC().Format("15:04:05") + " db start postgres:17", reconnected}
-	if rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
+	if _, rows := b.eventRows(want[0]); !slices.Equal(rows, want) {
 		t.Errorf("after a drop before any event the events are\n%q\nwant\n%q", rows, want)
 	}
 }
 
-func TestTheEventsTabKeepsOnlyTheLast100Events(t *testing.T) {
+func TestTheEventLogKeepsOnlyTheLast100Events(t *testing.T) {
 	fp := newFakeProc(t)
 	_, b, fe := serveWithEngine(t, fp)
 	fe.waitForStreams(t, 1)
@@ -288,11 +322,11 @@ func TestTheEventsTabKeepsOnlyTheLast100Events(t *testing.T) {
 	}
 	fe.emit(events...)
 
-	rows := b.eventRows("09:02:09 cache restart redis:7")
+	_, rows := b.eventRows("09:02:09 cache restart redis:7")
 	if len(rows) != 100 {
-		t.Fatalf("the Events tab has %d rows, want 100", len(rows))
+		t.Fatalf("the event log has %d events, want 100", len(rows))
 	}
 	if oldest := "09:00:30 cache restart redis:7"; rows[99] != oldest {
-		t.Errorf("the oldest row is %q, want %q", rows[99], oldest)
+		t.Errorf("the oldest event is %q, want %q", rows[99], oldest)
 	}
 }

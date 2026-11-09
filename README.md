@@ -314,8 +314,9 @@ docker compose up
 ```
 
 It prints the dev Admin's password and Admin Token, serves the Dashboard on
-https://localhost:8443, and rebuilds within seconds whenever you save a
-file. Apps you deploy are served at http://localhost:8080.
+https://localhost:5173 with hot reload, and rebuilds the server within
+seconds whenever you save a Go file. Apps you deploy are served at
+http://localhost:8080.
 
 Before opening a pull request:
 

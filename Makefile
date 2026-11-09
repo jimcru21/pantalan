@@ -2,7 +2,10 @@ BIN := bin/pantalan
 
 .PHONY: build run test vet fmt check gofmt-check types types-check web-deps web-check web web-dev shellcheck installtest installtest-vm
 
-build:
+# The binary with the SPA embedded: the frontend first, then Go. A plain
+# `go build` without Node also works; that binary serves a "frontend not
+# built" page instead of the Dashboard.
+build: web
 	go build -o $(BIN) ./cmd/pantalan
 
 # Local dev: Dashboard on https://localhost:8443 (self-signed, under
@@ -57,7 +60,7 @@ web-deps: $(WEB_DEPS)
 web-check: $(WEB_DEPS)
 	cd web/app && npm run typecheck && npm run lint && npm test
 
-# The SPA, built into web/dist. The binary doesn't embed it yet.
+# The SPA, built into web/dist, which the binary embeds (web/embed.go).
 web: $(WEB_DEPS)
 	cd web/app && npm run build
 

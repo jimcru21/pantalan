@@ -15,14 +15,15 @@ Inside, the code follows ports & adapters (hexagonal):
                  ┌──────────────── cmd/pantalan (wiring) ─────────────────┐
                  │                                                       │
   HTTP ──► httpapi ──► service (use cases) ◄── ports.go: interfaces      │
-     └───► dashboard ───────┘                                            │
-             │            │                                              │
-             │            ▼ calls ports, never adapters                  │
-             │  store/sqlite  source(git)  build  runtime/docker  health │
-             │  proxy (adapters: each implements one service/ports.go    │
-             │  interface)                                               │
-             └──► nodeinfo (read-only Node information, through httpapi's│
-                  and the dashboard's own Host, Docker, Events interfaces│
+             │  │         │                                              │
+             │  │         ▼ calls ports, never adapters                  │
+             │  │  store/sqlite  source(git)  build  runtime/docker      │
+             │  │  health  proxy (adapters: each implements one          │
+             │  │  service/ports.go interface)                           │
+             │  └──► nodeinfo (read-only Node information, through       │
+             │       httpapi's own Host, Docker, Events interfaces)      │
+             └──► dashboard (mounted at /: the embedded SPA from web,    │
+                  behind the session gate for pages)                     │
                  └───────────────────────────────────────────────────────┘
 ```
 
@@ -36,9 +37,7 @@ layer. `internal/httpapi` declares the small interfaces it reads through
 (`NodeHost`, `NodeDocker`, `NodeEvents`) and imports `internal/nodeinfo`
 for their value types (`Snapshot`, `DockerSummary`, `EventLog`, ...);
 `cmd/pantalan` wires the `nodeinfo` implementations in, and `httpapi`
-never builds one. Until the SPA replaces the server-rendered Dashboard,
-`internal/dashboard` keeps its own copy of these interfaces (`Host`,
-`Docker`, `Events`) for its pages. There is no use case between the two:
+never builds one. There is no use case between the two:
 no rule, no state and no write, only data to render, so a service port
 would be a pass-through that re-declares every `nodeinfo` type. If a
 read ever grows a rule (an alert, a decision a deployment acts on), it
@@ -98,52 +97,81 @@ host there, the Node's bare IP included, gets a 404.
 
 ## Dashboard
 
-> [ADR 0003](adr/0003-react-spa-dashboard.md) replaces this server-rendered
-> Dashboard with a React SPA over `/api/v1`. This section describes the code
-> as it stands until that migration lands, and will be rewritten with it.
+The Dashboard is a single-page app in React, Vite and TypeScript
+([ADR 0003](adr/0003-react-spa-dashboard.md)), with its source in
+`web/app`. Everything it shows and does goes through `/api/v1`, the API
+automation uses too, with the session cookie as its credential. React
+Router routes it in the browser, TanStack Query fetches, caches and polls
+(its intervals pause while the browser tab is hidden), Tailwind and
+shadcn/ui components style it, and Recharts draws the sparklines.
 
-The Dashboard is server-rendered ([ADR 0002](adr/0002-server-rendered-dashboard-with-htmx.md)):
-`internal/dashboard` renders Go `html/template` files from `web/templates`
-and serves `web/static` (CSS, `app.js` and htmx 2.0.11, vendored as one
-minified file with its licence). Both are embedded with `go:embed`; there is
-no Node toolchain and no build step. `dashboard.New` parses every template
-once, so a broken template fails startup. The handlers call the service
-layer directly, never `/api/v1`, except for the Node overview's reads,
-which go to `internal/nodeinfo` through the dashboard's own interfaces
-(see the dependency rule above).
+- **Build and embedding.** `make web` (`vite build`) writes `index.html`
+  and content-hashed files under `assets/` into `web/dist`. `web/dist` is
+  gitignored except for a placeholder, and package `web` embeds it with
+  `//go:embed all:dist`, so `go build` and `go test` work without Node:
+  without an `index.html` the binary serves a "frontend not built, run
+  `make web`" page in its place. `make build`, `deploy/release.sh` and CI
+  build the frontend first, installing with `npm ci --ignore-scripts`.
+- **Serving.** `internal/dashboard` is mounted at `/`, behind `/api/`,
+  `/webhooks/` and `/healthz`. `/assets/<file>` is a hashed asset, served
+  to anyone with `Cache-Control: public, max-age=31536000, immutable`; a
+  missing one is a 404, never a page. Every other path is a page:
+  - `/login` serves `index.html` to anyone. A visitor with a live session
+    gets a 303 to `/`.
+  - Any other page without a live session gets a 303 to
+    `/login?next=<path and query>` before any app code loads, and a cookie
+    naming an ended session is cleared. The SPA sends any API 401 to the
+    same address, and sign-in goes on to `next` when it is a path on this
+    origin.
+  - A page with a live session gets `index.html`, and the SPA routes it,
+    including its own "not found".
+  - `index.html`, every `/api/` response and the redirects are `no-store`.
+- **Headers.** Every Dashboard response carries
+  `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
+  `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. So
+  `index.html` has no inline script or style, there is no eval, and nothing
+  may inject a `<style>` element, which rules out CSS-in-JS and shadcn/ui's
+  chart wrapper. React's `style` prop is fine: it writes through the CSSOM.
+- **API types.** The TypeScript types of the API's responses are generated
+  from the Go structs with `tygo` (`make types`, configured in `tygo.yaml`)
+  into `web/app/src/api/generated`, and CI fails when they are stale.
+- **Development.** `make web-dev`, or the compose stack's `web` service,
+  runs Vite with hot reload and proxies `/api` to Pantalan. Vite serves
+  `index.html` for every path, so the page gate and the CSP don't apply
+  there.
 
 Auth surfaces on the one listener:
 
 | Route | Session cookie | Admin Token (bearer) | Other |
 |---|---|---|---|
-| Dashboard pages, `POST /login`, `POST /logout` | yes, behind `http.CrossOriginProtection` | no: a request with an `Authorization` header gets 401 | |
+| Dashboard pages | `/login`: not needed; any other page: a live session, or a 303 to `/login?next=…` | no: a request with an `Authorization` header gets 401 | `/assets/…` needs nothing |
 | `GET /api/v1/login-info`, `POST /api/v1/sessions`, `DELETE /api/v1/sessions/current` | not needed | not needed | the sign-in contract; the two session routes are behind `http.CrossOriginProtection` whatever credential comes with them |
 | the rest of `/api/v1/…` | yes, behind `http.CrossOriginProtection` (a cross-origin unsafe request gets 403) | yes, from any origin | an `Authorization` header is judged alone, whatever cookie comes with it; no credential, a wrong token or an ended session gets 401 |
 | `/webhooks/github` | no | no | HMAC signature |
 | `/healthz` | no | no | none needed |
 
-- Login and logout are plain `<form method="post">` answered with 303
-  redirects. A wrong username and a wrong password get the same 401 and
-  message. With no Admin, the login card shows the `admin create` command
-  instead of the form, and `POST /login` gets 403.
-- The SPA's sign-in screen uses the same rules over JSON on `/api/v1`
-  (`internal/httpapi/sessions.go`), until the cutover removes the form:
-  `GET /api/v1/login-info` returns `hostname`, `address` (the `ip:port`
-  the browser reached) and `admin_exists`; `POST /api/v1/sessions`
-  takes `{"username", "password"}` and answers 204 with the same cookie
-  (ending any session the browser already had), or 401 / 429 / 403 / 503
-  as below, with an `{"error": …}` body; `DELETE /api/v1/sessions/current`
-  ends the browser's session, if any, and answers 204 clearing the cookie.
-- `service.AdminService` issues a `crypto/rand.Text()` token per login and
-  stores only its SHA-256 hex in `sessions`. The cookie is
+- The sign-in screen talks to `internal/httpapi/sessions.go`, and every
+  rule behind it is `service.AdminService`'s. `GET /api/v1/login-info`
+  returns `hostname`, `address` (the `ip:port` the browser reached) and
+  `admin_exists`. `POST /api/v1/sessions` takes `{"username", "password"}`
+  and answers 204 with the session cookie, ending any session the browser
+  already had, or 401 / 429 / 403 / 503 as below, with an `{"error": …}`
+  body. A wrong username and a wrong password get the same 401 and
+  message. With no Admin, the screen shows the `admin create` command
+  instead of the form, and sign-in gets 403. `DELETE
+  /api/v1/sessions/current` ends the browser's session, if any, and
+  answers 204 clearing the cookie.
+- `service.AdminService` issues a `crypto/rand.Text()` token per sign-in
+  and stores only its SHA-256 hex in `sessions`. The cookie, which
+  `internal/httpapi/cookie.go` sets, reads and clears, is
   `__Host-pantalan_session; Path=/; Secure; HttpOnly; SameSite=Strict`, with
   no expiry: the server ends a session after 1 h idle or 24 h in all.
   `last_seen_at` is rewritten at most once a minute. Nothing is cached in
   memory, so `admin reset-password` (which deletes every session) signs the
-  browser out on its next request. At most 20 sessions exist: a new login
-  evicts the oldest. Expired sessions are pruned at startup and on the
-  daily maintenance tick that also checks TLS renewal.
-- Login throttling: one failure counter on the `admin` row, whatever
+  browser out on its next request. At most 20 sessions exist: a new
+  sign-in evicts the oldest. Expired sessions are pruned at startup and on
+  the daily maintenance tick that also checks TLS renewal.
+- Sign-in throttling: one failure counter on the `admin` row, whatever
   username was submitted (unknown usernames verify against a dummy hash).
   Five failures are free; then the next attempt waits 1 s after the last
   failure, doubling to 15 min. An attempt inside the wait gets 429 with
@@ -151,21 +179,12 @@ Auth surfaces on the one listener:
   checked attempt is counted before its password is verified (the wait is
   checked and the count raised in one write transaction), and a success
   resets it, so racing attempts can't all be checked when a wait ends.
-- At most 2 Argon2id hashes run at once; a login that can't get a slot
+- At most 2 Argon2id hashes run at once; a sign-in that can't get a slot
   within 5 s gets 503 with `Retry-After: 5` and isn't counted. A hash
   whose PHC parameters differ from the current ones is replaced at the
-  next successful login; a login that finds another login's rehash in
-  its place checks the password against it once more, rather than
+  next successful sign-in; a sign-in that finds another sign-in's rehash
+  in its place checks the password against it once more, rather than
   taking it for a reset.
-- Every Dashboard response carries
-  `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
-  so templates have no inline scripts or `style=` attributes and htmx runs
-  with `allowEval=false` and `includeIndicatorStyles=false`.
-- Static files live under `/static/<version>/` with
-  `Cache-Control: public, max-age=31536000, immutable`. `<version>` is the
-  release tag, else the short VCS revision, else (binaries with no VCS
-  stamp, such as `go run`) a digest of the files. Pages, fragments and
-  redirects are `no-store`.
 
 ### Node overview
 
@@ -201,51 +220,11 @@ The Dashboard's home page shows the Node's health, read by
   and retried like a drop; once the headers arrive the stream has no
   timeout.
 
-The page:
-
-- The top bar's status dot is red when Docker is unreachable, amber when
-  a shown disk or `MemAvailable` is under 10 % free, a container is
-  unhealthy or restarting, or Docker reports `Warnings`, and green
-  otherwise, with the reasons in its tooltip.
-- The stat band has CPU and memory with server-drawn SVG sparklines, disk
-  free/total as a `<meter>` for Docker's root dir (plus `/` when that is
-  another filesystem, by statfs filesystem ID), the containers'
-  running/total and unhealthy count, and the Docker version. It never
-  calls `system/df`.
-- Tabs: Containers (every container; `pantalan.app`-labelled ones badged
-  with the app's name; running ones with CPU %, a delta against that
-  container's previous one-shot sample, "–" the first time, and memory as
-  usage − inactive file over the limit), Images (repo:tag, size, created,
-  in use by any container), and Docker (version, API version, storage
-  driver, cgroup, root dir, `Warnings`, and `system/df`), and Events (the
-  ring newest first, in UTC, with `die`'s exit code and `kill`'s signal;
-  it keeps showing while Docker is down, with a note that the stream is
-  retrying). Each tab is a block and fragment that renders the tab bar
-  too, so a tab button swaps the whole section and only the open tab
-  polls: Containers and Events every 5 s, Images every 30 s, Docker not
-  at all (it has a Refresh button).
-  `system/df` is slow and grows with the Node's data, so its result is
-  shared between requests for 60 s, by the Node clock. Both response
-  shapes are read: the per-kind summaries of API 1.52+ and the item lists
-  of older daemons.
-- With Docker down the host tiles keep updating, the Docker tiles say
-  "Docker unreachable" and every tab but Events shows one error card with a
-  `systemctl status docker` hint; the open tab's next poll recovers.
-- Each polled region (the top bar, the stat band, the open tab) is a
-  template block in `web/templates/pages/overview.html` and its own
-  route, `GET /fragments/<block>`, which renders the same block. The
-  region's element carries `hx-get`, a plain `hx-trigger="every 5s"` and
-  `hx-swap="outerHTML"`, so each fresh copy keeps polling.
-- `app.js` cancels `htmx:beforeRequest` while the tab is hidden and
-  refreshes every polled region once when it is shown again.
-- A fragment request without a live session gets 401 with
-  `HX-Redirect: /login`, which htmx turns into a full navigation.
-
-The same Node overview is JSON on `/api/v1` (either credential), for the
-SPA and for automation, with raw values (bytes, ratios where 0.25 is
-25 %, counts, RFC 3339 times) that the browser formats. The status level
-and its reasons are still decided in Go, by the rules above. The wire
-types are in `internal/httpapi/node_types.go`.
+`/api/v1` serves it as JSON, to the SPA and to automation alike, with raw
+values (bytes, ratios where 0.25 is 25 %, counts, RFC 3339 times) that the
+browser formats with `Intl`. The rules, such as the status level and its
+reasons, are decided in Go (`internal/httpapi`). The wire types are in
+`internal/httpapi/node_types.go`.
 
 - `GET /api/v1/node`: the top bar and the stat band: `ip`, `arch`,
   `status` (`level` `ok`, `warn`, `down` or `off` before the first host
@@ -253,16 +232,46 @@ types are in `internal/httpapi/node_types.go`.
   reading: hostname, OS, uptime, load, CPU and memory with the sampler's
   ring as `history`, and the disks), `host_error`, and `docker`
   (`reachable`, or the `error`, with the version and container counts).
-  It answers while Docker is down.
+  It answers while Docker is down, and never calls `system/df`.
 - `GET /api/v1/node/containers`, `/images` and `/docker`: one per tab.
   While Docker is unreachable they answer 503 with
-  `{"error": "Docker unreachable: …"}`. The Docker tab's `system/df` is
-  shared between requests for 60 s after Docker computed it, by the
-  handler's clock.
+  `{"error": "Docker unreachable: …"}`. `system/df` is slow and grows with
+  the Node's data, so the Docker tab's is shared between requests for 60 s
+  after Docker computed it, by the handler's clock. Both response shapes
+  are read: the per-kind summaries of API 1.52+ and the item lists of
+  older daemons.
 - `GET /api/v1/node/events`: the event ring, newest first, each event
   with `gap_before` where earlier events may be missing, and
   `stream_error` while the stream is down. It answers while Docker is
   down.
+
+The page:
+
+- The top bar's status dot is red when Docker is unreachable, amber when
+  a shown disk or `MemAvailable` is under 10 % free, a container is
+  unhealthy or restarting, or Docker reports `Warnings`, and green
+  otherwise, with the reasons in its tooltip.
+- The stat band has CPU and memory with sparklines of the sampler's ring
+  that show the value at the point hovered, disk free/total for Docker's
+  root dir (plus `/` when that is another filesystem, by statfs
+  filesystem ID), the containers' running/total and unhealthy count, and
+  the Docker version. The top bar and the band poll `GET /api/v1/node`
+  every 5 s.
+- Tabs: Containers (every container; `pantalan.app`-labelled ones badged
+  with the App's name; running ones with CPU, a delta against that
+  container's previous one-shot sample, missing the first time, and
+  memory as usage − inactive file over the limit), Images (repo:tag,
+  size, created, in use by any container), Docker (version, API version,
+  storage driver, cgroup, root dir, `Warnings`, and `system/df`), and
+  Events (the ring newest first, in UTC, with `die`'s exit code and
+  `kill`'s signal, and a marker where events may be missing; it keeps
+  showing while Docker is down, with a note that the stream is retrying).
+  Only the open tab polls, because each tab's panel owns its query and
+  unmounts while hidden: Containers and Events every 5 s, Images every
+  30 s, Docker only when opened or refreshed.
+- With Docker down the host tiles keep updating, the Docker tiles say
+  "Docker unreachable" and every tab but Events shows one error card with a
+  `systemctl status docker` hint; the open tab's next poll recovers.
 
 ## Installer
 
@@ -329,8 +338,10 @@ images, reached over SSH on libvirt's `virbr0`: nightly, by hand, and as
 Releases come from `release.yml` on a `vX.Y.Z` tag push, any other tag
 failing first. It runs `ci.yml` as its gate, builds the assets with
 `deploy/release.sh` (the same script the harness builds its fake release
-with) in a job with read-only access, runs the VM tier on them, and hands
-them as a workflow artifact to the one job with write access (which needs
+with, putting a stand-in `npm` on its `PATH` so it needs no Node) in a job
+with read-only access; the script builds the Dashboard's frontend with
+`npm ci --ignore-scripts` before the binaries that embed it. The workflow
+then runs the VM tier on the assets, and hands them as a workflow artifact to the one job with write access (which needs
 the VM tier, so a failed gate leaves no draft), which runs no repository code: it checks
 the assets, attests the binaries' provenance, creates a draft release,
 uploads and publishes last.
@@ -342,7 +353,7 @@ uploads and publishes last.
 | `cmd/pantalan` | Entrypoint, config and dependency wiring |
 | `internal/domain` | Entities (`App`, `Deployment`, `Admin`), validation, sentinel errors |
 | `internal/service` | Use cases (`AppService`, `AdminService`, `Deployer`) and the port interfaces; `AdminService` owns every rule about the Admin, for both the Dashboard and `pantalan admin` (`admin show` only reads the store) |
-| `internal/httpapi` | REST API (Admin Token or session cookie), sign-in, the Node overview's JSON, GitHub webhook, `/healthz`; mounts the Dashboard at `/` |
+| `internal/httpapi` | REST API (Admin Token or session cookie), sign-in and the session cookie, the Node overview's JSON, GitHub webhook, `/healthz`; mounts the Dashboard at `/` |
 | `internal/dashtls` | Dashboard certificate (generate, load, renew) and the listener that redirects plain HTTP |
 | `internal/password` | Argon2id hashing of the Admin password into a PHC string |
 | `internal/store/sqlite` | App and deployment repositories and the Admin's credentials (Admin and sessions) in SQLite, plus the schema migrations |
@@ -353,16 +364,31 @@ uploads and publishes last.
 | `internal/proxy` | Host-based reverse proxy |
 | `internal/queue` | In-process job queue |
 | `internal/execx` | Shared helpers for running external commands |
-| `internal/dashboard` | Dashboard handlers: login, logout, session middleware, pages and their fragments; security and cache headers |
+| `internal/dashboard` | Serves the embedded SPA: `index.html` for every page behind the session gate, the hashed assets, the "frontend not built" page, and the security and cache headers |
 | `internal/nodeinfo` | Read-only Node information: host health from `/proc` and `statfs`, the background sampler's ring, Docker through the Engine API on its unix socket, and the container event ring fed by its `/events` stream |
-| `web` | Dashboard assets only (templates and static files), embedded into the binary |
+| `web` | The Dashboard SPA: its source in `web/app` (React, Vite, TypeScript) and the build in `web/dist`, which package `web` embeds into the binary |
 
 ## Decisions
 
 - **Standard library first.** `net/http` routing, `log/slog` and
   `httputil.ReverseProxy` cover the scaffold. Add a dependency only when it
   replaces real code: `modernc.org/sqlite` and `golang.org/x/crypto` (Argon2id)
-  so far.
+  so far. `tygo`, which generates the API's TypeScript types, is a Go
+  `tool` dependency, so the binary doesn't depend on it.
+- **The Dashboard is a React SPA over the one `/api/v1`**
+  ([ADR 0003](adr/0003-react-spa-dashboard.md), superseding the
+  server-rendered htmx Dashboard of [ADR 0002](adr/0002-server-rendered-dashboard-with-htmx.md)).
+  Pages change without a reload, a log keeps streaming across pages, and
+  charts answer hover, while there is still one API: anything the
+  Dashboard does, automation can do with the Admin Token. The build is
+  embedded, so the binary stays one file; `go build` without Node still
+  works and says the frontend isn't built. Sign-in needs JavaScript.
+- **A small, locked frontend supply chain.** npm installs from the
+  committed lockfile with `npm ci --ignore-scripts` in CI and the release,
+  so no package runs code at install; Dependabot groups npm updates into
+  one pull request a week; and a new runtime dependency's pull request
+  says why it's needed (dev tooling is exempt). This is the frontend's
+  "standard library first".
 - **Docker CLI for container lifecycle, the Engine API for reads.**
   Deployments build, run, look up ports and remove containers through the
   docker CLI (`internal/runtime/docker`): it has no dependencies and its

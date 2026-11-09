@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pantalan/pantalan/internal/dashboard"
 	"github.com/pantalan/pantalan/internal/service"
 )
 
@@ -52,7 +51,7 @@ func requireCredential(token string, sessions Sessions, log *slog.Logger, next h
 			next.ServeHTTP(w, r)
 			return
 		}
-		cookie, err := r.Cookie(dashboard.CookieName)
+		cookie, err := r.Cookie(CookieName)
 		if err != nil || cookie.Value == "" {
 			unauthorized(w)
 			return
@@ -75,6 +74,17 @@ func requireCredential(token string, sessions Sessions, log *slog.Logger, next h
 
 func unauthorized(w http.ResponseWriter) {
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
+}
+
+// noStoreAPI keeps every /api/ response out of caches: each depends on
+// the credential and on the Node's state now.
+func noStoreAPI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func logRequests(log *slog.Logger, next http.Handler) http.Handler {

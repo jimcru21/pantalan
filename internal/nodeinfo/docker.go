@@ -40,11 +40,6 @@ type Docker struct {
 	// prevCPU is each running container's previous CPU sample, which
 	// the next one's CPU % is a delta against.
 	prevCPU map[string]cpuSample
-
-	// df is the shared system/df result; dfMu is held while it is
-	// fetched, so concurrent callers wait for one call.
-	dfMu sync.Mutex
-	df   *DiskUsage
 }
 
 // NewDocker reads the Engine API on socket. statfs is syscall.Statfs and

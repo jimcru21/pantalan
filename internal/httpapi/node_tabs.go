@@ -173,8 +173,13 @@ func (h *handler) nodeDocker(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, out)
 }
 
+// diskUsageTTL is how long a system/df answer is shared before the next
+// request asks Docker again: system/df is slow and grows with the Node's
+// data.
+const diskUsageTTL = 60 * time.Second
+
 // sharedDiskUsage shares Docker's system/df answer between requests for
-// nodeinfo.DiskUsageTTL after Docker computed it. Concurrent requests
+// diskUsageTTL after Docker computed it. Concurrent requests
 // wait for one call rather than each making their own; a failed call
 // isn't shared.
 type sharedDiskUsage struct {
@@ -187,7 +192,7 @@ type sharedDiskUsage struct {
 func (s *sharedDiskUsage) get(ctx context.Context, docker NodeDocker, apiVersion string) (nodeinfo.DiskUsage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.last != nil && s.now().Sub(s.last.At) < nodeinfo.DiskUsageTTL {
+	if s.last != nil && s.now().Sub(s.last.At) < diskUsageTTL {
 		return *s.last, nil
 	}
 	du, err := docker.DiskUsage(ctx, apiVersion)
