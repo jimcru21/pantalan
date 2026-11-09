@@ -23,13 +23,13 @@ const CookieName = "__Host-pantalan_session"
 // navigation to the login page.
 func (d *Dashboard) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		err := d.deps.Auth.Authenticate(r.Context(), sessionToken(r))
+		err := d.deps.Auth.Authenticate(r.Context(), SessionToken(r))
 		switch {
 		case err == nil:
 			next.ServeHTTP(w, r)
 		case errors.Is(err, service.ErrNoSession):
-			if sessionToken(r) != "" {
-				clearSessionCookie(w)
+			if SessionToken(r) != "" {
+				ClearSessionCookie(w)
 			}
 			if r.Header.Get("HX-Request") == "true" {
 				w.Header().Set("HX-Redirect", "/login")
@@ -76,7 +76,7 @@ func (d *Dashboard) loginData(r *http.Request) loginData {
 // loginPage shows the login card, or sends a signed-in Admin on to the
 // Dashboard.
 func (d *Dashboard) loginPage(w http.ResponseWriter, r *http.Request) {
-	if token := sessionToken(r); token != "" {
+	if token := SessionToken(r); token != "" {
 		if err := d.deps.Auth.Authenticate(r.Context(), token); err == nil {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
@@ -113,12 +113,12 @@ func (d *Dashboard) login(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		// A browser that signs in again leaves its old session behind.
-		if old := sessionToken(r); old != "" {
+		if old := SessionToken(r); old != "" {
 			if err := d.deps.Auth.SignOut(r.Context(), old); err != nil {
 				d.log.Warn("sign out replaced session", "err", err)
 			}
 		}
-		setSessionCookie(w, token)
+		SetSessionCookie(w, token)
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	case errors.Is(err, service.ErrBadCredentials):
 		data.Error = "Incorrect username or password."
@@ -142,15 +142,16 @@ func (d *Dashboard) login(w http.ResponseWriter, r *http.Request) {
 
 // logout ends the session, clears the cookie and returns to the login page.
 func (d *Dashboard) logout(w http.ResponseWriter, r *http.Request) {
-	if err := d.deps.Auth.SignOut(r.Context(), sessionToken(r)); err != nil {
+	if err := d.deps.Auth.SignOut(r.Context(), SessionToken(r)); err != nil {
 		d.serverError(w, "sign out", err)
 		return
 	}
-	clearSessionCookie(w)
+	ClearSessionCookie(w)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-func sessionToken(r *http.Request) string {
+// SessionToken is the session cookie's value, or "" without one.
+func SessionToken(r *http.Request) string {
 	c, err := r.Cookie(CookieName)
 	if err != nil {
 		return ""
@@ -172,11 +173,15 @@ func sessionCookie(token string) *http.Cookie {
 	}
 }
 
-func setSessionCookie(w http.ResponseWriter, token string) {
+// SetSessionCookie gives the browser the session cookie for token. The
+// Dashboard's login form and POST /api/v1/sessions both set it here, so
+// the two set the same cookie.
+func SetSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, sessionCookie(token))
 }
 
-func clearSessionCookie(w http.ResponseWriter) {
+// ClearSessionCookie tells the browser to drop the session cookie.
+func ClearSessionCookie(w http.ResponseWriter) {
 	c := sessionCookie("")
 	c.MaxAge = -1
 	http.SetCookie(w, c)

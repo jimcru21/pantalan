@@ -212,13 +212,17 @@ func TestCrossOriginLoginAndLogoutAreRejected(t *testing.T) {
 	}
 }
 
-func TestTheAPIAcceptsOnlyTheAdminTokenAndTheDashboardRefusesIt(t *testing.T) {
+// The HTTP seam (internal/httpapi) covers every credential rule; this
+// checks serve wires them up.
+func TestTheAPIAcceptsTheSessionCookieAndTheAdminTokenAndTheDashboardRefusesTheToken(t *testing.T) {
 	s := startServe(t, serveEnv(t))
 	b := signedIn(t, s)
 
-	// A signed-in browser's cookie is no credential on /api/v1.
-	if got := b.get("/api/v1/apps"); got.StatusCode != http.StatusUnauthorized {
-		t.Errorf("GET /api/v1/apps with only a session cookie = %d, want 401", got.StatusCode)
+	if got := b.get("/api/v1/apps"); got.StatusCode != http.StatusOK {
+		t.Errorf("GET /api/v1/apps with only a session cookie = %d %q, want 200", got.StatusCode, got.body)
+	}
+	if got := newBrowser(t, s).get("/api/v1/apps"); got.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/apps with no credential = %d, want 401", got.StatusCode)
 	}
 
 	withToken := func(path string) page {

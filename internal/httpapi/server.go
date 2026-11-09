@@ -1,6 +1,7 @@
 // Package httpapi exposes the REST API, the GitHub webhook and /healthz on
 // the Dashboard listener, and mounts the Dashboard's own handler next to
-// them. It authenticates /api/v1 with the Admin Token alone.
+// them. /api/v1 accepts either the Admin Token or the Dashboard's session
+// cookie (ADR 0003), so the Dashboard and automation share one API.
 package httpapi
 
 import (
@@ -13,6 +14,8 @@ import (
 type Deps struct {
 	Apps          *service.AppService
 	Deployer      *service.Deployer
+	Sessions      Sessions // signs in and out, and checks the session cookie on /api/v1
+	Hostname      string   // the Node's, for the sign-in screen
 	AdminToken    string
 	WebhookSecret string
 	Dashboard     http.Handler // everything outside /api, /webhooks and /healthz
@@ -34,8 +37,15 @@ func NewHandler(deps Deps) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	// The Admin Token only: a session cookie is never looked at here.
-	mux.Handle("/api/", requireToken(deps.AdminToken, api))
+	// Signing in takes no credential. The session routes set and clear the
+	// cookie, so only a same-origin request may call them, whatever
+	// credential it carries.
+	sameOrigin := http.NewCrossOriginProtection()
+	mux.HandleFunc("GET /api/v1/login-info", h.loginInfo)
+	mux.Handle("POST /api/v1/sessions", sameOrigin.Handler(http.HandlerFunc(h.signIn)))
+	mux.Handle("DELETE /api/v1/sessions/current", sameOrigin.Handler(http.HandlerFunc(h.signOut)))
+	// Everything else under /api: the Admin Token or a live session cookie.
+	mux.Handle("/api/", requireCredential(deps.AdminToken, deps.Sessions, deps.Log, api))
 	// Authenticated by HMAC signature, not the admin token.
 	mux.HandleFunc("POST /webhooks/github", h.githubWebhook)
 	mux.Handle("/", deps.Dashboard)
