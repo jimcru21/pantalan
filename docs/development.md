@@ -70,18 +70,21 @@ docker compose up
 
 The first start builds the dev image, then prints the Dashboard URL, the
 dev Admin (`dev`) and its password (shown once) and the Admin Token. Sign
-in at https://localhost:8443 and accept the browser's warning about the
-self-signed certificate. Edit any `.go`, template, CSS, JS, SVG or
-migration file and Pantalan rebuilds and restarts within seconds
-([air](https://github.com/air-verse/air) watches the checkout): refresh the
-browser to see it. A change that doesn't compile prints the error and keeps
-the last good build running.
+in at https://localhost:5173 and accept the browser's warning about the
+self-signed certificate. That is the Dashboard, the React SPA in `web/app`
+(ADR 0003), on Vite's dev server with Pantalan's certificate and `/api`
+proxied to Pantalan on https://localhost:8443. Edits under `web/app/src`
+show up in the open page at once (hot reload), with no refresh. Edit any
+`.go` or migration file and Pantalan rebuilds and restarts within seconds
+([air](https://github.com/air-verse/air) watches the checkout). A change
+that doesn't compile prints the error and keeps the last good build
+running.
 
-The new Dashboard, the React SPA in `web/app` (ADR 0003), runs beside it
-on Vite's dev server at https://localhost:5173, with the same certificate
-and `/api` proxied to Pantalan. Edits under `web/app/src` show up in the
-open page at once (hot reload), with no refresh. The binary doesn't serve
-the SPA yet: until it does, 8443 keeps today's Dashboard.
+8443 itself serves the Dashboard embedded in the binary, which is only
+there once `make web` has built it into `web/dist` (air then rebuilds);
+until then it serves a "frontend not built" page. Vite serves the SPA for
+every path and doesn't send the CSP, so the page gate and the CSP are
+only checked against the built binary.
 
 Apps you deploy run in the stack's own Docker daemon (Docker-in-Docker, the
 `docker` service), not in your machine's Docker, and are reachable through
@@ -113,8 +116,8 @@ PANTALAN_DEV_BIND=0.0.0.0
 PANTALAN_DEV_HOST=203.0.113.10   # the VPS's public IP, for the printed URLs
 ```
 
-then `docker compose up -d` and open `https://<public-ip>:8443` (and
-`https://<public-ip>:5173` for the SPA). Docker's published ports bypass
+then `docker compose up -d` and open `https://<public-ip>:5173` (the
+API is on `https://<public-ip>:8443`). Docker's published ports bypass
 ufw, so the provider's firewall or security group is what decides who can
 reach them: open 8443 and 5173 (and 8080 to try the app proxy), ideally
 only to your own IP. The Admin Token and webhook secret are random,
@@ -128,7 +131,7 @@ The `docker` service runs privileged, which Docker-in-Docker needs.
 With Go 1.26+, git and Docker on your machine (and Node for the SPA):
 
 ```sh
-make run      # Dashboard + API on https://localhost:8443, app proxy on :8080
+make run      # API (and the Dashboard built by make web) on https://localhost:8443, app proxy on :8080
 make web-dev  # the SPA with hot reload on https://localhost:5173, /api proxied to make run
 make check    # Go: vet, race tests, gofmt; SPA: type check, ESLint, Prettier, tests
 ```
@@ -150,7 +153,8 @@ no shadcn/ui chart wrapper. React's `style` prop is fine.
 ```sh
 make web-deps   # npm ci --ignore-scripts, from the lockfile (make does it when needed)
 make web-check  # tsc, ESLint, Prettier and the tests (part of make check)
-make web        # build into web/dist
+make web        # build into web/dist, which the binary embeds
+make build      # make web, then go build: bin/pantalan with the SPA embedded
 make types      # regenerate the API's TypeScript types from the Go structs
 ```
 
@@ -266,7 +270,7 @@ internal/domain/        entities and rules
 internal/service/       use cases + port interfaces
 internal/httpapi/       REST API, webhooks, middleware
 internal/dashtls/       Dashboard certificate + HTTPS listener
-internal/dashboard/     Dashboard login, sessions and pages (html/template + htmx)
+internal/dashboard/     serves the embedded SPA: page gate, assets, headers
 internal/store/sqlite/  SQLite repositories + migrations
 internal/source/        git
 internal/build/         dockerfile, nixpacks
@@ -274,8 +278,9 @@ internal/runtime/docker container lifecycle
 internal/health/        readiness probe
 internal/proxy/         reverse proxy
 internal/queue/         deploy job queue
-web/                    Dashboard templates and static files, embedded (no build step)
-web/app/                the Dashboard SPA (React, Vite, TypeScript), not embedded yet
+web/                    embeds web/dist into the binary (web/embed.go)
+web/app/                the Dashboard SPA (React, Vite, TypeScript)
+web/dist/               its build (make web), gitignored but for a placeholder
 tygo.yaml               API types generated into web/app/src/api/generated (make types)
 docs/                   architecture notes
 ```
