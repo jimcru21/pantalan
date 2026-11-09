@@ -2,3 +2,5 @@
 /data/
 .env
 /tmp/
+/web/app/node_modules/
+/web/dist/

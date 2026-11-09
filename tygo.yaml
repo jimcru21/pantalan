@@ -1,0 +1,13 @@
+# TypeScript types for the API's JSON, generated from the Go structs by
+# tygo (a Go tool dependency) with `make types`. The output is committed,
+# and CI fails when it's stale. When the API gains a response type, add
+# its package (or file) here and run `make types`.
+packages:
+  - path: github.com/pantalan/pantalan/internal/domain
+    output_path: web/app/src/api/generated/domain.ts
+    include_files:
+      - app.go
+      - deployment.go
+    preserve_comments: types
+    type_mappings:
+      time.Time: string /* RFC 3339 */
