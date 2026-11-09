@@ -1,8 +1,16 @@
 import { useState } from "react";
-import { Boxes, ChevronLeft, LayoutDashboard, type LucideIcon } from "lucide-react";
-import { NavLink, Outlet } from "react-router";
+import { useMutation } from "@tanstack/react-query";
+import { Boxes, ChevronLeft, LayoutDashboard, LogOut, type LucideIcon } from "lucide-react";
+import { NavLink, Outlet, useNavigate } from "react-router";
+import { signOut as endSession } from "@/api/sessions";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+
+// A sidebar entry: a page link or the sign-out button.
+const navItem = cn(
+  "flex items-center gap-3 rounded-md px-3.5 py-2.5 whitespace-nowrap text-sidebar-foreground no-underline outline-none",
+  "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground",
+);
 
 const nav: { to: string; label: string; icon: LucideIcon }[] = [
   { to: "/", label: "Overview", icon: LayoutDashboard },
@@ -15,6 +23,13 @@ const nav: { to: string; label: string; icon: LucideIcon }[] = [
  */
 export function Shell() {
   const [collapsed, setCollapsed] = useRememberedCollapse();
+  const navigate = useNavigate();
+  // Ends the session on the server, so the cookie can't be reused; only
+  // then is the Admin signed out.
+  const signOut = useMutation({
+    mutationFn: endSession,
+    onSuccess: () => navigate("/login", { replace: true }),
+  });
 
   return (
     <div
@@ -38,11 +53,7 @@ export function Shell() {
                   to={to}
                   end
                   className={({ isActive }) =>
-                    cn(
-                      "flex items-center gap-3 rounded-md px-3.5 py-2.5 whitespace-nowrap text-sidebar-foreground no-underline outline-none",
-                      "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground",
-                      isActive && "bg-sidebar-accent text-sidebar-accent-foreground",
-                    )
+                    cn(navItem, isActive && "bg-sidebar-accent text-sidebar-accent-foreground")
                   }
                 >
                   <Icon aria-hidden className="size-[18px] flex-none" />
@@ -52,6 +63,20 @@ export function Shell() {
               {collapsed && <TooltipContent side="right">{label}</TooltipContent>}
             </Tooltip>
           ))}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                disabled={signOut.isPending}
+                onClick={() => signOut.mutate()}
+                className={cn(navItem, "w-full cursor-pointer text-left")}
+              >
+                <LogOut aria-hidden className="size-[18px] flex-none" />
+                <Label collapsed={collapsed}>Sign out</Label>
+              </button>
+            </TooltipTrigger>
+            {collapsed && <TooltipContent side="right">Sign out</TooltipContent>}
+          </Tooltip>
         </nav>
         <button
           type="button"
@@ -70,6 +95,14 @@ export function Shell() {
       <div className="min-w-0">
         <Outlet />
       </div>
+      {signOut.isError && (
+        <div
+          role="alert"
+          className="fixed right-4 bottom-4 rounded-md bg-destructive-soft px-3 py-2.5 text-[13px] text-destructive shadow-sm"
+        >
+          Sign-out failed: you are still signed in. Try again.
+        </div>
+      )}
     </div>
   );
 }
