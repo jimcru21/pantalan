@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router";
 import { useDeploy } from "@/api/deployments";
+import { buttonClass } from "@/components/form";
 
 /**
  * Rolls back: starts a new Deployment of the exact commit `deploymentID`
@@ -31,7 +32,7 @@ export function RedeployButton({ appID, deploymentID }: { appID: string; deploym
         type="button"
         onClick={redeploy}
         disabled={deploy.isPending}
-        className="inline-flex cursor-pointer items-center justify-center rounded-md border bg-card px-2.5 py-1 text-[13px] font-medium text-foreground hover:bg-secondary disabled:cursor-default disabled:opacity-70"
+        className={`${buttonClass.small} disabled:cursor-default disabled:opacity-70`}
       >
         Redeploy this commit
       </button>
