@@ -36,13 +36,38 @@ func (s *Store) CreateApp(ctx context.Context, app domain.App) error {
 		app.ID, app.Name, app.RepoURL, app.Branch, string(app.BuildType), app.Domain, app.Port, string(env),
 		formatTime(app.CreatedAt))
 	if isUniqueViolation(err) {
-		var holder string
-		if lookupErr := s.db.QueryRowContext(ctx, `SELECT name FROM apps WHERE domain = ?`, app.Domain).Scan(&holder); lookupErr != nil {
-			return fmt.Errorf("%w: domain %s is already in use", domain.ErrConflict, app.Domain)
-		}
-		return fmt.Errorf("%w: domain %s is used by app %s", domain.ErrConflict, app.Domain, holder)
+		return s.domainTaken(ctx, app.Domain)
 	}
 	return err
+}
+
+// UpdateApp writes the settings columns only, so env vars and the
+// creation time stay as they are.
+func (s *Store) UpdateApp(ctx context.Context, app domain.App) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE apps SET name = ?, repo_url = ?, branch = ?, build_type = ?, domain = ?, port = ? WHERE id = ?`,
+		app.Name, app.RepoURL, app.Branch, string(app.BuildType), app.Domain, app.Port, app.ID)
+	if isUniqueViolation(err) {
+		return s.domainTaken(ctx, app.Domain)
+	}
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return fmt.Errorf("app %s: %w", app.ID, domain.ErrNotFound)
+	}
+	return nil
+}
+
+// domainTaken is the conflict for a domain another App already has.
+func (s *Store) domainTaken(ctx context.Context, host string) error {
+	var holder string
+	if err := s.db.QueryRowContext(ctx, `SELECT name FROM apps WHERE domain = ?`, host).Scan(&holder); err != nil {
+		return domain.ConflictingField("domain", fmt.Sprintf("domain %s is already in use", host))
+	}
+	return domain.ConflictingField("domain", fmt.Sprintf("domain %s is used by app %s", host, holder))
 }
 
 func isUniqueViolation(err error) bool {

@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
-import { useParams } from "react-router";
+import { Link, useParams } from "react-router";
 import type { App, Deployment } from "@/api/generated/domain";
 import { isNotFound, useApp, useDeployments } from "@/api/apps";
 import { DeployButton } from "@/apps/DeployButton";
 import { DeploymentStatus } from "@/apps/DeploymentStatus";
 import { DeploymentLink, Queue } from "@/apps/Queue";
+import { buttonClass } from "@/components/form";
 import { Alert, Facts, Panel, Table, Td } from "@/components/panel";
 import { formatUTCDateTime } from "@/lib/format";
 import { NotFoundPage, Page } from "@/shell/Page";
@@ -38,7 +39,14 @@ export function AppPage() {
 
   return (
     <Page title={app.data.name} up={toList}>
-      <Panel title="Settings">
+      <Panel
+        title="Settings"
+        action={
+          <Link to={`/apps/${encodeURIComponent(appId)}/edit`} className={buttonClass.small}>
+            Edit
+          </Link>
+        }
+      >
         <Facts facts={settings(app.data)} />
       </Panel>
       {deployments.error ? (
