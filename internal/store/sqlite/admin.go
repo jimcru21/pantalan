@@ -22,12 +22,7 @@ func (s *Store) CreateAdmin(ctx context.Context, admin domain.Admin) error {
 	if err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return err
-	} else if n == 0 {
-		return fmt.Errorf("%w: an Admin already exists", domain.ErrConflict)
-	}
-	return nil
+	return touchedRow(res, fmt.Errorf("%w: an Admin already exists", domain.ErrConflict))
 }
 
 func (s *Store) GetAdmin(ctx context.Context) (domain.Admin, error) {
@@ -43,10 +38,8 @@ func (s *Store) ResetPassword(ctx context.Context, hash string, at time.Time) er
 		if err != nil {
 			return err
 		}
-		if n, err := res.RowsAffected(); err != nil {
+		if err := touchedRow(res, fmt.Errorf("admin: %w", domain.ErrNotFound)); err != nil {
 			return err
-		} else if n == 0 {
-			return fmt.Errorf("admin: %w", domain.ErrNotFound)
 		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM sessions`)
 		return err
@@ -91,10 +84,8 @@ func (s *Store) StartSession(ctx context.Context, checked, rehashed string, sess
 		if err != nil {
 			return err
 		}
-		if n, err := res.RowsAffected(); err != nil {
+		if err := touchedRow(res, fmt.Errorf("%w: the password changed", domain.ErrConflict)); err != nil {
 			return err
-		} else if n == 0 {
-			return fmt.Errorf("%w: the password changed", domain.ErrConflict)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions (token_hash, created_at, last_seen_at) VALUES (?, ?, ?)`,
 			sess.TokenHash, formatTime(sess.CreatedAt), formatTime(sess.LastSeenAt)); err != nil {
