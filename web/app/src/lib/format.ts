@@ -104,3 +104,15 @@ export function formatLocalTime(rfc3339: string): string {
 export function formatUTCDate(rfc3339: string): string {
   return utcDate.format(new Date(rfc3339));
 }
+
+const utcDateTime = new Intl.DateTimeFormat(undefined, {
+  timeZone: "UTC",
+  dateStyle: "medium",
+  timeStyle: "medium",
+  hourCycle: "h23",
+});
+
+/** An RFC 3339 time as its UTC date and time: "Oct 20, 2026, 10:15:30". */
+export function formatUTCDateTime(rfc3339: string): string {
+  return utcDateTime.format(new Date(rfc3339));
+}
