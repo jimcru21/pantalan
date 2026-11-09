@@ -11,7 +11,7 @@ import type {
   NodeDockerInfo,
   NodeEventLog,
   NodeImage,
-} from "@/api/generated/node";
+} from "@/api/generated/httpapi";
 
 /** True for the 503 the Docker reads answer while Docker is unreachable. */
 export function isDockerUnreachable(err: unknown): boolean {

@@ -112,10 +112,28 @@ func (fakeSource) Fetch(_ context.Context, _, ref, _ string) (string, error) {
 	return "commit-of-" + ref, nil
 }
 
-// fakeBuilder builds every image at once, successfully.
-type fakeBuilder struct{}
+// fakeBuilder builds every image at once: successfully, until a test
+// calls fail.
+type fakeBuilder struct {
+	mu     sync.Mutex
+	reason string // non-empty: every build fails with it
+}
 
-func (fakeBuilder) Build(context.Context, service.BuildRequest) error { return nil }
+func (b *fakeBuilder) Build(context.Context, service.BuildRequest) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.reason != "" {
+		return errors.New(b.reason)
+	}
+	return nil
+}
+
+// fail makes every build from now on fail with reason.
+func (b *fakeBuilder) fail(reason string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.reason = reason
+}
 
 // fakeRuntime stands in for Docker: it remembers the containers it runs.
 type fakeRuntime struct {

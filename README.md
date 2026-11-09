@@ -192,7 +192,7 @@ All under `/api/v1`, with `Authorization: Bearer <Admin Token>`.
 
 | Method | Path | What it does |
 |---|---|---|
-| `GET` | `/apps` | List apps |
+| `GET` | `/apps` | List apps, each with its latest Deployment (`latest_deployment`, missing before the first) |
 | `POST` | `/apps` | Create an app |
 | `GET` | `/apps/{id}` | Get one app |
 | `GET` | `/apps/{id}/deployments` | List an app's Deployments |

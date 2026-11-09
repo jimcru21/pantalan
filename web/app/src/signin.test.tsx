@@ -1,8 +1,8 @@
 import { act, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { App } from "@/api/generated/domain";
-import type { LoginInfo, SignInRequest } from "@/api/generated/httpapi";
-import { aLoginInfo, anApp } from "@/test/fixtures";
+import type { AppListItem, LoginInfo, SignInRequest } from "@/api/generated/httpapi";
+import { anAppListItem } from "@/test/app-fixtures";
+import { aLoginInfo } from "@/test/fixtures";
 import { json, status, type Api } from "@/test/network";
 import { overviewApi } from "@/test/node-fixtures";
 import { renderApp } from "@/test/render";
@@ -142,7 +142,7 @@ describe("an ended session", () => {
         }),
         "GET /api/v1/apps": () =>
           signedIn
-            ? json<App[]>([anApp({ name: "hello" })])
+            ? json<AppListItem[]>([anAppListItem({ name: "hello" })])
             : new Response("unauthorized\n", { status: 401 }),
       },
     });
@@ -163,7 +163,7 @@ describe("signing out", () => {
     const { user, calls } = renderApp("/apps", {
       api: {
         ...signInApi(),
-        "GET /api/v1/apps": () => json<App[]>([]),
+        "GET /api/v1/apps": () => json<AppListItem[]>([]),
         "DELETE /api/v1/sessions/current": () => status(204),
       },
     });
@@ -193,7 +193,7 @@ describe("signing out", () => {
 describe("signing in", () => {
   it("returns to the address the Admin asked for", async () => {
     const { user, calls } = renderApp("/login?next=%2Fapps", {
-      api: { ...signInApi(), "GET /api/v1/apps": () => json<App[]>([]) },
+      api: { ...signInApi(), "GET /api/v1/apps": () => json<AppListItem[]>([]) },
     });
 
     await signInAs(user, "alice");

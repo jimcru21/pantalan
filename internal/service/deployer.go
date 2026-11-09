@@ -174,6 +174,20 @@ func (d *Deployer) List(ctx context.Context, appID string) ([]domain.Deployment,
 	return d.deps.Deployments.ListDeployments(ctx, appID)
 }
 
+// Latest returns every App's newest Deployment, by App ID. An App with no
+// Deployments has no entry.
+func (d *Deployer) Latest(ctx context.Context) (map[string]domain.Deployment, error) {
+	deps, err := d.deps.Deployments.LatestDeployments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	latest := make(map[string]domain.Deployment, len(deps))
+	for _, dep := range deps {
+		latest[dep.AppID] = dep
+	}
+	return latest, nil
+}
+
 // OpenLog opens a deployment's build log. Looking the deployment up first
 // means only IDs from the store, never raw user input, reach the filesystem.
 func (d *Deployer) OpenLog(ctx context.Context, deploymentID string) (*os.File, error) {

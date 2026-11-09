@@ -12,9 +12,11 @@ const navItem = cn(
   "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground",
 );
 
-const nav: { to: string; label: string; icon: LucideIcon }[] = [
-  { to: "/", label: "Overview", icon: LayoutDashboard },
-  { to: "/apps", label: "Apps", icon: Boxes },
+// `end`: only that exact address is the entry's page. Apps stays current
+// on the pages under it (an App, a Deployment).
+const nav: { to: string; label: string; icon: LucideIcon; end: boolean }[] = [
+  { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
+  { to: "/apps", label: "Apps", icon: Boxes, end: false },
 ];
 
 /**
@@ -46,12 +48,12 @@ export function Shell() {
           <Label collapsed={collapsed}>Pantalan</Label>
         </div>
         <nav aria-label="Dashboard" className="grid gap-0.5 p-2">
-          {nav.map(({ to, label, icon: Icon }) => (
+          {nav.map(({ to, label, icon: Icon, end }) => (
             <Tooltip key={to}>
               <TooltipTrigger asChild>
                 <NavLink
                   to={to}
-                  end
+                  end={end}
                   className={({ isActive }) =>
                     cn(navItem, isActive && "bg-sidebar-accent text-sidebar-accent-foreground")
                   }

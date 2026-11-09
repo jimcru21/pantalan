@@ -58,6 +58,29 @@ func (s *Store) ListDeployments(ctx context.Context, appID string) ([]domain.Dep
 	return deps, rows.Err()
 }
 
+// LatestDeployments returns the newest deployment of every app that has
+// one, in one query, ordered as ListDeployments would put them first.
+func (s *Store) LatestDeployments(ctx context.Context) ([]domain.Deployment, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+deploymentColumns+` FROM (
+		SELECT `+deploymentColumns+`, ROW_NUMBER() OVER (
+			PARTITION BY app_id ORDER BY created_at DESC, id DESC) AS newest
+		FROM deployments)
+		WHERE newest = 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	deps := []domain.Deployment{}
+	for rows.Next() {
+		dep, err := scanDeployment(rows)
+		if err != nil {
+			return nil, err
+		}
+		deps = append(deps, dep)
+	}
+	return deps, rows.Err()
+}
+
 func (s *Store) LiveDeployment(ctx context.Context, appID string) (domain.Deployment, error) {
 	dep, err := scanDeployment(s.db.QueryRowContext(ctx, `SELECT `+deploymentColumns+` FROM deployments
 		WHERE app_id = ? AND status = ? ORDER BY created_at DESC, id DESC LIMIT 1`,

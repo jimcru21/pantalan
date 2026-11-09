@@ -1,12 +1,12 @@
 import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { App } from "@/api/generated/domain";
+import type { AppListItem } from "@/api/generated/httpapi";
 import { json, type Api } from "@/test/network";
 import { overviewApi } from "@/test/node-fixtures";
 import { renderApp } from "@/test/render";
 
 // What the pages behind the shell fetch.
-const shellApi: Api = { ...overviewApi(), "GET /api/v1/apps": () => json<App[]>([]) };
+const shellApi: Api = { ...overviewApi(), "GET /api/v1/apps": () => json<AppListItem[]>([]) };
 
 describe("the Dashboard shell", () => {
   it("shows the page the address bar names", async () => {
@@ -36,6 +36,14 @@ describe("the Dashboard shell", () => {
 
     window.history.forward();
     expect(await screen.findByRole("heading", { name: "Apps" })).toBeInTheDocument();
+  });
+
+  it("shows a not-found page for an address no page has", async () => {
+    renderApp("/no/such/page", { api: shellApi });
+
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Dashboard" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to the Overview" })).toHaveAttribute("href", "/");
   });
 
   it("remembers a collapsed sidebar across a reload", async () => {

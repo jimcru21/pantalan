@@ -194,7 +194,9 @@ open it with `npx playwright show-trace <trace.zip>`.
 structs by [tygo](https://github.com/gzuidhof/tygo), a Go tool dependency
 configured in `tygo.yaml`. They're committed, and CI fails when they're
 stale: after changing a response struct, or adding one to `tygo.yaml`, run
-`make types` and commit the result.
+`make types` and commit the result. Each Go package has one entry and one
+output file: tygo silently ignores a second entry for the same package, so
+add a new file to the package's `include_files` instead.
 
 ### Frontend dependencies
 

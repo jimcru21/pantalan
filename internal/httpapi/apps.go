@@ -46,7 +46,19 @@ func (h *handler) listApps(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	h.writeJSON(w, http.StatusOK, apps)
+	latest, err := h.deps.Deployer.Latest(r.Context())
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	items := make([]AppListItem, len(apps))
+	for i, app := range apps {
+		items[i] = AppListItem{App: app}
+		if dep, ok := latest[app.ID]; ok {
+			items[i].LatestDeployment = &dep
+		}
+	}
+	h.writeJSON(w, http.StatusOK, items)
 }
 
 func (h *handler) getApp(w http.ResponseWriter, r *http.Request) {

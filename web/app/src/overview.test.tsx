@@ -6,7 +6,7 @@ import type {
   NodeDockerInfo,
   NodeEventLog,
   NodeImage,
-} from "@/api/generated/node";
+} from "@/api/generated/httpapi";
 import type { LoginInfo } from "@/api/generated/httpapi";
 import { aLoginInfo } from "@/test/fixtures";
 import { json, status } from "@/test/network";
@@ -22,6 +22,7 @@ import {
   overviewApi,
 } from "@/test/node-fixtures";
 import { renderApp } from "@/test/render";
+import { setHidden } from "@/test/visibility";
 
 describe("the Node overview", () => {
   it("names the Node in the top bar", async () => {
@@ -501,16 +502,6 @@ describe("the overview's tabs", () => {
     expect(await screen.findByRole("tabpanel", { name: "Images" })).toBeInTheDocument();
   });
 });
-
-// Hides or shows the browser tab, as switching to another tab would.
-function setHidden(hidden: boolean) {
-  Object.defineProperty(document, "visibilityState", {
-    configurable: true,
-    get: () => (hidden ? "hidden" : "visible"),
-  });
-  Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
-  document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
-}
 
 // Moves the pointer over a chart to x pixels from its left edge. jsdom
 // lays nothing out, so the chart's own box starts at 0.

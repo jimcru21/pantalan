@@ -23,6 +23,9 @@ type DeploymentRepository interface {
 	SaveDeployment(ctx context.Context, dep domain.Deployment) error
 	GetDeployment(ctx context.Context, id string) (domain.Deployment, error)
 	ListDeployments(ctx context.Context, appID string) ([]domain.Deployment, error)
+	// LatestDeployments returns the newest deployment of each app that
+	// has any, all at once.
+	LatestDeployments(ctx context.Context) ([]domain.Deployment, error)
 	// LiveDeployment returns domain.ErrNotFound when the app has nothing live.
 	LiveDeployment(ctx context.Context, appID string) (domain.Deployment, error)
 }
