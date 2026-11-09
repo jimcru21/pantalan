@@ -19,5 +19,11 @@
 //	make installtest-vm
 //
 // The VM substrate's pure parts (vmspec_test.go) carry no build tag, so
-// their unit tests run in `make check`.
+// their unit tests run in `make check`. So do the installer's decisions
+// (install_unit_test.go): install.sh, sourced with PANTALAN_INSTALL_NO_MAIN
+// set so it runs nothing, has its host probes replaced by stubs, and each
+// decision is called on its own. Rules that are only strings (which
+// Dashboard ports are refused, the summary's Firewall line) belong there;
+// the container and VM tiers keep one end-to-end path per behaviour, for
+// what only a real Node shows.
 package installtest

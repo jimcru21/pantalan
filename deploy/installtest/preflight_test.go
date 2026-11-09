@@ -9,14 +9,13 @@ import (
 )
 
 // The Docker conflicts: hosts whose Docker the installer refuses, each an
-// image variant on top of Bare.
+// image variant on top of Bare. Every conflicting kind is in the unit
+// table (TestOnlyAnAnsweringDockerCE28OrNewerIsUsedAsItIs); these are its paths on real packages.
 const (
 	// DockerConflictDockerIO runs the distro's docker.io.
 	DockerConflictDockerIO Variant = "docker-conflict-docker-io"
 	// DockerConflictOldDockerCE runs docker-ce 27 from Docker's repo.
 	DockerConflictOldDockerCE Variant = "docker-conflict-old-docker-ce"
-	// DockerConflictPodmanDocker has podman-docker as its docker.
-	DockerConflictPodmanDocker Variant = "docker-conflict-podman-docker"
 )
 
 func TestDockerIOAbortsAndLeavesTheHostAlone(t *testing.T) {
@@ -44,20 +43,6 @@ func TestDockerCEOlderThan28AbortsAndIsNotUpgraded(t *testing.T) {
 		r := installer{}.run(t, n, "--admin-user", "alice")
 
 		assertFailedNaming(t, r, "docker-ce "+version+" is installed", "28 or newer", "never upgrades")
-		assertUntouched(t, n, before)
-	})
-}
-
-func TestPodmanDockerAborts(t *testing.T) {
-	t.Parallel()
-	forEachDistro(t, func(t *testing.T, d Distro) {
-		onlyOn(t, d, "debian-12", "ubuntu-24.04")
-		n := substrate.Boot(t, d, DockerConflictPodmanDocker)
-		before := hostState(t, n)
-
-		r := installer{}.run(t, n, "--admin-user", "alice")
-
-		assertFailedNaming(t, r, "podman-docker is installed", "never removes")
 		assertUntouched(t, n, before)
 	})
 }
@@ -135,28 +120,19 @@ func TestDashboardPortTakenAtATerminalAsksAndInstalls(t *testing.T) {
 	})
 }
 
-func TestRefusedDashboardPortsAreRejectedWithAReason(t *testing.T) {
+// The refused Dashboard ports are a table in the unit tests
+// (TestEachRefusedDashboardPortSaysWhy); this is the one that needs the host: an SSH
+// port found on a real Node, above 1024 where no other rule catches it.
+func TestADashboardPortSSHListensOnIsRefused(t *testing.T) {
 	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d Distro) {
 		n := substrate.Boot(t, d, Bare)
-		// A second sshd, on a port the below-1024 rule wouldn't catch.
 		sh(t, n, "mkdir -p /run/sshd && /usr/sbin/sshd -p 2222")
-		occupy(t, n, 9000)
 		before := hostState(t, n)
 
-		for port, reason := range map[string]string{
-			"80":    "app proxy",
-			"443":   "kept for app HTTPS",
-			"1023":  "below 1024",
-			"22":    "SSH listens on port 22",
-			"2222":  "SSH listens on port 2222",
-			"9000":  "in use by perl",
-			"8x443": "isn't a port number",
-			"65536": "isn't a port number",
-		} {
-			r := installer{}.run(t, n, "--admin-user", "alice", "--dashboard-port", port)
-			assertFailedNaming(t, r, "--dashboard-port "+port+": ", reason)
-		}
+		r := installer{}.run(t, n, "--admin-user", "alice", "--dashboard-port", "2222")
+
+		assertFailedNaming(t, r, "--dashboard-port 2222: SSH listens on port 2222")
 		assertUntouched(t, n, before)
 	})
 }
