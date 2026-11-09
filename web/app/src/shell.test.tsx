@@ -1,11 +1,16 @@
 import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { renderApp } from "@/test/render";
+import type { App } from "@/api/generated/domain";
+import { json, type Api } from "@/test/network";
 import { overviewApi } from "@/test/node-fixtures";
+import { renderApp } from "@/test/render";
+
+// What the pages behind the shell fetch.
+const shellApi: Api = { ...overviewApi(), "GET /api/v1/apps": () => json<App[]>([]) };
 
 describe("the Dashboard shell", () => {
   it("shows the page the address bar names", async () => {
-    renderApp("/apps");
+    renderApp("/apps", { api: shellApi });
 
     expect(await screen.findByRole("heading", { name: "Apps" })).toBeInTheDocument();
     const nav = screen.getByRole("navigation", { name: "Dashboard" });
@@ -15,7 +20,7 @@ describe("the Dashboard shell", () => {
   });
 
   it("moves between Overview and Apps without a reload, with back and forward", async () => {
-    const { user } = renderApp("/", { api: overviewApi() });
+    const { user } = renderApp("/", { api: shellApi });
     expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
     const shell = screen.getByRole("navigation", { name: "Dashboard" });
 
@@ -34,7 +39,7 @@ describe("the Dashboard shell", () => {
   });
 
   it("remembers a collapsed sidebar across a reload", async () => {
-    const { user, reload } = renderApp("/", { api: overviewApi() });
+    const { user, reload } = renderApp("/", { api: shellApi });
     const collapse = await screen.findByRole("button", { name: "Collapse sidebar" });
     expect(collapse).toHaveAttribute("aria-expanded", "true");
 
@@ -54,7 +59,7 @@ describe("the Dashboard shell", () => {
   });
 
   it("keeps the nav labels reachable while the sidebar is collapsed", async () => {
-    const { user } = renderApp("/", { api: overviewApi() });
+    const { user } = renderApp("/", { api: shellApi });
     await user.click(await screen.findByRole("button", { name: "Collapse sidebar" }));
 
     // Each link keeps its accessible name and shows it as a tooltip on focus.
@@ -66,7 +71,7 @@ describe("the Dashboard shell", () => {
   });
 
   it("injects no <style> element, which the CSP would block", async () => {
-    const { user } = renderApp("/", { api: overviewApi() });
+    const { user } = renderApp("/", { api: shellApi });
     await user.click(await screen.findByRole("button", { name: "Collapse sidebar" }));
     focusFromTop();
     await user.tab();
