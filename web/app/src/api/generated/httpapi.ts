@@ -2,6 +2,37 @@
 import type * as domain from "./domain";
 
 //////////
+// source: app_settings.go
+
+/**
+ * AppSettings is what an Admin chooses for an App, and the body of
+ * PUT /api/v1/apps/{id}. Branch defaults to "main" and BuildType to
+ * "dockerfile". Env vars have their own endpoint, and an App's ID and
+ * creation time never change.
+ */
+export interface AppSettings {
+  name: string;
+  repo_url: string;
+  branch?: string;
+  build_type?: domain.BuildType;
+  domain: string;
+  port: number /* int */;
+}
+/**
+ * CreateAppRequest is the body of POST /api/v1/apps: the settings, and
+ * optionally the App's first env vars.
+ */
+export interface CreateAppRequest {
+  name: string;
+  repo_url: string;
+  branch?: string;
+  build_type?: domain.BuildType;
+  domain: string;
+  port: number /* int */;
+  env?: { [key: string]: string};
+}
+
+//////////
 // source: app_types.go
 
 /**
@@ -314,6 +345,19 @@ export interface NodeEvent {
    * the stream reconnected and couldn't backfill.
    */
   gap_before: boolean;
+}
+
+//////////
+// source: respond.go
+
+/**
+ * ErrorResponse is the body of every JSON error answer. Field is set when
+ * the error is about one field of the request body (its JSON name, e.g.
+ * "domain"), so a form can show Error beside that field.
+ */
+export interface ErrorResponse {
+  error: string;
+  field?: string;
 }
 
 //////////

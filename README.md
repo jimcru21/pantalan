@@ -195,9 +195,14 @@ All under `/api/v1`, with `Authorization: Bearer <Admin Token>`.
 | `GET` | `/apps` | List apps, each with its latest Deployment (`latest_deployment`, missing before the first) |
 | `POST` | `/apps` | Create an app |
 | `GET` | `/apps/{id}` | Get one app |
+| `PUT` | `/apps/{id}` | Change an app's settings (`name`, `repo_url`, `branch`, `build_type`, `domain`, `port`; env vars, ID and creation time stay). Takes effect on the next Deployment; it doesn't start one |
 | `GET` | `/apps/{id}/deployments` | List an app's Deployments |
 | `POST` | `/apps/{id}/deployments` | Deploy (body optional: `{"ref": "..."}`) |
 | `GET` | `/deployments/{id}/logs` | A Deployment's log |
+
+Errors answer `{"error": "..."}`. When the error is about one field of the
+body (a `400`, or a `409` for a domain another app has), it also names it:
+`{"error": "port must be between 1 and 65535", "field": "port"}`.
 
 `GET /healthz` needs no credentials and answers `200` when the service is up.
 

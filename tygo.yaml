@@ -18,8 +18,10 @@ packages:
   - path: github.com/pantalan/pantalan/internal/httpapi
     output_path: web/app/src/api/generated/httpapi.ts
     include_files:
+      - app_settings.go
       - app_types.go
       - node_types.go
+      - respond.go
       - sessions.go
     preserve_comments: types
     frontmatter: |

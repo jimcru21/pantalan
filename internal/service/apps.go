@@ -18,12 +18,7 @@ func NewAppService(apps AppRepository) *AppService {
 }
 
 func (s *AppService) Create(ctx context.Context, app domain.App) (domain.App, error) {
-	if app.Branch == "" {
-		app.Branch = "main"
-	}
-	if app.BuildType == "" {
-		app.BuildType = domain.BuildDockerfile
-	}
+	withDefaults(&app)
 	if err := app.Validate(); err != nil {
 		return domain.App{}, err
 	}
@@ -33,6 +28,31 @@ func (s *AppService) Create(ctx context.Context, app domain.App) (domain.App, er
 		return domain.App{}, fmt.Errorf("create app: %w", err)
 	}
 	return app, nil
+}
+
+// Update replaces the settings of the App with ID id (name, repository,
+// branch, build type, domain, port; the same defaults as Create apply)
+// and returns the App. Its ID, creation time and env vars stay as they
+// are, and no Deployment starts: the settings take effect on the next one.
+func (s *AppService) Update(ctx context.Context, id string, settings domain.App) (domain.App, error) {
+	withDefaults(&settings)
+	settings.ID, settings.Env = id, nil
+	if err := settings.Validate(); err != nil {
+		return domain.App{}, err
+	}
+	if err := s.apps.UpdateApp(ctx, settings); err != nil {
+		return domain.App{}, fmt.Errorf("update app: %w", err)
+	}
+	return s.apps.GetApp(ctx, id)
+}
+
+func withDefaults(app *domain.App) {
+	if app.Branch == "" {
+		app.Branch = "main"
+	}
+	if app.BuildType == "" {
+		app.BuildType = domain.BuildDockerfile
+	}
 }
 
 func (s *AppService) Get(ctx context.Context, id string) (domain.App, error) {

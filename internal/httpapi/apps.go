@@ -4,41 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
-
-	"github.com/pantalan/pantalan/internal/domain"
 )
-
-type createAppRequest struct {
-	Name      string            `json:"name"`
-	RepoURL   string            `json:"repo_url"`
-	Branch    string            `json:"branch"`
-	BuildType domain.BuildType  `json:"build_type"`
-	Domain    string            `json:"domain"`
-	Port      int               `json:"port"`
-	Env       map[string]string `json:"env"`
-}
-
-func (h *handler) createApp(w http.ResponseWriter, r *http.Request) {
-	var req createAppRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		h.writeError(w, err)
-		return
-	}
-	app, err := h.deps.Apps.Create(r.Context(), domain.App{
-		Name:      req.Name,
-		RepoURL:   req.RepoURL,
-		Branch:    req.Branch,
-		BuildType: req.BuildType,
-		Domain:    req.Domain,
-		Port:      req.Port,
-		Env:       req.Env,
-	})
-	if err != nil {
-		h.writeError(w, err)
-		return
-	}
-	h.writeJSON(w, http.StatusCreated, app)
-}
 
 func (h *handler) listApps(w http.ResponseWriter, r *http.Request) {
 	apps, err := h.deps.Apps.List(r.Context())
