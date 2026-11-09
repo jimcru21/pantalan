@@ -112,12 +112,12 @@ which go to `internal/nodeinfo` through the dashboard's own interfaces
 
 Auth surfaces on the one listener:
 
-| Route | Credential |
-|---|---|
-| Dashboard pages, `POST /login`, `POST /logout` | session cookie only, behind `http.CrossOriginProtection`; a request with an `Authorization` header gets 401 |
-| `/api/v1/…` | Admin Token (bearer) only; cookies are ignored |
-| `/webhooks/github` | HMAC signature |
-| `/healthz` | none |
+| Route | Session cookie | Admin Token (bearer) | Other |
+|---|---|---|---|
+| Dashboard pages, `POST /login`, `POST /logout` | yes, behind `http.CrossOriginProtection` | no: a request with an `Authorization` header gets 401 | |
+| `/api/v1/…` | yes, behind `http.CrossOriginProtection` (a cross-origin unsafe request gets 403) | yes, from any origin | an `Authorization` header is judged alone, whatever cookie comes with it; no credential, a wrong token or an ended session gets 401 |
+| `/webhooks/github` | no | no | HMAC signature |
+| `/healthz` | no | no | none needed |
 
 - Login and logout are plain `<form method="post">` answered with 303
   redirects. A wrong username and a wrong password get the same 401 and
