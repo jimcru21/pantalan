@@ -50,7 +50,9 @@ func (h *handler) deploymentLog(w http.ResponseWriter, r *http.Request) {
 }
 
 // deploymentLogs is the older address of the plain-text Deployment Log,
-// by the Deployment's ID alone. It is kept for scripts.
+// by the Deployment's ID alone. It is kept for scripts, so it serves the
+// log as it always has: byte for byte as written, escape codes and line
+// ends untouched. Only the App-scoped addresses clean it.
 func (h *handler) deploymentLogs(w http.ResponseWriter, r *http.Request) {
 	f, err := h.deps.Deployer.OpenLog(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -58,7 +60,10 @@ func (h *handler) deploymentLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.closeLog(f)
-	h.sendPlainLog(w, f)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if _, err := io.Copy(w, f); err != nil {
+		h.deps.Log.Warn("send log", "err", err)
+	}
 }
 
 // sendPlainLog writes the log in f (none when nil) as plain text. nosniff

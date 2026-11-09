@@ -209,7 +209,9 @@ plain text; `…/log/stream` streams it:
   then sends `done` (data: the final status) and ends.
 
 ANSI escape codes are stripped and `\r` line ends become `\n` on the
-server, in both forms.
+server, in both forms. The older `GET /api/v1/deployments/{id}/logs`,
+kept for scripts, serves the file byte for byte as written, as it always
+has.
 
 ### App Log
 

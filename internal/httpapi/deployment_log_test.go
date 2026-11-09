@@ -320,6 +320,30 @@ func TestTheDeploymentLogHasItsColourCodesStripped(t *testing.T) {
 	}
 }
 
+// The older address by Deployment ID alone is for scripts, which read
+// the log exactly as the build wrote it, colour codes and carriage
+// returns included, as they always have.
+func TestTheLegacyLogsAddressServesTheLogAsWritten(t *testing.T) {
+	s := newSeam(t)
+	app := s.createApp("web")
+	raw := "\x1b[1;31merror\x1b[0m: bad layer\r\n\rprogress 50%\rprogress 100%\n"
+	s.builder.writes(raw)
+	dep := s.deploy(app, "")
+	s.runQueued()
+
+	got := s.get("/api/v1/deployments/"+dep+"/logs", withToken(adminToken))
+
+	if got.status != http.StatusOK {
+		t.Fatalf("GET legacy logs = %d %q, want 200", got.status, got.body)
+	}
+	if ct := got.header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/plain; charset=utf-8", ct)
+	}
+	if !strings.Contains(got.body, "\n"+raw+"==> ") {
+		t.Errorf("legacy logs = %q, want the build's output byte for byte (%q)", got.body, raw)
+	}
+}
+
 func TestThePlainTextLogIsTheWholeLog(t *testing.T) {
 	s := newSeam(t)
 	session := s.signedIn()
