@@ -209,19 +209,50 @@ func (s *AdminService) SignIn(ctx context.Context, username, password string) (s
 		}
 	}
 
+	return s.startSession(ctx, password, hash, rehashed)
+}
+
+// startSession starts a session for a sign-in whose password verified
+// against hash, still holding its hash slot. It does so only while the
+// password is unchanged: a reset that committed after the hash was read
+// takes effect on this sign-in too (ADR 0001).
+func (s *AdminService) startSession(ctx context.Context, password, hash, rehashed string) (string, error) {
 	token := rand.Text()
 	now := s.now().UTC()
-	// Only while the password is still the one just checked: a reset that
-	// committed after the hash was read takes effect on this request too
-	// (ADR 0001).
-	err = s.creds.StartSession(ctx, hash, rehashed, domain.Session{TokenHash: tokenHash(token), CreatedAt: now, LastSeenAt: now}, domain.MaxSessions)
+	sess := domain.Session{TokenHash: tokenHash(token), CreatedAt: now, LastSeenAt: now}
+	err := s.creds.StartSession(ctx, hash, rehashed, sess, domain.MaxSessions)
 	if errors.Is(err, domain.ErrConflict) {
-		return "", ErrBadCredentials
+		// The hash changed since it was read: a reset, or another
+		// sign-in's rehash of the same password.
+		if hash, err = s.stillVerifies(ctx, password); err == nil {
+			err = s.creds.StartSession(ctx, hash, "", sess, domain.MaxSessions)
+		}
+	}
+	if errors.Is(err, domain.ErrConflict) {
+		return "", ErrBadCredentials // changed again: give up
 	}
 	if err != nil {
 		return "", fmt.Errorf("start session: %w", err)
 	}
 	return token, nil
+}
+
+// stillVerifies checks password against the Admin's hash stored now and
+// returns that hash. Only after a rehash does it still verify: a reset
+// generates a new password. It fails with ErrBadCredentials otherwise.
+func (s *AdminService) stillVerifies(ctx context.Context, password string) (string, error) {
+	admin, err := s.creds.GetAdmin(ctx)
+	if err != nil {
+		return "", s.signInError(err)
+	}
+	ok, err := s.hasher.Verify(password, admin.PasswordHash)
+	if err != nil {
+		return "", fmt.Errorf("verify password: %w", err)
+	}
+	if !ok {
+		return "", ErrBadCredentials
+	}
+	return admin.PasswordHash, nil
 }
 
 // admit refuses a sign-in against admin while the back-off runs.

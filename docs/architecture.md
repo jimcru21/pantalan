@@ -139,7 +139,9 @@ Auth surfaces on the one listener:
 - At most 2 Argon2id hashes run at once; a login that can't get a slot
   within 5 s gets 503 with `Retry-After: 5` and isn't counted. A hash
   whose PHC parameters differ from the current ones is replaced at the
-  next successful login.
+  next successful login; a login that finds another login's rehash in
+  its place checks the password against it once more, rather than
+  taking it for a reset.
 - Every Dashboard response carries
   `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
   so templates have no inline scripts or `style=` attributes and htmx runs

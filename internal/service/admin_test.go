@@ -276,7 +276,7 @@ func TestASignInCheckedAgainstTheOldPasswordGetsNoSessionWhenAResetLandsMeanwhil
 	if _, err := a.svc.ResetPassword(t.Context()); err != nil {
 		t.Fatalf("reset password: %v", err)
 	}
-	a.hasher.letOneThrough(t)
+	a.hasher.openGate() // it checks again against the reset's hash
 
 	wantBadCredentials(t, <-signIn, "the password reset while it was checked")
 	if n := a.sessions(t); n != 0 {
@@ -348,6 +348,27 @@ func TestAHashWithCurrentParametersIsKeptAtSignIn(t *testing.T) {
 	}
 }
 
+func TestTwoSignInsThatBothRehashTheSamePasswordBothGetASession(t *testing.T) {
+	a := newAdminHarness(t)
+	pw := a.create(t, "alice")
+	a.plantHash(t, oldParams+pw)
+	a.hasher.closeGate()
+
+	first, second := a.signInAsync("alice", pw), a.signInAsync("alice", pw)
+	a.hasher.waitEntered(t, 2) // both checking pw against the outdated hash
+	a.hasher.openGate()
+
+	// Whichever rehashes second finds the first's rehash, not a reset.
+	for name, c := range map[string]<-chan error{"first": first, "second": second} {
+		if err := <-c; err != nil {
+			t.Errorf("%s sign-in with the right password: %v", name, err)
+		}
+	}
+	if got := a.storedHash(t); got != currentParams+pw {
+		t.Errorf("stored hash = %q, want it rehashed to %q", got, currentParams+pw)
+	}
+}
+
 func TestARehashDoesNotUndoAResetThatLandsMeanwhile(t *testing.T) {
 	a := newAdminHarness(t)
 	old := a.create(t, "alice")
@@ -360,7 +381,7 @@ func TestARehashDoesNotUndoAResetThatLandsMeanwhile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reset password: %v", err)
 	}
-	a.hasher.letOneThrough(t)
+	a.hasher.openGate() // it checks again against the reset's hash
 
 	wantBadCredentials(t, <-signIn, "the outdated password reset while it was checked")
 	if got := a.storedHash(t); got != currentParams+pw {
