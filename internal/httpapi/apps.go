@@ -107,6 +107,17 @@ func (h *handler) deploy(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusAccepted, dep)
 }
 
+// redeploy queues a new Deployment of an earlier Deployment's commit: a
+// rollback. It takes no body.
+func (h *handler) redeploy(w http.ResponseWriter, r *http.Request) {
+	dep, err := h.deps.Deployer.Redeploy(r.Context(), r.PathValue("id"), r.PathValue("deploymentID"))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	h.writeJSON(w, http.StatusAccepted, dep)
+}
+
 // TODO: stream with Server-Sent Events while the deployment is running.
 func (h *handler) deploymentLogs(w http.ResponseWriter, r *http.Request) {
 	f, err := h.deps.Deployer.OpenLog(r.Context(), r.PathValue("id"))

@@ -198,6 +198,7 @@ All under `/api/v1`, with `Authorization: Bearer <Admin Token>`.
 | `GET` | `/apps/{id}/deployments` | List an app's Deployments |
 | `POST` | `/apps/{id}/deployments` | Deploy (body optional: `{"ref": "..."}`) |
 | `GET` | `/apps/{id}/deployments/{deployment-id}` | One Deployment: its ref, commit, image, timing, status and error |
+| `POST` | `/apps/{id}/deployments/{deployment-id}/redeploy` | Roll back: a new Deployment of that Deployment's commit (`409` if it never resolved one) |
 | `GET` | `/deployments/{id}/logs` | A Deployment's log |
 
 `GET /healthz` needs no credentials and answers `200` when the service is up.

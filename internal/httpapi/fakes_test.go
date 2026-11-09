@@ -105,10 +105,20 @@ func (t *fakeTimer) expire() {
 	close(t.expired)
 }
 
-// fakeSource "checks out" any ref as the commit "commit-of-<ref>".
+// unfetchableRef is the one ref fakeSource can't fetch.
+const unfetchableRef = "no-such-ref"
+
+// fakeSource "checks out" any ref as the commit "commit-of-<ref>", and a
+// commit ("commit-of-...") as itself.
 type fakeSource struct{}
 
 func (fakeSource) Fetch(_ context.Context, _, ref, _ string) (string, error) {
+	switch {
+	case ref == unfetchableRef:
+		return "", errors.New("couldn't find remote ref " + ref)
+	case strings.HasPrefix(ref, "commit-of-"):
+		return ref, nil
+	}
 	return "commit-of-" + ref, nil
 }
 
