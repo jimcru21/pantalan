@@ -1,6 +1,6 @@
 BIN := bin/pantalan
 
-.PHONY: build run test vet fmt check shellcheck installtest installtest-vm
+.PHONY: build run test vet fmt check gofmt-check types types-check web-deps web-check web web-dev shellcheck installtest installtest-vm
 
 build:
 	go build -o $(BIN) ./cmd/pantalan
@@ -22,11 +22,50 @@ vet:
 	go vet ./...
 	go vet -tags installtest ./deploy/installtest/
 
-fmt:
-	gofmt -w .
+# Every Go file outside web/app's node_modules, which go.mod's ignore
+# keeps out of ./... but gofmt doesn't know about.
+GOFILES = find . -name '*.go' -not -path './web/app/node_modules/*'
 
-check: vet test
-	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:"; gofmt -l .; exit 1)
+fmt:
+	$(GOFILES) -exec gofmt -w {} +
+
+# The one gate: the Go checks, then the frontend's type check, linters and
+# tests. The Go-only targets (build, test, vet) never need Node.
+check: vet test gofmt-check web-check
+
+gofmt-check:
+	@out=$$($(GOFILES) -exec gofmt -l {} +); test -z "$$out" || (echo "gofmt needed:"; echo "$$out"; exit 1)
+
+# The API's TypeScript types, generated from the Go structs (tygo.yaml).
+types:
+	go tool tygo generate
+
+# For CI: fails when the committed generated types aren't what the Go
+# structs generate now.
+types-check: types
+	@test -z "$$(git status --porcelain -- web/app/src/api/generated)" || \
+		(echo "stale API types: run make types and commit the result"; git status --porcelain -- web/app/src/api/generated; git diff -- web/app/src/api/generated; exit 1)
+
+# The frontend's dependencies, from the lockfile, with install scripts off
+# so no package runs code at install. Reinstalls when the lockfile changes.
+WEB_DEPS = web/app/node_modules/.package-lock.json
+$(WEB_DEPS): web/app/package-lock.json
+	cd web/app && npm ci --ignore-scripts
+	@touch $@
+web-deps: $(WEB_DEPS)
+
+web-check: $(WEB_DEPS)
+	cd web/app && npm run typecheck && npm run lint && npm test
+
+# The SPA, built into web/dist. The binary doesn't embed it yet.
+web: $(WEB_DEPS)
+	cd web/app && npm run build
+
+# The SPA's dev server with hot reload, beside `make run`, on
+# https://localhost:5173 (with make run's certificate once it has made
+# one), proxying /api to it.
+web-dev: $(WEB_DEPS)
+	cd web/app && npm run dev
 
 shellcheck:
 	shellcheck deploy/install.sh deploy/release.sh dev/entrypoint.sh dev/setup-vps.sh

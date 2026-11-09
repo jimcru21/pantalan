@@ -5,6 +5,9 @@
 #             developing run here, not in your machine's Docker
 #   pantalan  the checkout mounted at /src, built and run by air, which
 #             rebuilds and restarts it on every change
+#   web       the Dashboard SPA (web/app) on Vite's dev server, with hot
+#             reload, over HTTPS with Pantalan's own certificate; it
+#             proxies /api to pantalan
 #
 # pantalan shares docker's network namespace: Pantalan publishes app
 # containers on 127.0.0.1 and its proxy reaches them there, so both must
@@ -20,6 +23,7 @@
 #                                (default localhost; a VPS's public IP)
 #   PANTALAN_DEV_DASHBOARD_PORT  the Dashboard's port (default 8443)
 #   PANTALAN_DEV_PROXY_PORT      the app proxy's port (default 8080)
+#   PANTALAN_DEV_WEB_PORT        the SPA dev server's port (default 5173)
 #   PANTALAN_DEV_ADMIN           the Admin made on first start (default dev)
 name: pantalan-dev
 
@@ -72,6 +76,38 @@ services:
       - go-build:/root/.cache/go-build
     restart: unless-stopped
 
+  web:
+    image: node:24.22.2-trixie-slim
+    depends_on: [pantalan]
+    working_dir: /src/web/app
+    environment:
+      # Listen on every address in the container; the published port
+      # below decides who can reach it.
+      PANTALAN_DEV_WEB_HOST: 0.0.0.0
+      PANTALAN_DEV_WEB_PORT: ${PANTALAN_DEV_WEB_PORT:-5173}
+      PANTALAN_DEV_HOST: ${PANTALAN_DEV_HOST:-localhost}
+      PANTALAN_DEV_TLS_DIR: /data/tls
+      # pantalan shares the docker service's network namespace.
+      PANTALAN_DEV_API: https://docker:8443
+    # Wait for pantalan's certificate (made on its first start), install
+    # from the lockfile with install scripts off, then serve with hot reload.
+    command:
+      - sh
+      - -c
+      - |
+        until [ -s /data/tls/cert.pem ]; do echo "web: waiting for pantalan's certificate"; sleep 2; done
+        npm ci --ignore-scripts --no-audit --no-fund
+        exec npm run dev
+    volumes:
+      - .:/src
+      # The container's own node_modules, not the checkout's (which may be
+      # for another OS).
+      - web-node-modules:/src/web/app/node_modules
+      - data:/data:ro
+    ports:
+      - "${PANTALAN_DEV_BIND:-127.0.0.1}:${PANTALAN_DEV_WEB_PORT:-5173}:5173"
+    restart: unless-stopped
+
 volumes:
   docker-socket:
   docker-data:
@@ -79,3 +115,4 @@ volumes:
   build-output:
   go-mod:
   go-build:
+  web-node-modules:

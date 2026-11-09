@@ -10,7 +10,9 @@ tmp_dir = "tmp"
 cmd = "go build -o ./tmp/pantalan ./cmd/pantalan"
 entrypoint = ["./tmp/pantalan", "serve"]
 include_ext = ["go", "html", "css", "js", "svg", "sql"]
-exclude_dir = [".git", ".claude", "bin", "data", "tmp", "deploy", "docs"]
+# web/app is the SPA's source: the web service's Vite reloads it, and the
+# binary doesn't embed it yet.
+exclude_dir = [".git", ".claude", "bin", "data", "tmp", "deploy", "docs", "web/app", "web/dist"]
 exclude_regex = ["_test\\.go$"]
 # Saving several files at once is one rebuild, not several.
 delay = 300

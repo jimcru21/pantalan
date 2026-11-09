@@ -1,0 +1,129 @@
+/* The Dashboard's styles: Tailwind, compiled to a file (the CSP allows no
+   inline <style>). The colours are the look prototype's
+   (prototype/login-dashboard-look), under shadcn/ui's token names. Dark
+   mode follows the OS through prefers-color-scheme, which is also what
+   Tailwind's dark: variant means; there's no toggle. */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+:root {
+  color-scheme: light dark;
+  --radius: 0.5rem;
+
+  --background: #f6f7f9;
+  --foreground: #171a1f;
+  --card: #ffffff;
+  --card-foreground: #171a1f;
+  --popover: #ffffff;
+  --popover-foreground: #171a1f;
+  --primary: #2f6fed;
+  --primary-foreground: #ffffff;
+  --secondary: #f0f2f5;
+  --secondary-foreground: #171a1f;
+  --muted: #f0f2f5;
+  --muted-foreground: #636b78;
+  --accent: #e6eefd;
+  --accent-foreground: #171a1f;
+  --destructive: #c2333a;
+  --destructive-soft: #fbe6e7;
+  --ok: #1a8a4a;
+  --ok-soft: #e3f4ea;
+  --warn: #b26a00;
+  --warn-soft: #fdf1dc;
+  --border: #e2e5ea;
+  --input: #e2e5ea;
+  --ring: #2f6fed;
+
+  --sidebar: #11151b;
+  --sidebar-foreground: #aab2bf;
+  --sidebar-primary: #2f6fed;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgb(255 255 255 / 0.08);
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: rgb(255 255 255 / 0.08);
+  --sidebar-ring: #5b8ff9;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0d1015;
+    --foreground: #e6e9ee;
+    --card: #151a21;
+    --card-foreground: #e6e9ee;
+    --popover: #151a21;
+    --popover-foreground: #e6e9ee;
+    --primary: #5b8ff9;
+    --primary-foreground: #0b1020;
+    --secondary: #1c222b;
+    --secondary-foreground: #e6e9ee;
+    --muted: #1c222b;
+    --muted-foreground: #8b94a3;
+    --accent: #1b2a47;
+    --accent-foreground: #e6e9ee;
+    --destructive: #f06a70;
+    --destructive-soft: #3c1a1d;
+    --ok: #3ccf7a;
+    --ok-soft: #133222;
+    --warn: #f0a93b;
+    --warn-soft: #3a2a10;
+    --border: #2a313c;
+    --input: #2a313c;
+    --ring: #5b8ff9;
+
+    --sidebar: #0a0d11;
+    --sidebar-foreground: #7d8796;
+    --sidebar-primary: #5b8ff9;
+    --sidebar-primary-foreground: #0b1020;
+  }
+}
+
+@theme inline {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply min-h-screen bg-background font-sans text-sm/[1.45] text-foreground antialiased;
+  }
+}

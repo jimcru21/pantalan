@@ -320,7 +320,7 @@ file. Apps you deploy are served at http://localhost:8080.
 Before opening a pull request:
 
 ```sh
-make check   # go vet, race tests and gofmt
+make check   # go vet, race tests and gofmt, plus the SPA's type check, linters and tests (needs Node)
 ```
 
 Commit titles follow [Conventional Commits](https://www.conventionalcommits.org/)
