@@ -19,14 +19,14 @@ func TestServePrunesExpiredSessionsAtStartupAndOnTheDailyTick(t *testing.T) {
 	s := startServeOn(t, env, world)
 	pw := createServedAdmin(t, s, "alice")
 	for i := range 2 {
-		if got := newBrowser(t, s).login("alice", pw); got.StatusCode != http.StatusSeeOther {
-			t.Fatalf("login %d = %d, want 303", i+1, got.StatusCode)
+		if got := newBrowser(t, s).login("alice", pw); got.StatusCode != http.StatusNoContent {
+			t.Fatalf("login %d = %d, want 204", i+1, got.StatusCode)
 		}
 		clock.advance(90 * time.Minute) // past the idle hour
 	}
 	live := newBrowser(t, s)
-	if got := live.login("alice", pw); got.StatusCode != http.StatusSeeOther {
-		t.Fatalf("third login = %d, want 303", got.StatusCode)
+	if got := live.login("alice", pw); got.StatusCode != http.StatusNoContent {
+		t.Fatalf("third login = %d, want 204", got.StatusCode)
 	}
 	s.stop()
 	s.wait(t)
