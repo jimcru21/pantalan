@@ -173,6 +173,7 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, wo
 		Apps:          apps,
 		Deployer:      deployer,
 		Sessions:      admins,
+		Hostname:      hostname,
 		AdminToken:    cfg.AdminToken,
 		WebhookSecret: cfg.WebhookSecret,
 		Dashboard:     dash,

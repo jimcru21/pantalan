@@ -115,7 +115,8 @@ Auth surfaces on the one listener:
 | Route | Session cookie | Admin Token (bearer) | Other |
 |---|---|---|---|
 | Dashboard pages, `POST /login`, `POST /logout` | yes, behind `http.CrossOriginProtection` | no: a request with an `Authorization` header gets 401 | |
-| `/api/v1/…` | yes, behind `http.CrossOriginProtection` (a cross-origin unsafe request gets 403) | yes, from any origin | an `Authorization` header is judged alone, whatever cookie comes with it; no credential, a wrong token or an ended session gets 401 |
+| `GET /api/v1/login-info`, `POST /api/v1/sessions`, `DELETE /api/v1/sessions/current` | not needed | not needed | the sign-in contract; the two session routes are behind `http.CrossOriginProtection` whatever credential comes with them |
+| the rest of `/api/v1/…` | yes, behind `http.CrossOriginProtection` (a cross-origin unsafe request gets 403) | yes, from any origin | an `Authorization` header is judged alone, whatever cookie comes with it; no credential, a wrong token or an ended session gets 401 |
 | `/webhooks/github` | no | no | HMAC signature |
 | `/healthz` | no | no | none needed |
 
@@ -123,6 +124,14 @@ Auth surfaces on the one listener:
   redirects. A wrong username and a wrong password get the same 401 and
   message. With no Admin, the login card shows the `admin create` command
   instead of the form, and `POST /login` gets 403.
+- The SPA's sign-in screen uses the same rules over JSON on `/api/v1`
+  (`internal/httpapi/sessions.go`), until the cutover removes the form:
+  `GET /api/v1/login-info` returns `hostname`, `address` (the `ip:port`
+  the browser reached) and `admin_exists`; `POST /api/v1/sessions`
+  takes `{"username", "password"}` and answers 204 with the same cookie
+  (ending any session the browser already had), or 401 / 429 / 403 / 503
+  as below, with an `{"error": …}` body; `DELETE /api/v1/sessions/current`
+  ends the browser's session, if any, and answers 204 clearing the cookie.
 - `service.AdminService` issues a `crypto/rand.Text()` token per login and
   stores only its SHA-256 hex in `sessions`. The cookie is
   `__Host-pantalan_session; Path=/; Secure; HttpOnly; SameSite=Strict`, with
