@@ -6,7 +6,7 @@ import type {
   NodeDockerInfo,
   NodeEventLog,
   NodeImage,
-} from "@/api/generated/node";
+} from "@/api/generated/httpapi";
 import type { LoginInfo } from "@/api/generated/httpapi";
 import { aLoginInfo } from "@/test/fixtures";
 import { json, status } from "@/test/network";

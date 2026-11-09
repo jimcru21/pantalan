@@ -7,7 +7,7 @@ import type {
   NodeEvent,
   NodeEventLog,
   NodeImage,
-} from "@/api/generated/node";
+} from "@/api/generated/httpapi";
 import { json, type Api } from "./network";
 
 const GiB = 2 ** 30;

@@ -1,4 +1,4 @@
-import type { Node, NodeStatus } from "@/api/generated/node";
+import type { Node, NodeStatus } from "@/api/generated/httpapi";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatLoad, formatUptime } from "@/lib/format";
 import { cn } from "@/lib/utils";

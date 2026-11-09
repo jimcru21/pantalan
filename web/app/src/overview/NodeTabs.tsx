@@ -1,7 +1,7 @@
 // The overview's tabs. Radix mounts only the open tab's panel, and each
 // panel owns its query, so only the open tab is fetched and polled.
 import { useState, type ReactNode } from "react";
-import type { ContainerPort, NodeContainer, NodeEvent } from "@/api/generated/node";
+import type { ContainerPort, NodeContainer, NodeEvent } from "@/api/generated/httpapi";
 import {
   isDockerUnreachable,
   useNodeContainers,

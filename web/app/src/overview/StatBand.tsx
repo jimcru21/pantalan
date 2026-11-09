@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { DiskTile, Node } from "@/api/generated/node";
+import type { DiskTile, Node } from "@/api/generated/httpapi";
 import { formatBytes, formatBytesOf, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Sparkline } from "./Sparkline";
