@@ -70,8 +70,7 @@ export function DeploymentPage() {
       <Panel
         title="Deployment"
         action={
-          // Only a resolved commit can be deployed again.
-          deployment.data.commit && <RedeployButton appID={appId} deploymentID={deploymentId} />
+          isEarlier(deployment.data) && <RedeployButton appID={appId} deploymentID={deploymentId} />
         }
       >
         <Facts facts={facts(deployment.data)} />
@@ -109,6 +108,13 @@ function DeploymentLog({ appID, deploymentID }: { appID: string; deploymentID: s
       />
     </Panel>
   );
+}
+
+// An earlier Deployment, which the App can go back to: one that was
+// replaced or failed, and resolved a commit to deploy again. Not the live
+// one (it's serving already), nor one still on its way.
+function isEarlier(d: Deployment): boolean {
+  return (d.status === "superseded" || d.status === "failed") && d.commit !== "";
 }
 
 function facts(d: Deployment): [string, ReactNode][] {

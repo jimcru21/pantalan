@@ -96,15 +96,36 @@ describe("Redeploy this commit", () => {
     expect(screen.getByRole("region", { name: "Deployment" })).toHaveTextContent("Live");
   });
 
-  it("is offered on the live Deployment and on a failed one that resolved its commit", async () => {
+  it("is offered on earlier Deployments: a superseded one and a failed one that resolved its commit", async () => {
     const failed = aDeployment({ ...bad, id: "dep-failed", status: "failed", error: "build" });
     const server = deploymentsServer(app, [good, bad, failed]);
-    const { reload } = renderApp("/apps/app7/deployments/dep-bad", { api: server.api });
+    const { reload } = renderApp("/apps/app7/deployments/dep-good", { api: server.api });
     expect(await redeployButton()).toBeInTheDocument();
 
     window.history.replaceState(null, "", "/apps/app7/deployments/dep-failed");
     reload();
     expect(await redeployButton()).toBeInTheDocument();
+  });
+
+  // The live one is what's serving already, and one on its way hasn't
+  // finished: neither is an earlier Deployment to go back to.
+  it("isn't offered on the live Deployment, nor on one still on its way", async () => {
+    const onItsWay = (["queued", "building", "starting"] as const).map((status) =>
+      aDeployment({ ...bad, id: `dep-${status}`, status, finished_at: undefined, error: "" }),
+    );
+    const server = deploymentsServer(app, [good, bad, ...onItsWay]);
+    const { reload } = renderApp("/apps/app7/deployments/dep-bad", { api: server.api });
+
+    for (const dep of [bad, ...onItsWay]) {
+      window.history.replaceState(null, "", `/apps/app7/deployments/${dep.id}`);
+      reload();
+      const facts = await screen.findByRole("region", { name: "Deployment" });
+      await within(facts).findByText(dep.commit);
+      expect(
+        screen.queryByRole("button", { name: "Redeploy this commit" }),
+        `on a ${dep.status} Deployment`,
+      ).not.toBeInTheDocument();
+    }
   });
 
   it("isn't offered for a Deployment that never resolved a commit", async () => {
