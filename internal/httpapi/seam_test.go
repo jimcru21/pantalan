@@ -41,6 +41,9 @@ type seam struct {
 	runtime   *fakeRuntime
 	router    *fakeRouter
 	scheduler *fakeScheduler
+	host      *fakeHost
+	docker    *fakeDocker
+	events    *fakeEvents
 }
 
 func newSeam(t *testing.T) *seam {
@@ -60,7 +63,10 @@ func newSeam(t *testing.T) *seam {
 		runtime:   newFakeRuntime(),
 		router:    newFakeRouter(),
 		scheduler: &fakeScheduler{},
+		host:      &fakeHost{},
+		events:    &fakeEvents{},
 	}
+	s.docker = &fakeDocker{clock: s.clock}
 	s.admins = service.NewAdminService(service.AdminDeps{
 		Credentials: store,
 		Hasher:      s.hasher,
@@ -97,6 +103,10 @@ func newSeam(t *testing.T) *seam {
 		Deployer:      s.deployer,
 		Sessions:      s.admins,
 		Hostname:      "node",
+		Host:          s.host,
+		Docker:        s.docker,
+		Events:        s.events,
+		Now:           s.clock.Now,
 		AdminToken:    adminToken,
 		WebhookSecret: "test-secret",
 		Dashboard:     dash,

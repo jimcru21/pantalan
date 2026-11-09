@@ -11,3 +11,8 @@ packages:
     preserve_comments: types
     type_mappings:
       time.Time: string /* RFC 3339 */
+  - path: github.com/pantalan/pantalan/internal/httpapi
+    output_path: web/app/src/api/generated/node.ts
+    include_files:
+      - node_types.go
+    preserve_comments: types
