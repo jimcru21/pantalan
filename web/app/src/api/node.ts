@@ -4,6 +4,7 @@
 // the tab is shown again (TanStack's focus handling), so a background tab
 // doesn't load the Node.
 import { useQuery } from "@tanstack/react-query";
+import { ApiError, request } from "@/api/client";
 import type {
   Node,
   NodeContainer,
@@ -12,37 +13,9 @@ import type {
   NodeImage,
 } from "@/api/generated/node";
 
-/** An answer other than 2xx: its status and the API's {"error"} message. */
-export class NodeApiError extends Error {
-  readonly status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = "NodeApiError";
-    this.status = status;
-  }
-}
-
 /** True for the 503 the Docker reads answer while Docker is unreachable. */
 export function isDockerUnreachable(err: unknown): boolean {
-  return err instanceof NodeApiError && err.status === 503;
-}
-
-// A GET behind sign-in. Kept minimal on purpose: the shared API client
-// (with the 401 -> /login redirect) replaces it.
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path, { headers: { Accept: "application/json" } });
-  if (!res.ok) {
-    let message = res.statusText || `HTTP ${res.status}`;
-    try {
-      const body = (await res.json()) as { error?: unknown };
-      if (typeof body.error === "string") message = body.error;
-    } catch {
-      // not JSON
-    }
-    throw new NodeApiError(res.status, message);
-  }
-  return (await res.json()) as T;
+  return err instanceof ApiError && err.status === 503;
 }
 
 // Polled queries don't retry: the next poll is the retry, and a failure
@@ -54,7 +27,7 @@ export function useNode() {
   return useQuery({
     ...polled,
     queryKey: ["node"],
-    queryFn: () => get<Node>("/api/v1/node"),
+    queryFn: () => request<Node>("/api/v1/node"),
     refetchInterval: 5_000,
   });
 }
@@ -64,7 +37,7 @@ export function useNodeContainers() {
   return useQuery({
     ...polled,
     queryKey: ["node", "containers"],
-    queryFn: () => get<NodeContainer[]>("/api/v1/node/containers"),
+    queryFn: () => request<NodeContainer[]>("/api/v1/node/containers"),
     refetchInterval: 5_000,
   });
 }
@@ -74,7 +47,7 @@ export function useNodeImages() {
   return useQuery({
     ...polled,
     queryKey: ["node", "images"],
-    queryFn: () => get<NodeImage[]>("/api/v1/node/images"),
+    queryFn: () => request<NodeImage[]>("/api/v1/node/images"),
     refetchInterval: 30_000,
   });
 }
@@ -84,7 +57,7 @@ export function useNodeEvents() {
   return useQuery({
     ...polled,
     queryKey: ["node", "events"],
-    queryFn: () => get<NodeEventLog>("/api/v1/node/events"),
+    queryFn: () => request<NodeEventLog>("/api/v1/node/events"),
     refetchInterval: 5_000,
   });
 }
@@ -98,7 +71,7 @@ export function useNodeDocker() {
   return useQuery({
     ...polled,
     queryKey: ["node", "docker"],
-    queryFn: () => get<NodeDockerInfo>("/api/v1/node/docker"),
+    queryFn: () => request<NodeDockerInfo>("/api/v1/node/docker"),
     refetchOnMount: "always",
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,

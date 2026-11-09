@@ -7,7 +7,9 @@ import type {
   NodeEventLog,
   NodeImage,
 } from "@/api/generated/node";
-import { json } from "@/test/network";
+import type { LoginInfo } from "@/api/generated/httpapi";
+import { aLoginInfo } from "@/test/fixtures";
+import { json, status } from "@/test/network";
 import {
   aContainer,
   aDockerInfo,
@@ -126,6 +128,32 @@ describe("the Node overview", () => {
       "Unavailable: read /proc/meminfo: permission denied",
     );
     expect(within(band).getByRole("group", { name: "Docker" })).toHaveTextContent("29.1.3");
+  });
+});
+
+describe("the overview's session", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends a tab whose session expired to sign-in at its next poll", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let signedIn = true;
+    renderApp("/", {
+      api: {
+        "GET /api/v1/node": () => (signedIn ? json<Node>(aNode()) : status(401)),
+        "GET /api/v1/node/containers": () =>
+          signedIn ? json<NodeContainer[]>([aContainer()]) : status(401),
+        "GET /api/v1/login-info": () => json<LoginInfo>(aLoginInfo()),
+      },
+    });
+    await screen.findByRole("row", { name: /postgres/ });
+
+    signedIn = false;
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+
+    expect(await screen.findByRole("button", { name: "Sign in" })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/login");
   });
 });
 
