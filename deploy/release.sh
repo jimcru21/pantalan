@@ -7,7 +7,9 @@
 #
 # The assets are pantalan_<tag>_linux_amd64, pantalan_<tag>_linux_arm64,
 # install.sh with the tag baked into DEFAULT_VERSION, and SHA256SUMS over
-# all three (sha256sum's own format, bare file names).
+# all three (sha256sum's own format, bare file names). The binaries embed
+# the Dashboard's frontend, which build makes first, so it needs Node and
+# npm (web/app/.nvmrc) as well as Go.
 set -eu
 
 ARCHES="amd64 arm64"
@@ -58,6 +60,18 @@ build() {
 	[ "$(grep -c '@VERSION@' "$INSTALLER")" -eq 1 ] ||
 		die "$INSTALLER must hold exactly one @VERSION@ placeholder (DEFAULT_VERSION=@VERSION@)"
 	[ -z "$(ls -A "$b_dir")" ] || die "$b_dir isn't empty"
+
+	# The Dashboard's frontend first, into web/dist, which the binaries
+	# embed. npm ci installs exactly the lockfile, and --ignore-scripts
+	# keeps any package from running code at install.
+	command -v npm >/dev/null || die "npm not found: building the Dashboard's frontend needs Node (web/app/.nvmrc)"
+	say "building the Dashboard's frontend"
+	(
+		cd web/app
+		npm ci --ignore-scripts
+		npm run build
+	) >&2
+	[ -f web/dist/index.html ] || die "the frontend build wrote no web/dist/index.html"
 
 	b_assets=install.sh
 	for b_arch in $ARCHES; do

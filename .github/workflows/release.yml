@@ -57,6 +57,13 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      # release.sh builds the Dashboard's frontend with npm ci
+      # --ignore-scripts; no npm cache either.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/app/.nvmrc
+          package-manager-cache: false
+
       - name: Build the release assets
         env:
           TAG: ${{ github.ref_name }}

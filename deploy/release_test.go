@@ -40,7 +40,8 @@ func TestBuildWritesTheReleaseAssets(t *testing.T) {
 	repo := taggedCheckout(t, "v1.2.3", nil)
 	dir := filepath.Join(t.TempDir(), "release")
 
-	if r := releaseScript(t, repo, "build", "v1.2.3", dir); r.code != 0 {
+	r := releaseScript(t, repo, "build", "v1.2.3", dir)
+	if r.code != 0 {
 		t.Fatalf("build: exit %d; stderr:\n%s", r.code, r.stderr)
 	}
 
@@ -48,6 +49,26 @@ func TestBuildWritesTheReleaseAssets(t *testing.T) {
 	if got := fileNames(t, dir); !slices.Equal(got, want) {
 		t.Fatalf("assets = %q, want %q", got, want)
 	}
+
+	t.Run("the frontend is built from the lockfile with install scripts off", func(t *testing.T) {
+		// npm ci installs exactly the lockfile; --ignore-scripts keeps any
+		// package from running code at install.
+		if got, want := npmCalls(t, r), "web/app ci --ignore-scripts\nweb/app run build\n"; got != want {
+			t.Errorf("npm calls:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("the binaries embed the built frontend", func(t *testing.T) {
+		for _, arch := range []string{"amd64", "arm64"} {
+			bin, err := os.ReadFile(filepath.Join(dir, "pantalan_v1.2.3_linux_"+arch))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(bin, []byte(builtIndexHTML)) {
+				t.Errorf("%s: the binary doesn't hold the built index.html", arch)
+			}
+		}
+	})
 
 	t.Run("binaries", func(t *testing.T) {
 		for arch, machine := range map[string]elf.Machine{"amd64": elf.EM_X86_64, "arm64": elf.EM_AARCH64} {
@@ -180,6 +201,9 @@ func TestBuildRefusesWhatWouldShipAWrongRelease(t *testing.T) {
 			if built := strings.Contains(r.stderr, "building"); built != c.builds {
 				t.Errorf("built anything = %v, want %v:\n%s", built, c.builds, r.stderr)
 			}
+			if calls := npmCalls(t, r); !c.builds && calls != "" {
+				t.Errorf("ran npm before refusing:\n%s", calls)
+			}
 			if names, _ := os.ReadDir(dir); !c.builds && len(names) > 0 {
 				t.Errorf("left %d files in %s", len(names), dir)
 			}
@@ -190,6 +214,7 @@ func TestBuildRefusesWhatWouldShipAWrongRelease(t *testing.T) {
 type result struct {
 	code           int
 	stdout, stderr string
+	npmDir         string // the run's fake npm (fakeNPM)
 }
 
 // releaseScript runs deploy/release.sh with args, from the repository at
@@ -205,10 +230,12 @@ func releaseScript(t *testing.T, repo string, args ...string) result {
 	}
 	cmd := exec.Command("sh", append([]string{filepath.Join(repo, "deploy", "release.sh")}, args...)...)
 	cmd.Dir = repo
+	npm := fakeNPM(t)
+	cmd.Env = append(os.Environ(), "PATH="+npm+string(os.PathListSeparator)+os.Getenv("PATH"))
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
-	r := result{stdout: stdout.String(), stderr: stderr.String()}
+	r := result{stdout: stdout.String(), stderr: stderr.String(), npmDir: npm}
 	if err != nil {
 		exit, ok := err.(*exec.ExitError)
 		if !ok {
@@ -217,6 +244,44 @@ func releaseScript(t *testing.T, repo string, args ...string) result {
 		r.code = exit.ExitCode()
 	}
 	return r
+}
+
+// builtIndexHTML is what the fake npm's `run build` writes as
+// web/dist/index.html, so a test can find it embedded in a binary.
+const builtIndexHTML = "<!doctype html><title>fake vite build 7d1f0c</title>"
+
+// fakeNPM is a directory holding an npm that stands in for the real one,
+// so these tests need no Node or network. It appends each call, as
+// "<dir relative to the checkout> <args>", to the npm.log next to it, and
+// `run build` writes builtIndexHTML to ../dist/index.html, as vite build
+// does from web/app.
+func fakeNPM(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+top=$(git rev-parse --show-toplevel)
+printf '%s %s\n' "${PWD#"$top"/}" "$*" >>"` + filepath.Join(dir, "npm.log") + `"
+case "$*" in
+"ci --ignore-scripts") ;;
+"run build") mkdir -p ../dist && printf '%s' '` + builtIndexHTML + `' >../dist/index.html ;;
+*) echo "fake npm: unexpected npm $*" >&2; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "npm"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// npmCalls is what the fake npm of the run r was asked to do, one call a
+// line; "" when it wasn't called.
+func npmCalls(t *testing.T, r result) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(r.npmDir, "npm.log"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 // taggedCheckout copies this working tree (tracked and untracked files as

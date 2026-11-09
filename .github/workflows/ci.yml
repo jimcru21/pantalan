@@ -47,6 +47,10 @@ jobs:
       - name: Generated API types are up to date
         run: make types-check
 
+      # Into web/dist, so the cross-built binaries embed the SPA.
+      - name: Build the Dashboard's frontend
+        run: make web
+
       - name: Cross-build linux/amd64 and linux/arm64
         env:
           CGO_ENABLED: "0"
