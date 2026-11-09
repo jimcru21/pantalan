@@ -2,6 +2,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { isNotFound, useApp } from "@/api/apps";
 import { useEnv, useSaveEnv } from "@/api/env";
+import { AppNotFound } from "@/apps/AppNotFound";
 import { DeployButton } from "@/apps/DeployButton";
 import {
   buttonClass,
@@ -11,7 +12,7 @@ import {
   FormAlert,
   inputClass,
 } from "@/components/form";
-import { NotFoundPage, Page } from "@/shell/Page";
+import { Page } from "@/shell/Page";
 
 /**
  * The env editor: an App's env vars as one block of KEY=value lines, the
@@ -25,12 +26,7 @@ export function EnvPage() {
   const appPath = `/apps/${encodeURIComponent(appId)}`;
 
   if (isNotFound(app.error) || isNotFound(env.error)) {
-    return (
-      <NotFoundPage title="App not found" back={{ to: "/apps", label: "Back to Apps" }}>
-        No App has the ID <code className="font-mono text-[0.92em]">{appId}</code>. It may have been
-        deleted.
-      </NotFoundPage>
-    );
+    return <AppNotFound appId={appId} />;
   }
   const error = app.error ?? env.error;
   if (!app.data || !env.data) {
@@ -43,23 +39,23 @@ export function EnvPage() {
 
   return (
     <Page title={`Env vars of ${app.data.name}`} up={{ to: appPath, label: app.data.name }}>
-      <EnvEditor appID={appId} initial={env.data.env} cancelTo={appPath} />
+      <EnvEditor appId={appId} initial={env.data.env} cancelTo={appPath} />
     </Page>
   );
 }
 
 function EnvEditor({
-  appID,
+  appId,
   initial,
   cancelTo,
 }: {
-  appID: string;
+  appId: string;
   initial: string;
   cancelTo: string;
 }) {
   const [text, setText] = useState(initial);
   const [saved, setSaved] = useState(false);
-  const save = useSaveEnv(appID);
+  const save = useSaveEnv(appId);
   const navigate = useNavigate();
   const form = useRef<HTMLFormElement>(null);
   const { byField, other } = errorsFor(save.error, ["env"] as const);
@@ -114,10 +110,10 @@ function EnvEditor({
         >
           <span>Saved. The env vars take effect on the next Deployment.</span>
           <DeployButton
-            appID={appID}
+            appId={appId}
             onDeployed={(dep) =>
               void navigate(
-                `/apps/${encodeURIComponent(appID)}/deployments/${encodeURIComponent(dep.id)}`,
+                `/apps/${encodeURIComponent(appId)}/deployments/${encodeURIComponent(dep.id)}`,
               )
             }
           />

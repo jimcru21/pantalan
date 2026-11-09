@@ -5,6 +5,7 @@ import type { App, Deployment } from "@/api/generated/domain";
 import { DeploymentLogDeleted } from "@/api/generated/httpapi";
 import { appKeys, isInProgress, isNotFound, useApp, useDeployments } from "@/api/apps";
 import { useDeployment } from "@/api/deployments";
+import { appPaths } from "@/api/paths";
 import { useLogStream } from "@/api/streams";
 import { DeploymentStatus } from "@/apps/DeploymentStatus";
 import { RedeployButton } from "@/apps/RedeployButton";
@@ -70,7 +71,7 @@ export function DeploymentPage() {
       <Panel
         title="Deployment"
         action={
-          isEarlier(deployment.data) && <RedeployButton appID={appId} deploymentID={deploymentId} />
+          isEarlier(deployment.data) && <RedeployButton appId={appId} deploymentId={deploymentId} />
         }
       >
         <Facts facts={facts(deployment.data)} />
@@ -78,21 +79,27 @@ export function DeploymentPage() {
           <StillServing live={live} app={app.data} />
         )}
       </Panel>
-      <DeploymentLog appID={appId} deploymentID={deploymentId} />
+      <DeploymentLog appId={appId} deploymentId={deploymentId} />
     </Page>
   );
 }
 
 // The Deployment's own output, streamed live while it runs. The stream
 // keeps going while the Admin is on another page, until it's done.
-function DeploymentLog({ appID, deploymentID }: { appID: string; deploymentID: string }) {
-  const log = `/api/v1/apps/${encodeURIComponent(appID)}/deployments/${encodeURIComponent(deploymentID)}/log`;
-  const stream = useLogStream(`${log}/stream`, { keepRunning: true });
+function DeploymentLog({ appId, deploymentId }: { appId: string; deploymentId: string }) {
+  const stream = useLogStream(appPaths.deploymentLogStream(appId, deploymentId), {
+    keepRunning: true,
+  });
   return (
     <Panel
       title="Deployment Log"
       action={
-        <a href={log} target="_blank" rel="noreferrer" className="text-[13px]">
+        <a
+          href={appPaths.deploymentLog(appId, deploymentId)}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[13px]"
+        >
           Full log as plain text
         </a>
       }

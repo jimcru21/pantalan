@@ -22,7 +22,7 @@ export function signIn(credentials: SignInRequest): Promise<void> {
 
 /** Ends this browser's session on the server and clears its cookie. */
 export function signOut(): Promise<void> {
-  return requestPublic<void>("/api/v1/sessions/current", { method: "DELETE" });
+  return requestPublic<void>(currentSession, { method: "DELETE" });
 }
 
 /** How often an open Dashboard page checks that its session is still live. */

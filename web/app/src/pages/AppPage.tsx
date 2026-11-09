@@ -4,6 +4,7 @@ import type { Deployment } from "@/api/generated/domain";
 import type { App } from "@/api/generated/httpapi";
 import { isNotFound, useApp, useDeployments } from "@/api/apps";
 import { AppLog } from "@/apps/AppLog";
+import { AppNotFound } from "@/apps/AppNotFound";
 import { DeleteAppButton } from "@/apps/DeleteAppButton";
 import { DeployButton } from "@/apps/DeployButton";
 import { DeploymentStatus } from "@/apps/DeploymentStatus";
@@ -11,7 +12,7 @@ import { DeploymentLink, Queue } from "@/apps/Queue";
 import { buttonClass } from "@/components/form";
 import { Alert, Facts, Panel, Table, Td } from "@/components/panel";
 import { formatUTCDateTime } from "@/lib/format";
-import { NotFoundPage, Page } from "@/shell/Page";
+import { Page } from "@/shell/Page";
 
 const toList = { to: "/apps", label: "All Apps" };
 
@@ -25,12 +26,7 @@ export function AppPage() {
   const deployments = useDeployments(appId);
 
   if (isNotFound(app.error)) {
-    return (
-      <NotFoundPage title="App not found" back={{ to: "/apps", label: "Back to Apps" }}>
-        No App has the ID <code className="font-mono text-[0.92em]">{appId}</code>. It may have been
-        deleted.
-      </NotFoundPage>
-    );
+    return <AppNotFound appId={appId} />;
   }
   if (!app.data) {
     return (
@@ -55,7 +51,7 @@ export function AppPage() {
       >
         <Facts facts={settings(app.data)} />
       </Panel>
-      <EnvVars appID={appId} names={app.data.env_names} />
+      <EnvVars appId={appId} names={app.data.env_names} />
       {deployments.error ? (
         <ErrorCard error={deployments.error} />
       ) : (
@@ -63,9 +59,9 @@ export function AppPage() {
           <>
             <LiveDeployment
               deployment={deployments.data.find((d) => d.status === "live")}
-              action={<DeployButton appID={appId} />}
+              action={<DeployButton appId={appId} />}
             />
-            <AppLog appID={appId} liveID={deployments.data.find((d) => d.status === "live")?.id} />
+            <AppLog appId={appId} liveID={deployments.data.find((d) => d.status === "live")?.id} />
             <Queue deployments={deployments.data} />
             <History deployments={deployments.data} />
           </>
@@ -93,12 +89,12 @@ function settings(app: App): [string, ReactNode][] {
 
 // The names of the App's env vars. Their values may be secrets, so they
 // show only on the env editor.
-function EnvVars({ appID, names }: { appID: string; names: string[] }) {
+function EnvVars({ appId, names }: { appId: string; names: string[] }) {
   return (
     <Panel
       title="Env vars"
       action={
-        <Link to={`/apps/${encodeURIComponent(appID)}/env`} className={buttonClass.small}>
+        <Link to={`/apps/${encodeURIComponent(appId)}/env`} className={buttonClass.small}>
           Edit env vars
         </Link>
       }

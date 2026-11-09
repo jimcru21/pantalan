@@ -1,9 +1,10 @@
 import { useNavigate, useParams } from "react-router";
-import { useUpdateApp } from "@/api/app-settings";
+import { useUpdateApp } from "@/api/app-mutations";
 import { isNotFound, useApp } from "@/api/apps";
 import { AppForm, valuesOf } from "@/apps/AppForm";
+import { AppNotFound } from "@/apps/AppNotFound";
 import { FormAlert } from "@/components/form";
-import { NotFoundPage, Page } from "@/shell/Page";
+import { Page } from "@/shell/Page";
 
 /**
  * The edit form for an App's settings, starting from what it has now.
@@ -18,12 +19,7 @@ export function EditAppPage() {
   const appPath = `/apps/${encodeURIComponent(appId)}`;
 
   if (isNotFound(app.error)) {
-    return (
-      <NotFoundPage title="App not found" back={{ to: "/apps", label: "Back to Apps" }}>
-        No App has the ID <code className="font-mono text-[0.92em]">{appId}</code>. It may have been
-        deleted.
-      </NotFoundPage>
-    );
+    return <AppNotFound appId={appId} />;
   }
   if (!app.data) {
     return (

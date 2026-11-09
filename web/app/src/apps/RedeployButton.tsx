@@ -3,21 +3,21 @@ import { useDeploy } from "@/api/deployments";
 import { buttonClass } from "@/components/form";
 
 /**
- * Rolls back: starts a new Deployment of the exact commit `deploymentID`
+ * Rolls back: starts a new Deployment of the exact commit `deploymentId`
  * resolved, then lands on the new Deployment's page so the Admin watches
  * it go live. The earlier Deployment stays as it was in the history. A
  * refused redeploy says why next to the button.
  */
-export function RedeployButton({ appID, deploymentID }: { appID: string; deploymentID: string }) {
-  const deploy = useDeploy(appID);
+export function RedeployButton({ appId, deploymentId }: { appId: string; deploymentId: string }) {
+  const deploy = useDeploy(appId);
   const navigate = useNavigate();
   const redeploy = () =>
     deploy.mutate(
-      { redeployOf: deploymentID },
+      { redeployOf: deploymentId },
       {
         onSuccess: (dep) =>
           void navigate(
-            `/apps/${encodeURIComponent(appID)}/deployments/${encodeURIComponent(dep.id)}`,
+            `/apps/${encodeURIComponent(appId)}/deployments/${encodeURIComponent(dep.id)}`,
           ),
       },
     );

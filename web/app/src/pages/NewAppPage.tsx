@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router";
-import { useCreateApp } from "@/api/app-settings";
+import { useCreateApp } from "@/api/app-mutations";
 import { AppForm, newApp } from "@/apps/AppForm";
 import { Page } from "@/shell/Page";
 

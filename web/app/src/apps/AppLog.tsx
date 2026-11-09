@@ -2,18 +2,19 @@
 // live from its last 200 lines.
 import { useEffect, useRef } from "react";
 import { AppLogNoLiveDeployment, AppLogReplaced } from "@/api/generated/httpapi";
+import { appPaths } from "@/api/paths";
 import { useLogStream, useRestartLogStream } from "@/api/streams";
 import { buttonClass } from "@/components/form";
 import { Panel } from "@/components/panel";
 import { LogView } from "@/logs/LogView";
 
 /**
- * Follows the App Log of the App with ID `appID`. The stream closes when
+ * Follows the App Log of the App with ID `appId`. The stream closes when
  * the page goes. `liveID` is the live Deployment the page knows of: when
  * the server said there was none and one goes live, the log follows it.
  */
-export function AppLog({ appID, liveID }: { appID: string; liveID?: string }) {
-  const url = `/api/v1/apps/${encodeURIComponent(appID)}/log/stream`;
+export function AppLog({ appId, liveID }: { appId: string; liveID?: string }) {
+  const url = appPaths.appLogStream(appId);
   const stream = useLogStream(url);
   const followAgain = useRestartLogStream(url);
   const ended = stream.state === "done" ? stream.done : undefined;

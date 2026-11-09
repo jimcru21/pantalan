@@ -2,20 +2,19 @@
 // the only place their values come from: App responses carry the names
 // alone (env_names).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, request } from "@/api/client";
-import { appKeys } from "@/api/apps";
+import { request } from "@/api/client";
+import { appKeys, retryUnlessAnswered } from "@/api/apps";
 import type { AppEnv } from "@/api/generated/httpapi";
+import { appPaths } from "@/api/paths";
 
-export const envKey = (appID: string) => [...appKeys.app(appID), "env"] as const;
-
-const envPath = (appID: string) => `/api/v1/apps/${encodeURIComponent(appID)}/env`;
+export const envKey = (appId: string) => [...appKeys.app(appId), "env"] as const;
 
 /** An App's env vars, values included. An unknown App fails with a 404. */
-export function useEnv(appID: string) {
+export function useEnv(appId: string) {
   return useQuery({
-    queryKey: envKey(appID),
-    queryFn: () => request<AppEnv>(envPath(appID)),
-    retry: (failures, err) => !(err instanceof ApiError && err.status < 500) && failures < 3,
+    queryKey: envKey(appId),
+    queryFn: () => request<AppEnv>(appPaths.env(appId)),
+    retry: retryUnlessAnswered,
   });
 }
 
@@ -25,15 +24,15 @@ export function useEnv(appID: string) {
  * env vars as stored (the pairs alone, sorted by name). It starts no
  * Deployment: they take effect on the next one.
  */
-export function useSaveEnv(appID: string) {
+export function useSaveEnv(appId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (text: string) =>
-      request<AppEnv>(envPath(appID), { method: "PUT", json: { env: text } satisfies AppEnv }),
+      request<AppEnv>(appPaths.env(appId), { method: "PUT", json: { env: text } satisfies AppEnv }),
     onSuccess: (env) => {
-      client.setQueryData(envKey(appID), env);
+      client.setQueryData(envKey(appId), env);
       // The App's env var names changed.
-      void client.invalidateQueries({ queryKey: appKeys.app(appID), exact: true });
+      void client.invalidateQueries({ queryKey: appKeys.app(appId), exact: true });
     },
   });
 }
