@@ -26,7 +26,8 @@ type Sessions interface {
 	// session, and extends it.
 	Authenticate(ctx context.Context, token string) error
 	// CheckSession is Authenticate without extending the session: an
-	// open stream re-checks its session with it.
+	// open stream re-checks its session with it, and GET
+	// /api/v1/sessions/current answers with it.
 	CheckSession(ctx context.Context, token string) error
 	// SignOut ends the session token names, if there is one.
 	SignOut(ctx context.Context, token string) error

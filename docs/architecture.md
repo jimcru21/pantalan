@@ -148,7 +148,7 @@ Auth surfaces on the one listener:
 | Route | Session cookie | Admin Token (bearer) | Other |
 |---|---|---|---|
 | Dashboard pages | `/login`: not needed; any other page: a live session, or a 303 to `/login?next=…` | no: a request with an `Authorization` header gets 401 | `/assets/…` needs nothing |
-| `GET /api/v1/login-info`, `POST /api/v1/sessions`, `DELETE /api/v1/sessions/current` | not needed | not needed | the sign-in contract; the two session routes are behind `http.CrossOriginProtection` whatever credential comes with them |
+| `GET /api/v1/login-info`, `POST /api/v1/sessions`, `GET` and `DELETE /api/v1/sessions/current` | not needed (`GET …/sessions/current` checks it) | not needed | the sign-in contract; `POST` and `DELETE` are behind `http.CrossOriginProtection` whatever credential comes with them |
 | the rest of `/api/v1/…` | yes, behind `http.CrossOriginProtection` (a cross-origin unsafe request gets 403) | yes, from any origin | an `Authorization` header is judged alone, whatever cookie comes with it; no credential, a wrong token or an ended session gets 401 |
 | `/webhooks/github` | no | no | HMAC signature |
 | `/healthz` | no | no | none needed |
@@ -163,7 +163,9 @@ Auth surfaces on the one listener:
   message. With no Admin, the screen shows the `admin create` command
   instead of the form, and sign-in gets 403. `DELETE
   /api/v1/sessions/current` ends the browser's session, if any, and
-  answers 204 clearing the cookie.
+  answers 204 clearing the cookie. `GET /api/v1/sessions/current` answers
+  204 while the cookie names a live session and 401 once it doesn't, with
+  `AdminService.CheckSession`, so checking never extends the session.
 - `service.AdminService` issues a `crypto/rand.Text()` token per sign-in
   and stores only its SHA-256 hex in `sessions`. The cookie, which
   `internal/httpapi/cookie.go` sets, reads and clears, is

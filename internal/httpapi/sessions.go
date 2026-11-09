@@ -80,6 +80,23 @@ func (h *handler) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// checkSession answers 204 while the browser's session cookie names a
+// live session, and 401 once it doesn't. It is Sessions.CheckSession, so
+// it doesn't count as activity: a page checking every 30 s never keeps
+// its session alive, but notices within 30 s that it has ended. It reads
+// the cookie alone; the Admin Token has no session.
+func (h *handler) checkSession(w http.ResponseWriter, r *http.Request) {
+	err := h.deps.Sessions.CheckSession(r.Context(), SessionToken(r))
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, service.ErrNoSession):
+		h.writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: service.ErrNoSession.Error()})
+	default:
+		h.writeError(w, err)
+	}
+}
+
 // signOut ends the browser's session, if it has one, and clears its
 // cookie.
 func (h *handler) signOut(w http.ResponseWriter, r *http.Request) {

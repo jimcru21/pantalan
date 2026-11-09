@@ -260,3 +260,63 @@ func TestTheSessionEndpointsRefuseCrossOriginRequests(t *testing.T) {
 		})
 	}
 }
+
+// GET /api/v1/sessions/current is how an open Dashboard page notices its
+// session ended (signed out elsewhere, expired, admin reset-password)
+// while it isn't otherwise talking to the server.
+
+func TestTheSessionCheckIs204WhileTheSessionIsLive(t *testing.T) {
+	s := newSeam(t)
+	session := s.signedIn()
+
+	got := s.get("/api/v1/sessions/current", withSession(session))
+
+	if got.status != http.StatusNoContent || got.body != "" {
+		t.Errorf("GET /api/v1/sessions/current = %d %q, want 204 and no body", got.status, got.body)
+	}
+	if got.header.Get("Set-Cookie") != "" {
+		t.Errorf("Set-Cookie = %q, want the cookie left alone", got.header.Get("Set-Cookie"))
+	}
+}
+
+func TestTheSessionCheckIs401OnceTheSessionHasEnded(t *testing.T) {
+	s := newSeam(t)
+	session := s.signedIn()
+	if _, err := s.admins.ResetPassword(t.Context()); err != nil { // ends every session, as admin reset-password does
+		t.Fatal(err)
+	}
+
+	for name, creds := range map[string][]option{
+		"after reset-password": {withSession(session)},
+		"no cookie":            nil,
+		"unknown session":      {withSession("NOSUCHSESSION")},
+	} {
+		got := s.get("/api/v1/sessions/current", creds...)
+		if got.status != http.StatusUnauthorized {
+			t.Errorf("%s: GET /api/v1/sessions/current = %d %q, want 401", name, got.status, got.body)
+			continue
+		}
+		var body httpapi.ErrorResponse
+		if err := json.Unmarshal([]byte(got.body), &body); err != nil || body.Error == "" {
+			t.Errorf("%s: body = %q, want a JSON error", name, got.body)
+		}
+	}
+}
+
+func TestTheSessionCheckDoesNotKeepTheSessionAlive(t *testing.T) {
+	s := newSeam(t)
+	session := s.signedIn() // at the clock's start, so it idles out an hour later
+
+	// A page checks every half minute for an hour, and does nothing else.
+	for range 119 {
+		s.clock.advance(30 * time.Second)
+		if got := s.get("/api/v1/sessions/current", withSession(session)); got.status != http.StatusNoContent {
+			t.Fatalf("GET /api/v1/sessions/current at %v = %d, want 204 within the hour", s.clock.Now(), got.status)
+		}
+	}
+	s.clock.advance(30 * time.Second)
+
+	if got := s.get("/api/v1/sessions/current", withSession(session)); got.status != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/sessions/current an hour after the last request = %d, want 401: checking isn't activity", got.status)
+	}
+}
