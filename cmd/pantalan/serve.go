@@ -172,6 +172,7 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, wo
 	api := httpapi.NewHandler(httpapi.Deps{
 		Apps:          apps,
 		Deployer:      deployer,
+		Sessions:      admins,
 		AdminToken:    cfg.AdminToken,
 		WebhookSecret: cfg.WebhookSecret,
 		Dashboard:     dash,
