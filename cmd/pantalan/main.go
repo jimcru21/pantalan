@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/pantalan/pantalan/internal/config"
-	"github.com/pantalan/pantalan/internal/service"
 )
 
 // Stdio is the standard streams a command reads from and writes to.
@@ -23,7 +22,7 @@ type Stdio struct {
 }
 
 // World is the process's outside world: where pantalan reads the Node
-// from, and the clocks, timers and hasher it runs on. main passes the
+// from, and the clocks and timers it runs on. main passes the
 // Node's real paths and the real clock; tests point the paths at fixtures
 // in a temp dir and take over the timers.
 type World struct {
@@ -40,12 +39,6 @@ type World struct {
 	// MaintenanceTicks runs the daily maintenance (TLS renewal check and
 	// session pruning); nil means once a day. Tests send on it.
 	MaintenanceTicks <-chan time.Time
-	// Hasher hashes and checks the Admin's password at sign-in; nil means
-	// password.Hasher. Tests wrap it to hold checks while they look.
-	Hasher service.PasswordHasher
-	// HashSlotWait times how long a sign-in waits for a free hash slot
-	// before giving up; nil means time.After. Tests fire it themselves.
-	HashSlotWait func(time.Duration) <-chan time.Time
 	// Clock is the time Dashboard sessions and the Docker tab's shared
 	// system/df are timed by; nil means time.Now. Tests move it forward
 	// instead of waiting.

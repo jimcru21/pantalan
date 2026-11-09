@@ -15,11 +15,14 @@ import (
 )
 
 // Auth is what the Dashboard needs to sign the Admin in and out and to
-// check sessions; service.AuthService provides it.
+// check sessions; service.AdminService provides it.
 type Auth interface {
 	AdminExists(ctx context.Context) (bool, error)
-	// SignIn returns a new session token, or service.ErrNoAdmin or
-	// service.ErrBadCredentials.
+	// SignIn returns a new session token, or why it refused one:
+	// service.ErrNoAdmin, service.ErrBadCredentials, or a
+	// *service.RetryLaterError carrying its own wait whose reason is
+	// service.ErrThrottled or service.ErrBusy. Any other error is the
+	// server's own failure.
 	SignIn(ctx context.Context, username, password string) (token string, err error)
 	// Authenticate returns service.ErrNoSession unless token names a live
 	// session, and extends it.
