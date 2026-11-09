@@ -119,7 +119,6 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		Now:         s.clock.Now,
 		After:       s.hashWait.After,
 	})
-	s.apps = service.NewAppService(store)
 	s.deployer = service.NewDeployer(service.DeployerDeps{
 		Apps:        store,
 		Deployments: store,
@@ -132,6 +131,7 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		DataDir:     s.dataDir,
 		Log:         log,
 	})
+	s.apps = service.NewAppService(store, s.deployer)
 	dash := dashboard.New(dashboard.Deps{
 		Sessions: s.admins,
 		Files:    cfg.frontend,

@@ -41,6 +41,10 @@ type Deployer struct {
 	// locked while DeleteApp runs, so no Deployment starts on an App
 	// that is being deleted.
 	starting sync.RWMutex
+	// routing is held while a route changes along with the App's domain
+	// it is read for: at go-live and when an edit moves the domain. So a
+	// go-live never routes a domain an edit has just moved away from.
+	routing sync.Mutex
 }
 
 func NewDeployer(deps DeployerDeps) *Deployer {
@@ -163,14 +167,52 @@ func (d *Deployer) run(ctx context.Context, app domain.App, dep *domain.Deployme
 		return fmt.Errorf("find live deployment: %w", err)
 	}
 
-	d.deps.Router.SetRoute(app.Domain, ctr.Upstream)
+	host := d.goLive(ctx, app, ctr.Upstream, previous.Upstream)
 	dep.Status = domain.DeploymentLive
-	fmt.Fprintf(logs, "==> live at %s\n", app.Domain)
+	fmt.Fprintf(logs, "==> live at %s\n", host)
 
 	if hasPrevious {
 		d.retire(ctx, previous)
 	}
 	return nil
+}
+
+// goLive routes the App's domain to upstream and stops routing anything
+// to the previous live Deployment's upstream (none when empty), and
+// returns the domain. The domain is read again here, because an edit may
+// have changed it while the Deployment built; removing every route to
+// the previous upstream also removes one left under an older domain.
+func (d *Deployer) goLive(ctx context.Context, app domain.App, upstream, previous string) (host string) {
+	d.routing.Lock()
+	defer d.routing.Unlock()
+	host = app.Domain
+	if now, err := d.deps.Apps.GetApp(ctx, app.ID); err == nil {
+		host = now.Domain
+	} else {
+		d.deps.Log.Warn("read app domain at go-live", "app", app.ID, "err", err)
+	}
+	d.deps.Router.SetRoute(host, upstream)
+	if previous != "" && previous != upstream {
+		d.deps.Router.RemoveRoutesTo(previous)
+	}
+	return host
+}
+
+// MoveDomain moves the route of the App with ID appID from its domain
+// before an edit, from, to the domain it has now, so its live Deployment
+// is served under the new domain at once and the old one serves nothing.
+// AppService.Update calls it once the edit is stored. With nothing live,
+// there is no route to move.
+func (d *Deployer) MoveDomain(ctx context.Context, appID, from string) {
+	d.routing.Lock()
+	defer d.routing.Unlock()
+	app, err := d.deps.Apps.GetApp(ctx, appID)
+	if err != nil {
+		// The next go-live routes the domain the App has then.
+		d.deps.Log.Warn("move route to the app's new domain", "app", appID, "err", err)
+		return
+	}
+	d.deps.Router.MoveRoute(from, app.Domain)
 }
 
 func (d *Deployer) List(ctx context.Context, appID string) ([]domain.Deployment, error) {

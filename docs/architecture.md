@@ -51,11 +51,18 @@ moves into `service` behind a port.
 2. **building**: fetch the exact ref into `$DATA/builds/<id>`, then build an image.
 3. **starting**: run the new container next to the old one.
 4. Health-check the new container. On failure, remove it. The old one keeps serving.
-5. **live**: switch the proxy route, then mark the previous deployment
-   **superseded** and remove its container.
+5. **live**: route the App's domain, as it is now, to the new container,
+   remove every route to the previous one, then mark the previous
+   deployment **superseded** and remove its container.
 
 Deployments of the same app are serialised. Different apps build in parallel,
 up to `PANTALAN_WORKERS` at a time.
+
+Editing an App's domain (`AppService.Update`) moves its live route at once
+through `Deployer.MoveDomain`: the new domain serves the live Deployment and
+the old one serves nothing. Go-live and that move hold the same lock, and
+both read the domain under it, so a Deployment that was building during
+the edit goes live on the new domain.
 
 ### Startup recovery
 

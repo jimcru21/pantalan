@@ -41,9 +41,9 @@ func (d *Deployer) DeleteApp(ctx context.Context, appID string) error {
 		}
 	}
 
-	// Stop serving first. The live route is under the domain the App had
-	// when it went live, which a later edit may have changed, so remove
-	// every route to the live container as well as the current domain's.
+	// Stop serving first: the current domain's route, and any other
+	// route to the live container (a domain edit moves the route, but
+	// one whose move failed would be left under the old domain).
 	d.deps.Router.RemoveRoute(app.Domain)
 	for _, dep := range deps {
 		if dep.Status == domain.DeploymentLive && dep.Upstream != "" {

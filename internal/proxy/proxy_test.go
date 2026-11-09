@@ -36,6 +36,33 @@ func TestProxyRoutesByHostAndPreservesHostHeader(t *testing.T) {
 	}
 }
 
+func TestMoveRouteServesTheUpstreamUnderTheNewHostOnly(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.Host))
+	}))
+	defer backend.Close()
+
+	p := proxy.New(slog.New(slog.DiscardHandler))
+	p.SetRoute("old.example.test", strings.TrimPrefix(backend.URL, "http://"))
+	p.MoveRoute("old.example.test", "New.Example.test")
+	p.MoveRoute("nothing.example.test", "other.example.test") // no route to move
+
+	for host, want := range map[string]int{
+		"old.example.test":   http.StatusNotFound,
+		"new.example.test":   http.StatusOK,
+		"other.example.test": http.StatusNotFound,
+	} {
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://"+host+"/", nil))
+		if rec.Code != want {
+			t.Errorf("%s status = %d, want %d", host, rec.Code, want)
+		}
+		if want == http.StatusOK && rec.Body.String() != host {
+			t.Errorf("%s reached the upstream as Host %q, want its own", host, rec.Body.String())
+		}
+	}
+}
+
 func TestRemoveRoutesToRemovesEveryHostOfThatUpstreamOnly(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer backend.Close()

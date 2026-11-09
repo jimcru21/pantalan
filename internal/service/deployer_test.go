@@ -101,8 +101,8 @@ func newHarness(t *testing.T) *harness {
 		runtime: &fakeRuntime{containers: map[string]fakeContainer{}},
 		health:  &fakeHealth{unhealthy: map[string]bool{}},
 	}
-	h.apps = service.NewAppService(h.store)
 	h.wire()
+	h.apps = service.NewAppService(h.store, h.deployer)
 	return h
 }
 
@@ -279,6 +279,12 @@ type fakeRouter struct{ routes map[string]string }
 func (r *fakeRouter) SetRoute(host, upstream string) { r.routes[host] = upstream }
 func (r *fakeRouter) RemoveRoute(host string)        { delete(r.routes, host) }
 func (*fakeRouter) RemoveRoutesTo(string)            {}
+func (r *fakeRouter) MoveRoute(from, to string) {
+	if upstream, ok := r.routes[from]; ok && from != to {
+		delete(r.routes, from)
+		r.routes[to] = upstream
+	}
+}
 
 // fakeScheduler records jobs; tests call Deployer.Run themselves.
 type fakeScheduler struct{ enqueued []string }

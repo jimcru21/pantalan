@@ -67,6 +67,20 @@ func (p *Proxy) RemoveRoutesTo(upstream string) {
 	}
 }
 
+// MoveRoute serves from's upstream under to instead, replacing any route
+// to had, in one step. It does nothing when from has no route.
+func (p *Proxy) MoveRoute(from, to string) {
+	from, to = strings.ToLower(from), strings.ToLower(to)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	r, ok := p.routes[from]
+	if !ok || from == to {
+		return
+	}
+	delete(p.routes, from)
+	p.routes[to] = r
+}
+
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host, _, err := net.SplitHostPort(r.Host)
 	if err != nil {
