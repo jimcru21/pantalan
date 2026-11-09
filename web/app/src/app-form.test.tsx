@@ -1,11 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type {
-  App,
-  AppSettings,
-  CreateAppRequest,
-  ErrorResponse,
-} from "@/api/generated/httpapi";
+import type { App, AppSettings, CreateAppRequest, ErrorResponse } from "@/api/generated/httpapi";
 import { anAppListItem, appPageApi, appsListApi, unknownAppApi } from "@/test/app-fixtures";
 import { anApp } from "@/test/fixtures";
 import { json } from "@/test/network";
