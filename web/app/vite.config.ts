@@ -73,6 +73,8 @@ export default defineConfig({
     },
   },
   test: {
+    // e2e/ holds the Playwright smoke tests (playwright.config.ts).
+    include: ["src/**/*.test.{ts,tsx}"],
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     restoreMocks: true,

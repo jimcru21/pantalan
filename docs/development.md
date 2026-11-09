@@ -167,6 +167,29 @@ Library, and stub only `fetch` and `EventSource`
 mocked. A request no test handler answers fails the test. Fixtures are
 typed by the generated API types (`src/test/fixtures.ts`).
 
+**Smoke tests** in `web/app/e2e` drive Chromium with
+[Playwright](https://playwright.dev) against the binary built with its
+embedded frontend. They're the only tests where the embedding, the session
+cookie, the cross-origin check and the CSP work together. The suite starts
+`bin/pantalan` itself, on free loopback ports with a fresh data dir and an
+Admin made by `pantalan admin create`, and stops it at the end. Every test
+fails if the browser's console reports a CSP violation. CI runs them in
+the `smoke` job; they aren't part of `make check`.
+
+```sh
+make smoke-docker   # make build, then the suite in Playwright's Docker image
+make smoke          # on this machine: make build, then npm run smoke in web/app
+```
+
+`make smoke` needs Chromium and its system libraries, installed once with
+`npx playwright install --with-deps chromium` in `web/app`. Without them,
+use `make smoke-docker`, which runs the suite in
+`mcr.microsoft.com/playwright` at the version in `package.json`, as your
+own user. With the binary already built, `npm run smoke -- --headed` (or
+`--ui`, `-g <test name>`) in `web/app` runs it again. `PANTALAN_BIN` points
+it at another binary. A failed test keeps a trace in `web/app/test-results`:
+open it with `npx playwright show-trace <trace.zip>`.
+
 **API types** in `web/app/src/api/generated` are generated from the Go
 structs by [tygo](https://github.com/gzuidhof/tygo), a Go tool dependency
 configured in `tygo.yaml`. They're committed, and CI fails when they're
@@ -280,6 +303,7 @@ internal/proxy/         reverse proxy
 internal/queue/         deploy job queue
 web/                    embeds web/dist into the binary (web/embed.go)
 web/app/                the Dashboard SPA (React, Vite, TypeScript)
+web/app/e2e/            Playwright smoke tests against the built binary (make smoke)
 web/dist/               its build (make web), gitignored but for a placeholder
 tygo.yaml               API types generated into web/app/src/api/generated (make types)
 docs/                   architecture notes

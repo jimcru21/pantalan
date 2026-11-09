@@ -1,6 +1,6 @@
 BIN := bin/pantalan
 
-.PHONY: build run test vet fmt check gofmt-check types types-check web-deps web-check web web-dev shellcheck installtest installtest-vm
+.PHONY: build run test vet fmt check gofmt-check types types-check web-deps web-check web web-dev smoke smoke-docker shellcheck installtest installtest-vm
 
 # The binary with the SPA embedded: the frontend first, then Go. A plain
 # `go build` without Node also works; that binary serves a "frontend not
@@ -63,6 +63,24 @@ web-check: $(WEB_DEPS)
 # The SPA, built into web/dist, which the binary embeds (web/embed.go).
 web: $(WEB_DEPS)
 	cd web/app && npm run build
+
+# The Playwright smoke tests (web/app/e2e) against the binary with its
+# embedded frontend: they start bin/pantalan on free loopback ports with a
+# fresh data dir. They need Chromium and its system libraries, installed
+# once with `cd web/app && npx playwright install --with-deps chromium`;
+# smoke-docker needs neither.
+smoke: build
+	cd web/app && npm run smoke
+
+# The smoke tests in Playwright's own image, which has Chromium and its
+# libraries, at the version in package.json. The binary is built static so
+# it runs in the image.
+PLAYWRIGHT_VERSION = $(shell node -p "require('./web/app/package.json').devDependencies['@playwright/test']")
+smoke-docker:
+	CGO_ENABLED=0 $(MAKE) build
+	docker run --rm --init --ipc=host --user "$$(id -u):$$(id -g)" -e HOME=/tmp -e CI \
+		-v "$(CURDIR):/repo" -w /repo/web/app \
+		mcr.microsoft.com/playwright:v$(PLAYWRIGHT_VERSION)-noble npm run smoke
 
 # The SPA's dev server with hot reload, beside `make run`, on
 # https://localhost:5173 (with make run's certificate once it has made
