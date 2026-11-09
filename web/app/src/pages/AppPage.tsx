@@ -2,7 +2,9 @@ import type { ReactNode } from "react";
 import { useParams } from "react-router";
 import type { App, Deployment } from "@/api/generated/domain";
 import { isNotFound, useApp, useDeployments } from "@/api/apps";
+import { DeployButton } from "@/apps/DeployButton";
 import { DeploymentStatus } from "@/apps/DeploymentStatus";
+import { DeploymentLink, Queue } from "@/apps/Queue";
 import { Alert, Facts, Panel, Table, Td } from "@/components/panel";
 import { formatUTCDateTime } from "@/lib/format";
 import { NotFoundPage, Page } from "@/shell/Page";
@@ -44,7 +46,11 @@ export function AppPage() {
       ) : (
         deployments.data && (
           <>
-            <LiveDeployment deployment={deployments.data.find((d) => d.status === "live")} />
+            <LiveDeployment
+              deployment={deployments.data.find((d) => d.status === "live")}
+              action={<DeployButton appID={appId} />}
+            />
+            <Queue deployments={deployments.data} />
             <History deployments={deployments.data} />
           </>
         )
@@ -70,9 +76,9 @@ function settings(app: App): [string, ReactNode][] {
 }
 
 // The Deployment serving the App's domain now, if any.
-function LiveDeployment({ deployment }: { deployment?: Deployment }) {
+function LiveDeployment({ deployment, action }: { deployment?: Deployment; action: ReactNode }) {
   return (
-    <Panel title="Live Deployment">
+    <Panel title="Live Deployment" action={action}>
       {deployment ? (
         <Facts
           facts={[
@@ -99,13 +105,16 @@ function History({ deployments }: { deployments: Deployment[] }) {
     <Panel title="Deployments">
       <Table
         bare
-        head={["Status", "Ref", "Commit", "Started (UTC)", "Finished (UTC)", "Error"]}
+        head={["Status", "Deployment", "Ref", "Commit", "Started (UTC)", "Finished (UTC)", "Error"]}
         empty={deployments.length === 0 && "Not deployed yet."}
       >
         {deployments.map((d) => (
           <tr key={d.id}>
             <Td>
               <DeploymentStatus status={d.status} />
+            </Td>
+            <Td mono>
+              <DeploymentLink deployment={d} />
             </Td>
             <Td mono>{d.ref}</Td>
             <Td>

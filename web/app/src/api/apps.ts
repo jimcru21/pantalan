@@ -48,11 +48,25 @@ export function useApp(id: string) {
   });
 }
 
-/** An App's Deployments, newest first. */
+/**
+ * An App's Deployments, newest first. Polled every 2 s while any of them is
+ * on its way (queued, building or starting), so status moves on screen;
+ * once all are final the polling stops.
+ */
 export function useDeployments(appID: string) {
   return useQuery({
     queryKey: appKeys.deployments(appID),
     queryFn: () => request<Deployment[]>(`/api/v1/apps/${encodeURIComponent(appID)}/deployments`),
     retry: retryUnlessAnswered,
+    refetchInterval: (query) =>
+      query.state.data?.some((d) => isInProgress(d.status)) ? statusPollMs : false,
   });
+}
+
+/** How often a Deployment on its way is polled for its status. */
+export const statusPollMs = 2_000;
+
+/** True for a Deployment on its way: queued, building or starting. */
+export function isInProgress(status: Deployment["status"]): boolean {
+  return status === "queued" || status === "building" || status === "starting";
 }
