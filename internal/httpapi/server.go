@@ -67,7 +67,10 @@ func NewHandler(deps Deps) http.Handler {
 	mux.Handle("/api/", requireCredential(deps.AdminToken, deps.Sessions, deps.Log, api))
 	// Authenticated by HMAC signature, not the admin token.
 	mux.HandleFunc("POST /webhooks/github", h.githubWebhook)
+	// No other path under /webhooks/ is a Dashboard page.
+	mux.Handle("/webhooks/", http.NotFoundHandler())
+	// Every other path is the Dashboard's: a page, or a hashed asset.
 	mux.Handle("/", deps.Dashboard)
 
-	return logRequests(deps.Log, mux)
+	return logRequests(deps.Log, noStoreAPI(mux))
 }

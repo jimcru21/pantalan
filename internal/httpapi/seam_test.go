@@ -2,18 +2,19 @@ package httpapi_test
 
 import (
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/pantalan/pantalan/internal/dashboard"
 	"github.com/pantalan/pantalan/internal/domain"
 	"github.com/pantalan/pantalan/internal/httpapi"
 	"github.com/pantalan/pantalan/internal/service"
 	"github.com/pantalan/pantalan/internal/store/sqlite"
-	"github.com/pantalan/pantalan/web"
 )
 
 // The HTTP seam: httpapi.NewHandler with the Dashboard mounted, served
@@ -46,8 +47,43 @@ type seam struct {
 	events    *fakeEvents
 }
 
-func newSeam(t *testing.T) *seam {
+// The built frontend the seam's Dashboard serves: what `vite build`
+// writes to web/dist, in miniature. go test runs without Node, so the
+// real web/dist holds only its placeholder.
+const (
+	indexHTML = `<!doctype html><html><head><script type="module" crossorigin src="/assets/index-B1x2y3z4.js"></script>` +
+		`<link rel="stylesheet" crossorigin href="/assets/index-C5d6e7f8.css"></head><body><div id="root"></div></body></html>`
+	bundleJS  = `console.log("the Dashboard");`
+	bundleCSS = `body{margin:0}`
+)
+
+func builtFrontend() fs.FS {
+	return fstest.MapFS{
+		".gitkeep":                  {Data: []byte("placeholder\n")},
+		"index.html":                {Data: []byte(indexHTML)},
+		"assets/index-B1x2y3z4.js":  {Data: []byte(bundleJS)},
+		"assets/index-C5d6e7f8.css": {Data: []byte(bundleCSS)},
+	}
+}
+
+// seamOption changes the scene before the handler is built.
+type seamOption func(*seamConfig)
+
+type seamConfig struct {
+	frontend fs.FS // the Dashboard's built SPA
+}
+
+// withFrontend serves files as the built SPA instead of builtFrontend.
+func withFrontend(files fs.FS) seamOption {
+	return func(c *seamConfig) { c.frontend = files }
+}
+
+func newSeam(t *testing.T, opts ...seamOption) *seam {
 	t.Helper()
+	cfg := seamConfig{frontend: builtFrontend()}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	store, err := sqlite.Open(t.Context(), t.TempDir())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -86,18 +122,11 @@ func newSeam(t *testing.T) *seam {
 		DataDir:     t.TempDir(),
 		Log:         log,
 	})
-	dash, err := dashboard.New(dashboard.Deps{
-		Auth:         s.admins,
-		Apps:         s.apps,
-		Templates:    web.Templates(),
-		Static:       web.Static(),
-		AssetVersion: "test",
-		Hostname:     "node",
-		Log:          log,
+	dash := dashboard.New(dashboard.Deps{
+		Sessions: s.admins,
+		Files:    cfg.frontend,
+		Log:      log,
 	})
-	if err != nil {
-		t.Fatalf("dashboard.New: %v", err)
-	}
 	s.srv = httptest.NewTLSServer(httpapi.NewHandler(httpapi.Deps{
 		Apps:          s.apps,
 		Deployer:      s.deployer,
@@ -135,7 +164,7 @@ func withToken(token string) option {
 
 // withSession sends token as the session cookie, as the browser does.
 func withSession(token string) option {
-	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: dashboard.CookieName, Value: token}) }
+	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: httpapi.CookieName, Value: token}) }
 }
 
 func withHeader(name, value string) option {

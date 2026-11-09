@@ -154,21 +154,11 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, wo
 	}()
 
 	apps := service.NewAppService(store)
-	dash, err := dashboard.New(dashboard.Deps{
-		Auth:         admins,
-		Host:         sampler,
-		Docker:       dockerAPI,
-		Events:       events,
-		Apps:         apps,
-		Templates:    web.Templates(),
-		Static:       web.Static(),
-		AssetVersion: assetVersion(bin, web.Static()),
-		Hostname:     hostname,
-		Log:          log,
+	dash := dashboard.New(dashboard.Deps{
+		Sessions: admins,
+		Files:    web.Dist(),
+		Log:      log,
 	})
-	if err != nil {
-		return err
-	}
 	api := httpapi.NewHandler(httpapi.Deps{
 		Apps:          apps,
 		Deployer:      deployer,

@@ -3,4 +3,5 @@
 .env
 /tmp/
 /web/app/node_modules/
-/web/dist/
+/web/dist/*
+!/web/dist/.gitkeep

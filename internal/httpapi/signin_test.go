@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pantalan/pantalan/internal/dashboard"
+	"github.com/pantalan/pantalan/internal/httpapi"
 )
 
 // signIn is the sign-in screen's POST /api/v1/sessions.
@@ -32,12 +32,12 @@ func sessionCookie(t *testing.T, got response) *http.Cookie {
 		if err != nil {
 			t.Fatalf("parse Set-Cookie %q: %v", line, err)
 		}
-		if c.Name == dashboard.CookieName {
+		if c.Name == httpapi.CookieName {
 			found = append(found, c)
 		}
 	}
 	if len(found) != 1 {
-		t.Fatalf("Set-Cookie = %q, want one %s cookie", got.header.Values("Set-Cookie"), dashboard.CookieName)
+		t.Fatalf("Set-Cookie = %q, want one %s cookie", got.header.Values("Set-Cookie"), httpapi.CookieName)
 	}
 	return found[0]
 }

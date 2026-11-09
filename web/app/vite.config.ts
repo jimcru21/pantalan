@@ -2,14 +2,34 @@
 // hot reload in development. The dev server is the compose stack's `web`
 // service (or `npm run dev` beside `make run`); see "Develop with Docker"
 // in docs/development.md.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
 const env = process.env;
+
+// The build goes to web/dist, which the binary embeds. Git keeps only its
+// placeholder, so `go build` without Node still has something to embed;
+// Vite's own emptyOutDir would delete it, so this empties the rest.
+const outDir = fileURLToPath(new URL("../dist", import.meta.url));
+const placeholder = ".gitkeep";
+
+function emptyOutDirButThePlaceholder(): Plugin {
+  return {
+    name: "pantalan:empty-out-dir",
+    apply: "build",
+    buildStart() {
+      if (!existsSync(outDir)) return;
+      for (const entry of readdirSync(outDir)) {
+        if (entry !== placeholder) rmSync(join(outDir, entry), { recursive: true, force: true });
+      }
+    },
+  };
+}
 
 // Pantalan's own Dashboard certificate, so the dev server speaks HTTPS: the
 // session cookie is `__Host-` and a remote browser only keeps it over HTTPS.
@@ -26,13 +46,13 @@ const https = existsSync(join(tlsDir, "cert.pem"))
 const publishedPort = env.PANTALAN_DEV_WEB_PORT ? Number(env.PANTALAN_DEV_WEB_PORT) : undefined;
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), emptyOutDirButThePlaceholder()],
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
   build: {
-    outDir: "../dist",
-    emptyOutDir: true,
+    outDir,
+    emptyOutDir: false,
   },
   server: {
     host: env.PANTALAN_DEV_WEB_HOST ?? "localhost",

@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pantalan/pantalan/internal/dashboard"
 	"github.com/pantalan/pantalan/internal/service"
 )
 
@@ -61,12 +60,12 @@ func (h *handler) signIn(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		// A browser that signs in again leaves its old session behind.
-		if old := dashboard.SessionToken(r); old != "" {
+		if old := SessionToken(r); old != "" {
 			if err := h.deps.Sessions.SignOut(r.Context(), old); err != nil {
 				h.deps.Log.Warn("sign out replaced session", "err", err)
 			}
 		}
-		dashboard.SetSessionCookie(w, token)
+		setSessionCookie(w, token)
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, service.ErrBadCredentials):
 		h.writeJSON(w, http.StatusUnauthorized, errorBody(service.ErrBadCredentials))
@@ -84,11 +83,11 @@ func (h *handler) signIn(w http.ResponseWriter, r *http.Request) {
 // signOut ends the browser's session, if it has one, and clears its
 // cookie.
 func (h *handler) signOut(w http.ResponseWriter, r *http.Request) {
-	if err := h.deps.Sessions.SignOut(r.Context(), dashboard.SessionToken(r)); err != nil {
+	if err := h.deps.Sessions.SignOut(r.Context(), SessionToken(r)); err != nil {
 		h.writeError(w, err)
 		return
 	}
-	dashboard.ClearSessionCookie(w)
+	ClearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
