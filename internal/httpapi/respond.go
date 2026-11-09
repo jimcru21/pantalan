@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pantalan/pantalan/internal/domain"
+	"github.com/pantalan/pantalan/internal/service"
 )
 
 const maxBodyBytes = 1 << 20
@@ -29,18 +33,41 @@ func (h *handler) writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
+// errorStatuses are the errors that answer with a status of their own;
+// any other error is a 500. The sign-in errors answer with their own
+// message alone (bare), whatever wraps them: a wait, say, goes in
+// Retry-After instead.
+var errorStatuses = []struct {
+	err    error
+	status int
+	bare   bool
+}{
+	{domain.ErrNotFound, http.StatusNotFound, false},
+	{domain.ErrInvalid, http.StatusBadRequest, false},
+	{domain.ErrConflict, http.StatusConflict, false},
+	{service.ErrBadCredentials, http.StatusUnauthorized, true},
+	{service.ErrNoSession, http.StatusUnauthorized, true},
+	{service.ErrNoAdmin, http.StatusForbidden, true},
+	{service.ErrThrottled, http.StatusTooManyRequests, true},
+	{service.ErrBusy, http.StatusServiceUnavailable, true},
+}
+
+// writeError answers err as an ErrorResponse with its status (see
+// errorStatuses), and Retry-After when it is a service.RetryLaterError.
 func (h *handler) writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
-	switch {
-	case errors.Is(err, domain.ErrNotFound):
-		status = http.StatusNotFound
-	case errors.Is(err, domain.ErrInvalid):
-		status = http.StatusBadRequest
-	case errors.Is(err, domain.ErrConflict):
-		status = http.StatusConflict
-	}
 	body := ErrorResponse{Error: err.Error()}
+	for _, e := range errorStatuses {
+		if errors.Is(err, e.err) {
+			status = e.status
+			if e.bare {
+				body.Error = e.err.Error()
+			}
+			break
+		}
+	}
 	var fieldErr *domain.FieldError
+	var later *service.RetryLaterError
 	switch {
 	case status == http.StatusInternalServerError:
 		h.deps.Log.Error("request failed", "err", err)
@@ -48,8 +75,15 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 	case errors.As(err, &fieldErr):
 		// The message alone: it is shown beside the field it names.
 		body = ErrorResponse{Error: fieldErr.Msg, Field: fieldErr.Field}
+	case errors.As(err, &later):
+		w.Header().Set("Retry-After", retryAfter(later.Wait))
 	}
 	h.writeJSON(w, status, body)
+}
+
+// retryAfter is a Retry-After value: whole seconds, rounded up.
+func retryAfter(wait time.Duration) string {
+	return strconv.Itoa(int(math.Ceil(wait.Seconds())))
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {

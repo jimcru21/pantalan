@@ -51,7 +51,7 @@ func (h *handler) nodeEvents(w http.ResponseWriter, _ *http.Request) {
 
 // dockerUnreachable answers a tab that reads Docker while it can't be.
 func (h *handler) dockerUnreachable(w http.ResponseWriter, err error) {
-	h.writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Docker unreachable: " + err.Error()})
+	h.writeJSON(w, http.StatusServiceUnavailable, ErrorResponse{Error: "Docker unreachable: " + err.Error()})
 }
 
 func (h *handler) nodeContainers(w http.ResponseWriter, r *http.Request) {
