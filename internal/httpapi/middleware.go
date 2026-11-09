@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pantalan/pantalan/internal/service"
+	"github.com/pantalan/pantalan/internal/sessioncookie"
 )
 
 // Sessions signs the Admin in and out and checks their sessions;
@@ -55,7 +56,7 @@ func requireCredential(token string, sessions Sessions, log *slog.Logger, next h
 			next.ServeHTTP(w, r)
 			return
 		}
-		cookie, err := r.Cookie(CookieName)
+		cookie, err := r.Cookie(sessioncookie.Name)
 		if err != nil || cookie.Value == "" {
 			unauthorized(w)
 			return

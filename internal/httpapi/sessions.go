@@ -3,6 +3,8 @@ package httpapi
 import (
 	"net"
 	"net/http"
+
+	"github.com/pantalan/pantalan/internal/sessioncookie"
 )
 
 // The sign-in contract the Dashboard's sign-in screen talks to. These
@@ -54,12 +56,12 @@ func (h *handler) signIn(w http.ResponseWriter, r *http.Request) {
 	// Signing in again ends the session the browser's cookie named, as
 	// the form login before the SPA did: the new cookie replaces it, so
 	// nothing could use it again.
-	if old := SessionToken(r); old != "" {
+	if old := sessioncookie.Token(r); old != "" {
 		if err := h.deps.Sessions.SignOut(r.Context(), old); err != nil {
 			h.deps.Log.Warn("sign out replaced session", "err", err)
 		}
 	}
-	setSessionCookie(w, token)
+	sessioncookie.Set(w, token)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -69,7 +71,7 @@ func (h *handler) signIn(w http.ResponseWriter, r *http.Request) {
 // its session alive, but notices within 30 s that it has ended. It reads
 // the cookie alone; the Admin Token has no session.
 func (h *handler) checkSession(w http.ResponseWriter, r *http.Request) {
-	if err := h.deps.Sessions.CheckSession(r.Context(), SessionToken(r)); err != nil {
+	if err := h.deps.Sessions.CheckSession(r.Context(), sessioncookie.Token(r)); err != nil {
 		h.writeError(w, err) // a 401 once the session has ended
 		return
 	}
@@ -79,10 +81,10 @@ func (h *handler) checkSession(w http.ResponseWriter, r *http.Request) {
 // signOut ends the browser's session, if it has one, and clears its
 // cookie.
 func (h *handler) signOut(w http.ResponseWriter, r *http.Request) {
-	if err := h.deps.Sessions.SignOut(r.Context(), SessionToken(r)); err != nil {
+	if err := h.deps.Sessions.SignOut(r.Context(), sessioncookie.Token(r)); err != nil {
 		h.writeError(w, err)
 		return
 	}
-	ClearSessionCookie(w)
+	sessioncookie.Clear(w)
 	w.WriteHeader(http.StatusNoContent)
 }

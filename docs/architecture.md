@@ -28,9 +28,12 @@ Inside, the code follows ports & adapters (hexagonal):
 ```
 
 Dependency rule: `domain` imports nothing internal. `service` imports only
-`domain`. Adapters import `service` and `domain`. Only `cmd/pantalan` imports
-everything. This keeps the deploy pipeline testable with fakes
-(`service/deployer_test.go`) and lets each adapter be replaced on its own.
+`domain`. Adapters import `service` and `domain`, never each other. Only
+`cmd/pantalan` imports everything. This keeps the deploy pipeline testable
+with fakes (`service/deployer_test.go`) and lets each adapter be replaced on
+its own. Small stdlib-only helpers that several adapters share and that
+import nothing internal (`execx`, `sessioncookie`) aren't adapters, and
+any adapter may import them.
 
 One exception, on purpose: the Node overview's reads skip the service
 layer. `internal/httpapi` declares the small interfaces it reads through
@@ -175,7 +178,8 @@ Auth surfaces on the one listener:
   `AdminService.CheckSession`, so checking never extends the session.
 - `service.AdminService` issues a `crypto/rand.Text()` token per sign-in
   and stores only its SHA-256 hex in `sessions`. The cookie, which
-  `internal/httpapi/cookie.go` sets, reads and clears, is
+  `internal/sessioncookie` sets, reads and clears for both `httpapi` (which
+  issues it) and `dashboard` (whose page gate reads it), is
   `__Host-pantalan_session; Path=/; Secure; HttpOnly; SameSite=Strict`, with
   no expiry: the server ends a session after 1 h idle or 24 h in all.
   `last_seen_at` is rewritten at most once a minute. Nothing is cached in
@@ -440,6 +444,7 @@ uploads and publishes last.
 | `internal/proxy` | Host-based reverse proxy |
 | `internal/queue` | In-process job queue |
 | `internal/execx` | Shared helpers for running external commands |
+| `internal/sessioncookie` | The Dashboard's session cookie (name, attributes, read, set, clear), shared by `httpapi` and `dashboard` so neither imports the other |
 | `internal/dashboard` | Serves the embedded SPA: `index.html` for every page behind the session gate, the hashed assets, the "frontend not built" page, and the security and cache headers |
 | `internal/nodeinfo` | Read-only Node information: host health from `/proc` and `statfs`, the background sampler's ring, Docker through the Engine API on its unix socket, and the container event ring fed by its `/events` stream |
 | `web` | The Dashboard SPA: its source in `web/app` (React, Vite, TypeScript) and the build in `web/dist`, which package `web` embeds into the binary |

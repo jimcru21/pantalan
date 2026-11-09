@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pantalan/pantalan/internal/httpapi"
 	"github.com/pantalan/pantalan/internal/service"
+	"github.com/pantalan/pantalan/internal/sessioncookie"
 )
 
 // Sessions checks the session cookie; service.AdminService provides it.
@@ -109,7 +109,7 @@ func (d *Dashboard) loginPage(w http.ResponseWriter, r *http.Request) {
 // signedIn reports whether r carries a live session, and clears a cookie
 // that names a dead one.
 func (d *Dashboard) signedIn(w http.ResponseWriter, r *http.Request) (bool, error) {
-	token := httpapi.SessionToken(r)
+	token := sessioncookie.Token(r)
 	if token == "" {
 		return false, nil
 	}
@@ -118,7 +118,7 @@ func (d *Dashboard) signedIn(w http.ResponseWriter, r *http.Request) (bool, erro
 	case err == nil:
 		return true, nil
 	case errors.Is(err, service.ErrNoSession):
-		httpapi.ClearSessionCookie(w)
+		sessioncookie.Clear(w)
 		return false, nil
 	}
 	return false, err

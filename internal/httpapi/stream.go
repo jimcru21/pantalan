@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pantalan/pantalan/internal/service"
+	"github.com/pantalan/pantalan/internal/sessioncookie"
 )
 
 // Both logs, the Deployment Log and the App Log, stream as Server-Sent
@@ -112,7 +113,7 @@ func (h *handler) streamContext(r *http.Request) (context.Context, context.Cance
 	if r.Header.Get("Authorization") != "" {
 		return ctx, cancel
 	}
-	token := SessionToken(r)
+	token := sessioncookie.Token(r)
 	tick := h.deps.After(sessionRecheck) // set before the stream opens
 	go func() {
 		defer cancel()

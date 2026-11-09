@@ -14,6 +14,7 @@ import (
 	"github.com/pantalan/pantalan/internal/domain"
 	"github.com/pantalan/pantalan/internal/httpapi"
 	"github.com/pantalan/pantalan/internal/service"
+	"github.com/pantalan/pantalan/internal/sessioncookie"
 	"github.com/pantalan/pantalan/internal/store/sqlite"
 )
 
@@ -177,7 +178,7 @@ func withToken(token string) option {
 
 // withSession sends token as the session cookie, as the browser does.
 func withSession(token string) option {
-	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: httpapi.CookieName, Value: token}) }
+	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: sessioncookie.Name, Value: token}) }
 }
 
 func withHeader(name, value string) option {
