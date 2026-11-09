@@ -75,6 +75,33 @@ type Runtime interface {
 	Upstream(ctx context.Context, containerID string, port int) (string, error)
 }
 
+// LogLine is one piece of what a container wrote: normally a whole line,
+// its line end included. A line too long for Docker to log at once comes
+// in pieces, each with its own time, and only the last has the line end.
+type LogLine struct {
+	Time   time.Time // when the container wrote it, as Docker recorded it
+	Stderr bool      // written to stderr, not stdout
+	Text   string
+}
+
+// LogStart is where following a container's output starts: at the first
+// line written at or after Since when it is set, or else at its last
+// Tail lines.
+type LogStart struct {
+	Tail  int
+	Since time.Time
+}
+
+// ContainerLogs reads what containers write to stdout and stderr.
+type ContainerLogs interface {
+	// FollowLogs sends the container's output from start on, oldest
+	// first, then each line as the container writes it. It returns nil
+	// once the container has stopped and everything it wrote is sent, an
+	// error wrapping domain.ErrNotFound when there is no such container,
+	// ctx's error when ctx ends, or send's error.
+	FollowLogs(ctx context.Context, containerID string, start LogStart, send func(LogLine) error) error
+}
+
 type HealthChecker interface {
 	// Wait blocks until upstream is serving or gives up with an error.
 	Wait(ctx context.Context, upstream string) error

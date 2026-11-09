@@ -254,6 +254,7 @@ type fakeRuntime struct {
 	mu         sync.Mutex
 	started    int
 	containers map[string]fakeContainer // by ID
+	output     fakeOutput               // what they write (app_log_fakes_test.go)
 }
 
 type fakeContainer struct {
@@ -286,6 +287,7 @@ func (r *fakeRuntime) Remove(_ context.Context, idOrName string) error {
 	for id, c := range r.containers {
 		if id == idOrName || c.name == idOrName {
 			delete(r.containers, id)
+			r.output.changed()
 			return nil
 		}
 	}

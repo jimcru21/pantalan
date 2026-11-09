@@ -211,6 +211,31 @@ plain text; `…/log/stream` streams it:
 ANSI escape codes are stripped and `\r` line ends become `\n` on the
 server, in both forms.
 
+### App Log
+
+What the live Deployment's container writes to stdout and stderr is the
+App Log. `service.AppLogs` finds the App's live Deployment and follows its
+container through the `service.ContainerLogs` port, which
+`nodeinfo.Docker.FollowLogs` implements with the Engine API's
+`containers/{id}/logs` (`follow`, `timestamps`, `tail=200` or `since`),
+splitting its multiplexed stdout/stderr frames apart.
+`GET /api/v1/apps/{id}/log/stream` streams it, ANSI stripped as above:
+
+- each event is one line, stdout and stderr alike, and its `id` is
+  `<deployment-id>@<unix-nanoseconds>` (Docker's timestamp of the line), so
+  a reconnect's `Last-Event-ID` follows on with `since` from there;
+- a first connect starts with the last 200 lines;
+- when the container stops while its Deployment is still live, Docker
+  restarts it and the stream follows it again (after 1 s, from the last
+  line sent);
+- once the Deployment isn't live any more (a new one replaced it) the
+  stream sends `done` with data `replaced` and ends; a reconnect whose
+  `Last-Event-ID` names an earlier Deployment gets the same;
+- an App with no live Deployment gets `done` with data
+  `no-live-deployment` at once. Both endings are events rather than HTTP
+  errors, because `EventSource` can't read a status and the Dashboard
+  takes a refused stream to mean the session ended.
+
 ### Node overview
 
 The Dashboard's home page shows the Node's health, read by
@@ -226,7 +251,8 @@ The Dashboard's home page shows the Node's health, read by
   following calls use, capped at `nodeinfo.MaxAPIVersion`; a failed ping
   is "Docker unreachable". It uses `info`, `containers/json`, one-shot
   `containers/{id}/stats` (at most 8 in flight across all requests),
-  `images/json`, `version` and `system/df`. These are reads only:
+  `images/json`, `version` and `system/df`, and follows
+  `containers/{id}/logs` for the App Log. These are reads only:
   container lifecycle for deployments stays on the docker CLI (see
   Decisions).
 - **Docker events**: `nodeinfo.EventStream` holds one `/events` stream
