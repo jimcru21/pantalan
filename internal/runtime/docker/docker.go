@@ -81,3 +81,33 @@ func (r *Runtime) Remove(ctx context.Context, containerID string) error {
 	_, err := execx.Output(exec.CommandContext(ctx, r.bin, "rm", "--force", containerID))
 	return err
 }
+
+// RemoveLabelled force-removes the containers labelled key=value, running
+// or not.
+func (r *Runtime) RemoveLabelled(ctx context.Context, key, value string) error {
+	out, err := execx.Output(exec.CommandContext(ctx, r.bin, "ps", "--all", "--quiet", "--no-trunc", "--filter", "label="+key+"="+value))
+	if err != nil {
+		return fmt.Errorf("list containers: %w", err)
+	}
+	ids := strings.Fields(out)
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err = execx.Output(exec.CommandContext(ctx, r.bin, append([]string{"rm", "--force"}, ids...)...))
+	return err
+}
+
+// RemoveImages removes repository's tags by name, so an image that is
+// also tagged as something else keeps that tag.
+func (r *Runtime) RemoveImages(ctx context.Context, repository string) error {
+	out, err := execx.Output(exec.CommandContext(ctx, r.bin, "image", "ls", "--filter", "reference="+repository, "--format", "{{.Repository}}:{{.Tag}}"))
+	if err != nil {
+		return fmt.Errorf("list images: %w", err)
+	}
+	tags := strings.Fields(out)
+	if len(tags) == 0 {
+		return nil
+	}
+	_, err = execx.Output(exec.CommandContext(ctx, r.bin, append([]string{"image", "rm"}, tags...)...))
+	return err
+}

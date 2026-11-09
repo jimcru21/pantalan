@@ -9,6 +9,9 @@ the README has the two-minute version.
 - Go 1.26+
 - Docker
 - git
+- Node 24.22.2 with npm (the version in `web/app/.nvmrc`), for the
+  Dashboard SPA in `web/app` and for `make check`. `go build` and `go test`
+  don't need it, so Go-only work never waits on Node.
 
 Apps build from the Dockerfile at the root of their repository. Nixpacks
 isn't part of a Node: the installer doesn't install it, so an app with
@@ -67,12 +70,21 @@ docker compose up
 
 The first start builds the dev image, then prints the Dashboard URL, the
 dev Admin (`dev`) and its password (shown once) and the Admin Token. Sign
-in at https://localhost:8443 and accept the browser's warning about the
-self-signed certificate. Edit any `.go`, template, CSS, JS, SVG or
-migration file and Pantalan rebuilds and restarts within seconds
-([air](https://github.com/air-verse/air) watches the checkout): refresh the
-browser to see it. A change that doesn't compile prints the error and keeps
-the last good build running.
+in at https://localhost:5173 and accept the browser's warning about the
+self-signed certificate. That is the Dashboard, the React SPA in `web/app`
+(ADR 0003), on Vite's dev server with Pantalan's certificate and `/api`
+proxied to Pantalan on https://localhost:8443. Edits under `web/app/src`
+show up in the open page at once (hot reload), with no refresh. Edit any
+`.go` or migration file and Pantalan rebuilds and restarts within seconds
+([air](https://github.com/air-verse/air) watches the checkout). A change
+that doesn't compile prints the error and keeps the last good build
+running.
+
+8443 itself serves the Dashboard embedded in the binary, which is only
+there once `make web` has built it into `web/dist` (air then rebuilds);
+until then it serves a "frontend not built" page. Vite serves the SPA for
+every path and doesn't send the CSP, so the page gate and the CSP are
+only checked against the built binary.
 
 Apps you deploy run in the stack's own Docker daemon (Docker-in-Docker, the
 `docker` service), not in your machine's Docker, and are reachable through
@@ -82,6 +94,7 @@ header (`curl -H 'Host: myapp.example.com' http://localhost:8080`).
 ```sh
 docker compose up -d                                             # in the background
 docker compose logs -f pantalan                                  # follow the build and server output
+docker compose logs -f web                                       # the SPA dev server's output
 docker compose exec pantalan pantalan admin reset-password       # a new Admin password
 docker compose exec pantalan cat /data/dev-secrets.env           # the Admin Token and webhook secret
 docker compose down                                              # stop (data, apps and caches stay)
@@ -103,10 +116,11 @@ PANTALAN_DEV_BIND=0.0.0.0
 PANTALAN_DEV_HOST=203.0.113.10   # the VPS's public IP, for the printed URLs
 ```
 
-then `docker compose up -d` and open `https://<public-ip>:8443`. Docker's
-published ports bypass ufw, so the provider's firewall or security group is
-what decides who can reach them: open 8443 (and 8080 to try the app proxy),
-ideally only to your own IP. The Admin Token and webhook secret are random,
+then `docker compose up -d` and open `https://<public-ip>:5173` (the
+API is on `https://<public-ip>:8443`). Docker's published ports bypass
+ufw, so the provider's firewall or security group is what decides who can
+reach them: open 8443 and 5173 (and 8080 to try the app proxy), ideally
+only to your own IP. The Admin Token and webhook secret are random,
 made on first start and kept in the data volume, because anyone who can
 reach the API with the token can deploy containers on the VPS.
 
@@ -114,14 +128,94 @@ The `docker` service runs privileged, which Docker-in-Docker needs.
 
 ### Without Docker
 
-With Go 1.26+, git and Docker on your machine:
+With Go 1.26+, git and Docker on your machine (and Node for the SPA):
 
 ```sh
-make run      # Dashboard + API on https://localhost:8443, app proxy on :8080
-make check    # vet + race tests + gofmt
+make run      # API (and the Dashboard built by make web) on https://localhost:8443, app proxy on :8080
+make web-dev  # the SPA with hot reload on https://localhost:5173, /api proxied to make run
+make check    # Go: vet, race tests, gofmt; SPA: type check, ESLint, Prettier, tests
 ```
 
 `make run` doesn't rebuild on changes: stop it and run it again.
+`make web-dev` uses the certificate `make run` keeps in `./data/tls`, so
+start `make run` first.
+
+### The Dashboard SPA
+
+The Dashboard's frontend is a React, Vite and TypeScript SPA in `web/app`
+([ADR 0003](adr/0003-react-spa-dashboard.md)), styled with Tailwind v4 and
+shadcn/ui (`components.json`; add a component with
+`npx shadcn@latest add <name>` in `web/app`). Pages are routed by React
+Router and fetch through TanStack Query; log streams use `EventSource`.
+The CSP forbids `<style>` elements, so nothing may inject one: no CSS-in-JS,
+no shadcn/ui chart wrapper. React's `style` prop is fine.
+
+```sh
+make web-deps   # npm ci --ignore-scripts, from the lockfile (make does it when needed)
+make web-check  # tsc, ESLint, Prettier and the tests (part of make check)
+make web        # build into web/dist, which the binary embeds
+make build      # make web, then go build: bin/pantalan with the SPA embedded
+make types      # regenerate the API's TypeScript types from the Go structs
+```
+
+In `web/app`, `npm run format` fixes formatting and `npx vitest` runs the
+tests in watch mode.
+
+**Tests** render the whole app at a route with Vitest and React Testing
+Library, and stub only `fetch` and `EventSource`
+(`src/test/render.tsx` and `src/test/network.ts`). No hook or component is
+mocked. A request no test handler answers fails the test, except the
+shell's session check (`GET /api/v1/sessions/current`), which `renderApp`
+answers 204 unless the test's handlers say otherwise. Fixtures are typed
+by the generated API types (`src/test/fixtures.ts`).
+
+**Smoke tests** in `web/app/e2e` drive Chromium with
+[Playwright](https://playwright.dev) against the binary built with its
+embedded frontend. They're the only tests where the embedding, the session
+cookie, the cross-origin check and the CSP work together. The suite starts
+`bin/pantalan` itself, on free loopback ports with a fresh data dir and an
+Admin made by `pantalan admin create`, and stops it at the end. Every test
+fails if the browser's console reports a CSP violation. CI runs them in
+the `smoke` job; they aren't part of `make check`.
+
+```sh
+make smoke-docker   # make build, then the suite in Playwright's Docker image
+make smoke          # on this machine: make build, then npm run smoke in web/app
+```
+
+`make smoke` needs Chromium and its system libraries, installed once with
+`npx playwright install --with-deps chromium` in `web/app`. Without them,
+use `make smoke-docker`, which runs the suite in
+`mcr.microsoft.com/playwright` at the version in `package.json`, as your
+own user. One test deploys a real App (a `busybox` web server committed to
+a throwaway git repo), watches its Deployment Log stream to `done` and then
+reads the live container's App Log on the App's page, so
+the suite needs `git` and Docker: `make smoke-docker` hands the container
+this machine's Docker socket and `docker` CLI and runs it on the host
+network. The test removes the App's container and image afterwards. Off CI
+it is skipped when `docker` doesn't answer. With the binary already built, `npm run smoke -- --headed` (or
+`--ui`, `-g <test name>`) in `web/app` runs it again. `PANTALAN_BIN` points
+it at another binary. A failed test keeps a trace in `web/app/test-results`:
+open it with `npx playwright show-trace <trace.zip>`.
+
+**API types** in `web/app/src/api/generated` are generated from the Go
+structs by [tygo](https://github.com/gzuidhof/tygo), a Go tool dependency
+configured in `tygo.yaml`. They're committed, and CI fails when they're
+stale: after changing a response struct, or adding one to `tygo.yaml`, run
+`make types` and commit the result. Each Go package has one entry and one
+output file: tygo silently ignores a second entry for the same package, so
+add a new file to the package's `include_files` instead. Exported
+constants come through too: a string the SPA must match exactly, like a
+stream's event names, belongs in a Go constant the SPA imports, never
+copied by hand.
+
+### Frontend dependencies
+
+CI and the release install with `npm ci --ignore-scripts`, so no package
+runs code at install. Dependabot opens one grouped npm update a week. A
+pull request that adds a runtime dependency (one in `dependencies`, which
+ends up in the bundle) must say why it's needed and why the platform or an
+existing dependency won't do. Dev tooling in `devDependencies` is exempt.
 
 ### Test the installer
 
@@ -185,7 +279,9 @@ curl -sk -X POST $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN
 
 # Watch status and logs
 curl -sk $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN"
-curl -sk $API/deployments/<deployment-id>/logs -H "Authorization: Bearer $TOKEN"
+curl -sk $API/apps/<app-id>/deployments/<deployment-id>/log -H "Authorization: Bearer $TOKEN"
+curl -skN $API/apps/<app-id>/deployments/<deployment-id>/log/stream -H "Authorization: Bearer $TOKEN"
+curl -skN $API/apps/<app-id>/log/stream -H "Authorization: Bearer $TOKEN"  # App Log
 
 # Hit the app through the proxy
 curl -s -H "Host: hello.localhost" localhost:8080
@@ -212,7 +308,7 @@ internal/domain/        entities and rules
 internal/service/       use cases + port interfaces
 internal/httpapi/       REST API, webhooks, middleware
 internal/dashtls/       Dashboard certificate + HTTPS listener
-internal/dashboard/     Dashboard login, sessions and pages (html/template + htmx)
+internal/dashboard/     serves the embedded SPA: page gate, assets, headers
 internal/store/sqlite/  SQLite repositories + migrations
 internal/source/        git
 internal/build/         dockerfile, nixpacks
@@ -220,6 +316,10 @@ internal/runtime/docker container lifecycle
 internal/health/        readiness probe
 internal/proxy/         reverse proxy
 internal/queue/         deploy job queue
-web/                    Dashboard templates and static files, embedded (no build step)
+web/                    embeds web/dist into the binary (web/embed.go)
+web/app/                the Dashboard SPA (React, Vite, TypeScript)
+web/app/e2e/            Playwright smoke tests against the built binary (make smoke)
+web/dist/               its build (make web), gitignored but for a placeholder
+tygo.yaml               API types generated into web/app/src/api/generated (make types)
 docs/                   architecture notes
 ```

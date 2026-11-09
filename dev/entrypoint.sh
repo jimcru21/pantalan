@@ -53,7 +53,8 @@ esac
 cat <<EOF
 
   Pantalan dev stack
-  Dashboard     https://${PANTALAN_DEV_HOST}:${PANTALAN_DEV_DASHBOARD_PORT}  (self-signed: accept the browser's warning)
+  Dashboard     https://${PANTALAN_DEV_HOST}:${PANTALAN_DEV_WEB_PORT}  (Vite, hot reload; self-signed: accept the browser's warning)
+  API           https://${PANTALAN_DEV_HOST}:${PANTALAN_DEV_DASHBOARD_PORT}  (also the embedded Dashboard, once make web has built it)
   App proxy     http://${PANTALAN_DEV_HOST}:${PANTALAN_DEV_PROXY_PORT}
   Admin         $(./tmp/pantalan admin show)
 EOF
@@ -66,7 +67,8 @@ cat <<EOF
   Admin Token   $PANTALAN_ADMIN_TOKEN
   Secrets file  $SECRETS (in the data volume)
 
-  Edit a file and the server rebuilds and restarts; refresh the browser.
+  Edit a Go file and the server rebuilds and restarts; edits under
+  web/app/src show up in the Dashboard at once.
 
 EOF
 

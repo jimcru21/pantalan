@@ -158,7 +158,18 @@ curl -sk $API/apps \
 
 The response includes the app's `id`. Optional fields: `branch` (defaults to
 `main`) and `env`, an object of environment variables such as
-`{"DATABASE_URL": "..."}`.
+`{"DATABASE_URL": "..."}`. App responses list only the names of the env
+vars (`env_names`), never their values.
+
+To change env vars later, send them as the text of a `.env` file:
+`KEY=value` lines, with blank lines and `#` comment lines ignored. A bad
+line is refused with its line number. They take effect on the next
+Deployment:
+
+```sh
+jq -Rs '{env: .}' .env | curl -sk -X PUT $API/apps/<app-id>/env \
+  -H "Authorization: Bearer $TOKEN" -d @-
+```
 
 **4. Deploy it:**
 
@@ -173,7 +184,9 @@ as the body.
 
 ```sh
 curl -sk $API/apps/<app-id>/deployments -H "Authorization: Bearer $TOKEN"     # status
-curl -sk $API/deployments/<deployment-id>/logs -H "Authorization: Bearer $TOKEN"  # Deployment Log
+curl -sk $API/apps/<app-id>/deployments/<deployment-id>/log -H "Authorization: Bearer $TOKEN"  # Deployment Log
+curl -skN $API/apps/<app-id>/deployments/<deployment-id>/log/stream -H "Authorization: Bearer $TOKEN"  # ...followed live
+curl -skN $API/apps/<app-id>/log/stream -H "Authorization: Bearer $TOKEN"  # App Log, once it's live
 ```
 
 A Deployment goes `queued` → `building` → `starting` → `live`. If the new
@@ -192,12 +205,25 @@ All under `/api/v1`, with `Authorization: Bearer <Admin Token>`.
 
 | Method | Path | What it does |
 |---|---|---|
-| `GET` | `/apps` | List apps |
+| `GET` | `/apps` | List apps, each with its latest Deployment (`latest_deployment`, missing before the first) |
 | `POST` | `/apps` | Create an app |
 | `GET` | `/apps/{id}` | Get one app |
+| `PUT` | `/apps/{id}` | Change an app's settings (`name`, `repo_url`, `branch`, `build_type`, `domain`, `port`; env vars, ID and creation time stay). Takes effect on the next Deployment, but a new `domain` serves the live Deployment at once and the old one stops serving; it doesn't start one |
+| `DELETE` | `/apps/{id}` | Delete an app: its container, images, route, Deployment Logs and Deployments go too (`204`; `409` while a Deployment of it is queued, building or starting) |
+| `GET` | `/apps/{id}/env` | An app's env vars, as dotenv text: `{"env": "KEY=value\n..."}`, sorted by name. The only response with env values |
+| `PUT` | `/apps/{id}/env` | Replace an app's env vars (`{"env": "<dotenv text>"}`; blank and `#` lines ignored, a bad line refused with its line number). Takes effect on the next Deployment; it doesn't start one |
 | `GET` | `/apps/{id}/deployments` | List an app's Deployments |
 | `POST` | `/apps/{id}/deployments` | Deploy (body optional: `{"ref": "..."}`) |
-| `GET` | `/deployments/{id}/logs` | A Deployment's log |
+| `GET` | `/apps/{id}/deployments/{deployment-id}` | One Deployment: its ref, commit, image, timing, status and error |
+| `POST` | `/apps/{id}/deployments/{deployment-id}/redeploy` | Roll back: a new Deployment of that Deployment's commit (`409` if it never resolved one) |
+| `GET` | `/apps/{id}/deployments/{deployment-id}/log` | A Deployment's whole Deployment Log, as plain text |
+| `GET` | `/apps/{id}/deployments/{deployment-id}/log/stream` | The Deployment Log as Server-Sent Events: the last 1 MiB, then live until the Deployment is live or failed (`done`, data: the status; `deleted` if its App is deleted meanwhile). Each event's `id` is a byte offset; send it back as `Last-Event-ID` to resume |
+| `GET` | `/apps/{id}/log/stream` | The App Log (the live container's stdout and stderr) as Server-Sent Events: the last 200 lines, then live. Ends with `done`: `replaced` once a new Deployment replaces the container, or at once `no-live-deployment`. Send the last event's `id` back as `Last-Event-ID` to go on after it |
+| `GET` | `/deployments/{id}/logs` | The Deployment Log by the Deployment's ID alone (older address, kept for scripts): byte for byte as written, colour codes and `\r` included |
+
+Errors answer `{"error": "..."}`. When the error is about one field of the
+body (a `400`, or a `409` for a domain another app has), it also names it:
+`{"error": "port must be between 1 and 65535", "field": "port"}`.
 
 `GET /healthz` needs no credentials and answers `200` when the service is up.
 
@@ -314,13 +340,14 @@ docker compose up
 ```
 
 It prints the dev Admin's password and Admin Token, serves the Dashboard on
-https://localhost:8443, and rebuilds within seconds whenever you save a
-file. Apps you deploy are served at http://localhost:8080.
+https://localhost:5173 with hot reload, and rebuilds the server within
+seconds whenever you save a Go file. Apps you deploy are served at
+http://localhost:8080.
 
 Before opening a pull request:
 
 ```sh
-make check   # go vet, race tests and gofmt
+make check   # go vet, race tests and gofmt, plus the SPA's type check, linters and tests (needs Node)
 ```
 
 Commit titles follow [Conventional Commits](https://www.conventionalcommits.org/)

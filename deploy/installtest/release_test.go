@@ -109,6 +109,10 @@ func buildReleases(src, dir string, tags []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	npm, err := fakeNPM(filepath.Join(filepath.Dir(src), "fake-npm"))
+	if err != nil {
+		return err
+	}
 	git := func(args ...string) error {
 		_, err := run(ctx, src, nil, "git", append([]string{
 			"-c", "user.name=installtest", "-c", "user.email=installtest@invalid",
@@ -131,11 +135,29 @@ func buildReleases(src, dir string, tags []string) error {
 			}
 		}
 		// The script release.yml builds the real release with.
-		if _, err := run(ctx, src, nil, "sh", "deploy/release.sh", "build", tag, filepath.Join(dir, tag)); err != nil {
+		pathEnv := []string{"PATH=" + npm + string(os.PathListSeparator) + os.Getenv("PATH")}
+		if _, err := run(ctx, src, pathEnv, "sh", "deploy/release.sh", "build", tag, filepath.Join(dir, tag)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// fakeNPM writes, into dir, an npm that stands in for the frontend build
+// release.sh runs: the installer never looks at the Dashboard, so the
+// harness needs neither Node nor the network. It returns dir.
+func fakeNPM(dir string) (string, error) {
+	const script = `#!/bin/sh
+case "$*" in
+"ci --ignore-scripts") ;;
+"run build") mkdir -p ../dist && echo '<!doctype html><title>installtest</title>' >../dist/index.html ;;
+*) echo "fake npm: unexpected npm $*" >&2; exit 1 ;;
+esac
+`
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, os.WriteFile(filepath.Join(dir, "npm"), []byte(script), 0o755)
 }
 
 // corruptRelease copies the release at good to dir, then alters the Node's

@@ -17,11 +17,16 @@ import (
 type Proxy struct {
 	log    *slog.Logger
 	mu     sync.RWMutex
-	routes map[string]*httputil.ReverseProxy
+	routes map[string]route // by lowercased host
+}
+
+type route struct {
+	upstream string
+	proxy    *httputil.ReverseProxy
 }
 
 func New(log *slog.Logger) *Proxy {
-	return &Proxy{log: log, routes: map[string]*httputil.ReverseProxy{}}
+	return &Proxy{log: log, routes: map[string]route{}}
 }
 
 // SetRoute sends requests for host to upstream (host:port). Replacing a route
@@ -42,7 +47,7 @@ func (p *Proxy) SetRoute(host, upstream string) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.routes[strings.ToLower(host)] = rp
+	p.routes[strings.ToLower(host)] = route{upstream: upstream, proxy: rp}
 }
 
 func (p *Proxy) RemoveRoute(host string) {
@@ -51,17 +56,42 @@ func (p *Proxy) RemoveRoute(host string) {
 	delete(p.routes, strings.ToLower(host))
 }
 
+// RemoveRoutesTo removes every route to upstream, whatever its host.
+func (p *Proxy) RemoveRoutesTo(upstream string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for host, r := range p.routes {
+		if r.upstream == upstream {
+			delete(p.routes, host)
+		}
+	}
+}
+
+// MoveRoute serves from's upstream under to instead, replacing any route
+// to had, in one step. It does nothing when from has no route.
+func (p *Proxy) MoveRoute(from, to string) {
+	from, to = strings.ToLower(from), strings.ToLower(to)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	r, ok := p.routes[from]
+	if !ok || from == to {
+		return
+	}
+	delete(p.routes, from)
+	p.routes[to] = r
+}
+
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host, _, err := net.SplitHostPort(r.Host)
 	if err != nil {
 		host = r.Host // no port in the Host header
 	}
 	p.mu.RLock()
-	rp, ok := p.routes[strings.ToLower(host)]
+	rt, ok := p.routes[strings.ToLower(host)]
 	p.mu.RUnlock()
 	if !ok {
 		http.Error(w, "no app is configured for this domain", http.StatusNotFound)
 		return
 	}
-	rp.ServeHTTP(w, r)
+	rt.proxy.ServeHTTP(w, r)
 }

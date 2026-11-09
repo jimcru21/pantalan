@@ -1,7 +1,7 @@
 # air's config for the Docker dev stack (compose.yaml): rebuild and restart
 # `pantalan serve` whenever a file the binary is made of changes. The
-# Dashboard's templates, static files and migrations are embedded, so they
-# need a rebuild too.
+# migrations and the built Dashboard in web/dist are embedded, so they need
+# a rebuild too.
 root = "."
 # A volume in compose.yaml, so builds don't write into the checkout.
 tmp_dir = "tmp"
@@ -9,8 +9,10 @@ tmp_dir = "tmp"
 [build]
 cmd = "go build -o ./tmp/pantalan ./cmd/pantalan"
 entrypoint = ["./tmp/pantalan", "serve"]
-include_ext = ["go", "html", "css", "js", "svg", "sql"]
-exclude_dir = [".git", ".claude", "bin", "data", "tmp", "deploy", "docs"]
+include_ext = ["go", "sql", "html", "css", "js"]
+# web/app is the SPA's source: the web service's Vite reloads it. A `make
+# web` into web/dist rebuilds the binary with it.
+exclude_dir = [".git", ".claude", "bin", "data", "tmp", "deploy", "docs", "web/app"]
 exclude_regex = ["_test\\.go$"]
 # Saving several files at once is one rebuild, not several.
 delay = 300

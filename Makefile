@@ -1,8 +1,11 @@
 BIN := bin/pantalan
 
-.PHONY: build run test vet fmt check shellcheck installtest installtest-vm
+.PHONY: build run test vet fmt check gofmt-check types types-check web-deps web-check web web-dev smoke smoke-docker shellcheck installtest installtest-vm
 
-build:
+# The binary with the SPA embedded: the frontend first, then Go. A plain
+# `go build` without Node also works; that binary serves a "frontend not
+# built" page instead of the Dashboard.
+build: web
 	go build -o $(BIN) ./cmd/pantalan
 
 # Local dev: Dashboard on https://localhost:8443 (self-signed, under
@@ -22,11 +25,73 @@ vet:
 	go vet ./...
 	go vet -tags installtest ./deploy/installtest/
 
-fmt:
-	gofmt -w .
+# Every Go file outside web/app's node_modules, which go.mod's ignore
+# keeps out of ./... but gofmt doesn't know about.
+GOFILES = find . -name '*.go' -not -path './web/app/node_modules/*'
 
-check: vet test
-	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:"; gofmt -l .; exit 1)
+fmt:
+	$(GOFILES) -exec gofmt -w {} +
+
+# The one gate: the Go checks, then the frontend's type check, linters and
+# tests. The Go-only targets (build, test, vet) never need Node.
+check: vet test gofmt-check web-check
+
+gofmt-check:
+	@out=$$($(GOFILES) -exec gofmt -l {} +); test -z "$$out" || (echo "gofmt needed:"; echo "$$out"; exit 1)
+
+# The API's TypeScript types, generated from the Go structs (tygo.yaml).
+types:
+	go tool tygo generate
+
+# For CI: fails when the committed generated types aren't what the Go
+# structs generate now.
+types-check: types
+	@test -z "$$(git status --porcelain -- web/app/src/api/generated)" || \
+		(echo "stale API types: run make types and commit the result"; git status --porcelain -- web/app/src/api/generated; git diff -- web/app/src/api/generated; exit 1)
+
+# The frontend's dependencies, from the lockfile, with install scripts off
+# so no package runs code at install. Reinstalls when the lockfile changes.
+WEB_DEPS = web/app/node_modules/.package-lock.json
+$(WEB_DEPS): web/app/package-lock.json
+	cd web/app && npm ci --ignore-scripts
+	@touch $@
+web-deps: $(WEB_DEPS)
+
+web-check: $(WEB_DEPS)
+	cd web/app && npm run typecheck && npm run lint && npm test
+
+# The SPA, built into web/dist, which the binary embeds (web/embed.go).
+web: $(WEB_DEPS)
+	cd web/app && npm run build
+
+# The Playwright smoke tests (web/app/e2e) against the binary with its
+# embedded frontend: they start bin/pantalan on free loopback ports with a
+# fresh data dir. They need Chromium and its system libraries, installed
+# once with `cd web/app && npx playwright install --with-deps chromium`;
+# smoke-docker needs neither.
+smoke: build
+	cd web/app && npm run smoke
+
+# The smoke tests in Playwright's own image, which has Chromium and its
+# libraries, at the version in package.json. The binary is built static so
+# it runs in the image. A Deployment needs Docker: the container gets this
+# machine's socket and docker CLI, and shares its network, so the binary
+# reaches the App's published port on 127.0.0.1.
+PLAYWRIGHT_VERSION = $(shell node -p "require('./web/app/package.json').devDependencies['@playwright/test']")
+DOCKER_SOCKET = /var/run/docker.sock
+smoke-docker:
+	CGO_ENABLED=0 $(MAKE) build
+	docker run --rm --init --ipc=host --network host --user "$$(id -u):$$(id -g)" -e HOME=/tmp -e CI \
+		--group-add "$$(stat -c %g $(DOCKER_SOCKET))" -v "$(DOCKER_SOCKET):/var/run/docker.sock" \
+		-v "$$(command -v docker):/usr/local/bin/docker:ro" \
+		-v "$(CURDIR):/repo" -w /repo/web/app \
+		mcr.microsoft.com/playwright:v$(PLAYWRIGHT_VERSION)-noble npm run smoke
+
+# The SPA's dev server with hot reload, beside `make run`, on
+# https://localhost:5173 (with make run's certificate once it has made
+# one), proxying /api to it.
+web-dev: $(WEB_DEPS)
+	cd web/app && npm run dev
 
 shellcheck:
 	shellcheck deploy/install.sh deploy/release.sh dev/entrypoint.sh dev/setup-vps.sh

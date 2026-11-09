@@ -58,12 +58,13 @@ func (m Memory) SwapUsed() uint64 { return m.SwapTotal - min(m.SwapFree, m.SwapT
 type Disk struct {
 	Path        string
 	Total, Free uint64
-	fsid        syscall.Fsid
+	// FSID is the statfs filesystem ID, which SameFilesystem compares.
+	FSID syscall.Fsid
 }
 
 // SameFilesystem reports whether d and o are the same filesystem, by
 // their statfs filesystem IDs.
-func (d Disk) SameFilesystem(o Disk) bool { return d.fsid == o.fsid }
+func (d Disk) SameFilesystem(o Disk) bool { return d.FSID == o.FSID }
 
 // readDisk is statfs on path.
 func readDisk(statfs func(string, *syscall.Statfs_t) error, path string) (Disk, error) {
@@ -72,7 +73,7 @@ func readDisk(statfs func(string, *syscall.Statfs_t) error, path string) (Disk, 
 		return Disk{}, fmt.Errorf("statfs %s: %w", path, err)
 	}
 	bsize := uint64(st.Bsize)
-	return Disk{Path: path, Total: uint64(st.Blocks) * bsize, Free: uint64(st.Bavail) * bsize, fsid: st.Fsid}, nil
+	return Disk{Path: path, Total: uint64(st.Blocks) * bsize, Free: uint64(st.Bavail) * bsize, FSID: st.Fsid}, nil
 }
 
 // diskPath is the filesystem the host tiles report on.

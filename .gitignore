@@ -2,3 +2,8 @@
 /data/
 .env
 /tmp/
+/web/app/node_modules/
+/web/app/test-results/
+/web/app/playwright-report/
+/web/dist/*
+!/web/dist/.gitkeep

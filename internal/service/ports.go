@@ -13,6 +13,17 @@ import (
 
 type AppRepository interface {
 	CreateApp(ctx context.Context, app domain.App) error
+	// UpdateApp replaces the settings (name, repository, branch, build
+	// type, domain, port) of the App with app.ID, keeping its env vars and
+	// creation time. It returns domain.ErrNotFound when there is no such
+	// App, and a domain.ErrConflict when another App has the domain.
+	UpdateApp(ctx context.Context, app domain.App) error
+	// SetAppEnv replaces the env vars of the App with ID id. It returns
+	// domain.ErrNotFound when there is no such App.
+	SetAppEnv(ctx context.Context, id string, env map[string]string) error
+	// DeleteApp deletes the App with ID id and its Deployments, all at
+	// once. It returns domain.ErrNotFound when there is no such App.
+	DeleteApp(ctx context.Context, id string) error
 	GetApp(ctx context.Context, id string) (domain.App, error)
 	ListApps(ctx context.Context) ([]domain.App, error)
 	FindAppsByRepo(ctx context.Context, repoURL, branch string) ([]domain.App, error)
@@ -23,6 +34,9 @@ type DeploymentRepository interface {
 	SaveDeployment(ctx context.Context, dep domain.Deployment) error
 	GetDeployment(ctx context.Context, id string) (domain.Deployment, error)
 	ListDeployments(ctx context.Context, appID string) ([]domain.Deployment, error)
+	// LatestDeployments returns the newest deployment of each app that
+	// has any, all at once.
+	LatestDeployments(ctx context.Context) ([]domain.Deployment, error)
 	// LiveDeployment returns domain.ErrNotFound when the app has nothing live.
 	LiveDeployment(ctx context.Context, appID string) (domain.Deployment, error)
 }
@@ -62,6 +76,39 @@ type Runtime interface {
 	// Upstream returns the host:port the container's port is published on
 	// now. It changes when Docker restarts the container.
 	Upstream(ctx context.Context, containerID string, port int) (string, error)
+	// RemoveLabelled force-removes every container labelled key=value. It
+	// succeeds when there is none.
+	RemoveLabelled(ctx context.Context, key, value string) error
+	// RemoveImages removes every tag of repository, and so each image
+	// that has no other tag. It succeeds when there is none.
+	RemoveImages(ctx context.Context, repository string) error
+}
+
+// LogLine is one piece of what a container wrote: normally a whole line,
+// its line end included. A line too long for Docker to log at once comes
+// in pieces, each with its own time, and only the last has the line end.
+type LogLine struct {
+	Time   time.Time // when the container wrote it, as Docker recorded it
+	Stderr bool      // written to stderr, not stdout
+	Text   string
+}
+
+// LogStart is where following a container's output starts: at the first
+// line written at or after Since when it is set, or else at its last
+// Tail lines.
+type LogStart struct {
+	Tail  int
+	Since time.Time
+}
+
+// ContainerLogs reads what containers write to stdout and stderr.
+type ContainerLogs interface {
+	// FollowLogs sends the container's output from start on, oldest
+	// first, then each line as the container writes it. It returns nil
+	// once the container has stopped and everything it wrote is sent, an
+	// error wrapping domain.ErrNotFound when there is no such container,
+	// ctx's error when ctx ends, or send's error.
+	FollowLogs(ctx context.Context, containerID string, start LogStart, send func(LogLine) error) error
 }
 
 type HealthChecker interface {
@@ -72,6 +119,11 @@ type HealthChecker interface {
 type Router interface {
 	SetRoute(host, upstream string)
 	RemoveRoute(host string)
+	// RemoveRoutesTo removes every route to upstream, whatever its host.
+	RemoveRoutesTo(upstream string)
+	// MoveRoute serves what from serves under to instead, in one step.
+	// It does nothing when from has no route.
+	MoveRoute(from, to string)
 }
 
 // Scheduler hands a queued deployment to whatever runs it.

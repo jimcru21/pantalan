@@ -153,25 +153,23 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, wo
 		<-eventsDone
 	}()
 
-	apps := service.NewAppService(store)
-	dash, err := dashboard.New(dashboard.Deps{
-		Auth:         admins,
-		Host:         sampler,
-		Docker:       dockerAPI,
-		Events:       events,
-		Apps:         apps,
-		Templates:    web.Templates(),
-		Static:       web.Static(),
-		AssetVersion: assetVersion(bin, web.Static()),
-		Hostname:     hostname,
-		Log:          log,
+	apps := service.NewAppService(store, deployer)
+	dash := dashboard.New(dashboard.Deps{
+		Sessions: admins,
+		Files:    web.Dist(),
+		Log:      log,
 	})
-	if err != nil {
-		return err
-	}
 	api := httpapi.NewHandler(httpapi.Deps{
 		Apps:          apps,
 		Deployer:      deployer,
+		AppLogs:       service.NewAppLogs(service.AppLogDeps{Apps: store, Deployments: store, Containers: dockerAPI}),
+		Sessions:      admins,
+		Hostname:      hostname,
+		Host:          sampler,
+		Docker:        dockerAPI,
+		Events:        events,
+		Now:           world.now,
+		Stopping:      ctx.Done(),
 		AdminToken:    cfg.AdminToken,
 		WebhookSecret: cfg.WebhookSecret,
 		Dashboard:     dash,

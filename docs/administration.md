@@ -17,6 +17,7 @@ sudo pantalan admin reset-password            # prints a new password
 
 `reset-password` also signs out every Dashboard session and clears the
 sign-in throttling, in one step, and works while the service is running.
+An open Dashboard tab goes to the sign-in page within a minute.
 
 Sign in at `https://<node-ip>:8443` with the username and the printed
 password. A session lasts while you use it: it ends after an hour without a
@@ -25,8 +26,9 @@ signed in at once; signing in a 21st ends the oldest session. After five
 failed sign-ins, each further attempt has to wait, starting at a second and
 doubling up to 15 minutes; the login page says how long, and
 `reset-password` clears it. The Admin Token is for
-`/api/v1` only and is refused by the Dashboard; a Dashboard session cookie
-is no credential on `/api/v1`.
+`/api/v1` only and is refused by the Dashboard's pages. `/api/v1` also
+accepts a Dashboard session cookie, but only from the Dashboard's own
+origin; token requests work from anywhere.
 `admin create --username NAME --check` only validates the name and never
 touches the database. Usernames are 1 to 32 characters of `a-z`, `0-9`, `.`,
 `_` and `-`, starting with a letter, and are lowercased. The Admin can't be
