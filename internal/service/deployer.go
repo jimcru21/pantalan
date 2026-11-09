@@ -186,8 +186,8 @@ func (d *Deployer) goLive(ctx context.Context, app domain.App, upstream, previou
 	d.routing.Lock()
 	defer d.routing.Unlock()
 	host = app.Domain
-	if now, err := d.deps.Apps.GetApp(ctx, app.ID); err == nil {
-		host = now.Domain
+	if current, err := d.deps.Apps.GetApp(ctx, app.ID); err == nil {
+		host = current.Domain
 	} else {
 		d.deps.Log.Warn("read app domain at go-live", "app", app.ID, "err", err)
 	}

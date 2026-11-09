@@ -115,13 +115,13 @@ func (s *AppLogs) Follow(ctx context.Context, appID string, after AppLogCursor, 
 			return err
 		}
 		// The container has stopped, or is gone: replaced, or restarting?
-		now, err := s.deps.Deployments.GetDeployment(ctx, dep.ID)
+		followed, err := s.deps.Deployments.GetDeployment(ctx, dep.ID)
 		switch {
 		case errors.Is(err, domain.ErrNotFound):
 			return ErrNoLiveDeployment // the App was deleted
 		case err != nil:
 			return fmt.Errorf("get deployment: %w", err)
-		case now.Status != domain.DeploymentLive:
+		case followed.Status != domain.DeploymentLive:
 			return ErrReplaced
 		}
 		select {
