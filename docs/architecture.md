@@ -119,7 +119,7 @@ Auth surfaces on the one listener:
   redirects. A wrong username and a wrong password get the same 401 and
   message. With no Admin, the login card shows the `admin create` command
   instead of the form, and `POST /login` gets 403.
-- `service.AuthService` issues a `crypto/rand.Text()` token per login and
+- `service.AdminService` issues a `crypto/rand.Text()` token per login and
   stores only its SHA-256 hex in `sessions`. The cookie is
   `__Host-pantalan_session; Path=/; Secure; HttpOnly; SameSite=Strict`, with
   no expiry: the server ends a session after 1 h idle or 24 h in all.
@@ -133,12 +133,13 @@ Auth surfaces on the one listener:
   Five failures are free; then the next attempt waits 1 s after the last
   failure, doubling to 15 min. An attempt inside the wait gets 429 with
   `Retry-After` before its password is checked, and isn't counted. A
-  checked attempt is counted before its password is verified (a
-  compare-and-swap on the count), and a success resets it, so racing
-  attempts can't all be checked when a wait ends.
+  checked attempt is counted before its password is verified (the wait is
+  checked and the count raised in one write transaction), and a success
+  resets it, so racing attempts can't all be checked when a wait ends.
 - At most 2 Argon2id hashes run at once; a login that can't get a slot
-  within 5 s gets 503 and isn't counted. A hash whose PHC parameters differ
-  from the current ones is replaced at the next successful login.
+  within 5 s gets 503 with `Retry-After: 5` and isn't counted. A hash
+  whose PHC parameters differ from the current ones is replaced at the
+  next successful login.
 - Every Dashboard response carries
   `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
   so templates have no inline scripts or `style=` attributes and htmx runs
@@ -300,11 +301,11 @@ uploads and publishes last.
 |---|---|
 | `cmd/pantalan` | Entrypoint, config and dependency wiring |
 | `internal/domain` | Entities (`App`, `Deployment`, `Admin`), validation, sentinel errors |
-| `internal/service` | Use cases (`AppService`, `AdminService`, `AuthService`, `Deployer`) and the port interfaces |
+| `internal/service` | Use cases (`AppService`, `AdminService`, `Deployer`) and the port interfaces; `AdminService` owns every rule about the Admin, for both the Dashboard and `pantalan admin` (`admin show` only reads the store) |
 | `internal/httpapi` | REST API (Admin Token), GitHub webhook, `/healthz`; mounts the Dashboard at `/` |
 | `internal/dashtls` | Dashboard certificate (generate, load, renew) and the listener that redirects plain HTTP |
 | `internal/password` | Argon2id hashing of the Admin password into a PHC string |
-| `internal/store/sqlite` | App, deployment, Admin and session repositories in SQLite, plus the schema migrations |
+| `internal/store/sqlite` | App and deployment repositories and the Admin's credentials (Admin and sessions) in SQLite, plus the schema migrations |
 | `internal/source` | Git checkout |
 | `internal/build` | Dockerfile builder; the Nixpacks builder fails with "nixpacks not installed on this Node" unless a hand-built setup has nixpacks on the PATH |
 | `internal/runtime/docker` | Container lifecycle through the docker CLI |

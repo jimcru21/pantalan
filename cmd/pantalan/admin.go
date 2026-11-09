@@ -34,14 +34,7 @@ func adminCmd(ctx context.Context, inv invocation) int {
 			return adminUsage(inv.stdio.Err)
 		}
 		// Read-only: the installer asks this before it changes the host.
-		return withAdminsReadOnly(ctx, inv, func(admins *service.AdminService) int {
-			admin, err := admins.Get(ctx)
-			if err != nil {
-				return failAdmin(inv, err)
-			}
-			fmt.Fprintln(inv.stdio.Out, admin.Username)
-			return 0
-		})
+		return adminShow(ctx, inv)
 	case "reset-password":
 		if len(args) != 0 {
 			return adminUsage(inv.stdio.Err)
@@ -103,12 +96,13 @@ func withAdmins(ctx context.Context, inv invocation, f func(*service.AdminServic
 		return fail(inv, err)
 	}
 	defer store.Close()
-	return f(service.NewAdminService(store, password.Hasher{}))
+	return f(service.NewAdminService(service.AdminDeps{Credentials: store, Hasher: password.Hasher{}}))
 }
 
-// withAdminsReadOnly is withAdmins on a database opened only to read: it
-// isn't created, migrated or snapshotted. A missing database has no Admin.
-func withAdminsReadOnly(ctx context.Context, inv invocation, f func(*service.AdminService) int) int {
+// adminShow prints the Admin's username from a database opened only to
+// read: it isn't created, migrated or snapshotted. A missing database has
+// no Admin.
+func adminShow(ctx context.Context, inv invocation) int {
 	dataDir := config.DataDir(inv.getenv)
 	if err := becomeDataDirOwner(dataDir); err != nil {
 		return fail(inv, err)
@@ -118,7 +112,12 @@ func withAdminsReadOnly(ctx context.Context, inv invocation, f func(*service.Adm
 		return failAdmin(inv, err)
 	}
 	defer store.Close()
-	return f(service.NewAdminService(store, password.Hasher{}))
+	admin, err := store.GetAdmin(ctx)
+	if err != nil {
+		return failAdmin(inv, err)
+	}
+	fmt.Fprintln(inv.stdio.Out, admin.Username)
+	return 0
 }
 
 func isSet(flags *flag.FlagSet, name string) bool {

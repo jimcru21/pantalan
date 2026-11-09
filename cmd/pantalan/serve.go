@@ -44,8 +44,8 @@ func serveCmd(ctx context.Context, inv invocation) int {
 
 // pruneSessions deletes expired Dashboard sessions. A failure is logged
 // and left for the next run: an expired session is refused either way.
-func pruneSessions(ctx context.Context, log *slog.Logger, auth *service.AuthService) {
-	n, err := auth.PruneSessions(ctx)
+func pruneSessions(ctx context.Context, log *slog.Logger, admins *service.AdminService) {
+	n, err := admins.PruneSessions(ctx)
 	if err != nil {
 		log.Error("pruning expired sessions failed", "err", err)
 		return
@@ -103,18 +103,12 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, wo
 	cert := certs.Current()
 	log.Info("tls certificate", "fingerprint", cert.Fingerprint(), "expires", cert.Leaf().NotAfter, "generated", generated)
 
-	var hasher service.PasswordHasher = password.Hasher{}
-	if world.Hasher != nil {
-		hasher = world.Hasher
-	}
-	auth := service.NewAuthService(service.AuthDeps{
-		Admins:   store,
-		Sessions: store,
-		Hasher:   hasher,
-		Now:      world.now,
-		After:    world.HashSlotWait,
+	admins := service.NewAdminService(service.AdminDeps{
+		Credentials: store,
+		Hasher:      password.Hasher{},
+		Now:         world.now,
 	})
-	pruneSessions(ctx, log, auth)
+	pruneSessions(ctx, log, admins)
 
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -129,7 +123,7 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, wo
 			select {
 			case <-daily:
 				renewCertificate(log, certs)
-				pruneSessions(ctx, log, auth)
+				pruneSessions(ctx, log, admins)
 			case <-ctx.Done():
 				return
 			}
@@ -161,7 +155,7 @@ func serve(ctx context.Context, log *slog.Logger, getenv func(string) string, wo
 
 	apps := service.NewAppService(store)
 	dash, err := dashboard.New(dashboard.Deps{
-		Auth:         auth,
+		Auth:         admins,
 		Host:         sampler,
 		Docker:       dockerAPI,
 		Events:       events,

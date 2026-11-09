@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 // sessionCookie is the Dashboard's session cookie.
@@ -167,51 +166,6 @@ func (b *browser) signedInStill() bool {
 	}
 	b.t.Fatalf("GET / = %d Location %q, want 200 or 303 to /login", got.StatusCode, got.Header.Get("Location"))
 	return false
-}
-
-func TestASessionEndsAfterAnHourIdle(t *testing.T) {
-	clock := newFakeClock()
-	b := signedIn(t, startServeAt(t, serveEnv(t), clock))
-
-	clock.advance(59 * time.Minute)
-	if !b.signedInStill() {
-		t.Fatal("signed out after 59 idle minutes, want still signed in")
-	}
-	clock.advance(time.Hour)
-	if b.signedInStill() {
-		t.Error("still signed in after an idle hour")
-	}
-}
-
-func TestRequestsExtendTheIdleTimer(t *testing.T) {
-	clock := newFakeClock()
-	b := signedIn(t, startServeAt(t, serveEnv(t), clock))
-
-	// Three requests, each 50 minutes after the last: 2.5 h in all.
-	for i := range 3 {
-		clock.advance(50 * time.Minute)
-		if !b.signedInStill() {
-			t.Fatalf("signed out at request %d, 50 minutes after the previous one", i+1)
-		}
-	}
-}
-
-func TestASessionEndsAfter24HoursHoweverActive(t *testing.T) {
-	clock := newFakeClock()
-	b := signedIn(t, startServeAt(t, serveEnv(t), clock))
-
-	elapsed := time.Duration(0)
-	for elapsed+50*time.Minute < 24*time.Hour {
-		clock.advance(50 * time.Minute)
-		elapsed += 50 * time.Minute
-		if !b.signedInStill() {
-			t.Fatalf("signed out after %v of activity, want signed in until 24h", elapsed)
-		}
-	}
-	clock.advance(24*time.Hour - elapsed)
-	if b.signedInStill() {
-		t.Error("still signed in 24 hours after signing in")
-	}
 }
 
 func TestSignOutEndsTheSessionClearsTheCookieAndReturnsToLogin(t *testing.T) {

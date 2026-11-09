@@ -79,42 +79,40 @@ type Scheduler interface {
 	Enqueue(deploymentID string) error
 }
 
-// AdminRepository stores the one Admin.
-type AdminRepository interface {
+// Credentials stores the one Admin and their Dashboard sessions. Each
+// method is one atomic operation, so the CLI and a running service that
+// share the file (ADR 0001) never see half of one.
+type Credentials interface {
 	// CreateAdmin returns domain.ErrConflict when an Admin already exists.
 	CreateAdmin(ctx context.Context, admin domain.Admin) error
 	// GetAdmin returns domain.ErrNotFound when there is no Admin.
 	GetAdmin(ctx context.Context) (domain.Admin, error)
-	// ResetAdminPassword, in one transaction, replaces the Admin's
-	// password hash, deletes every session and clears the failure count.
-	// It returns domain.ErrNotFound when there is no Admin.
-	ResetAdminPassword(ctx context.Context, hash string, at time.Time) error
-	// RecordFailedLogin adds one to the failure count and sets its time to
-	// at, only if the count is still seen. It reports whether it did.
-	RecordFailedLogin(ctx context.Context, seen int, at time.Time) (bool, error)
-	// ResetFailedLogins clears the failure count.
-	ResetFailedLogins(ctx context.Context) error
-	// RehashPassword replaces the password hash old with rehashed, the same
-	// password under current parameters. It does nothing when the stored
-	// hash is no longer old (the password was reset meanwhile).
-	RehashPassword(ctx context.Context, old, rehashed string) error
-}
-
-// SessionRepository stores Dashboard sessions by the hash of their token.
-type SessionRepository interface {
-	// CreateSession stores s, only while the Admin's password hash is
-	// still passwordHash, and then deletes the oldest sessions beyond the
-	// newest keep, in one transaction. It returns domain.ErrConflict when
-	// the hash has changed meanwhile (a password reset won the race).
-	CreateSession(ctx context.Context, s domain.Session, keep int, passwordHash string) error
+	// ResetPassword replaces the Admin's password hash, ends every session
+	// and clears the failure count. It returns domain.ErrNotFound when
+	// there is no Admin.
+	ResetPassword(ctx context.Context, hash string, at time.Time) error
+	// ReserveAttempt reads the Admin and, unless admit refuses them, counts
+	// one more failed sign-in at at. It returns the Admin as read, admit's
+	// error (and counts nothing), or domain.ErrNotFound when there is no
+	// Admin. Two attempts reserved at once are counted one after the
+	// other, the second seeing the first's failure.
+	ReserveAttempt(ctx context.Context, at time.Time, admit func(domain.Admin) error) (domain.Admin, error)
+	// StartSession records a successful sign-in, only while the Admin's
+	// password hash is still checked (the one the password was verified
+	// against): it clears the failure count, replaces the hash with
+	// rehashed unless that is empty, stores s, and ends the oldest
+	// sessions beyond the newest keep. It returns domain.ErrConflict, and
+	// changes nothing, when the hash has changed (a password reset won
+	// the race).
+	StartSession(ctx context.Context, checked, rehashed string, s domain.Session, keep int) error
 	// GetSession returns domain.ErrNotFound when there is no such session.
 	GetSession(ctx context.Context, tokenHash string) (domain.Session, error)
 	TouchSession(ctx context.Context, tokenHash string, at time.Time) error
-	// DeleteSession succeeds when the session is already gone.
-	DeleteSession(ctx context.Context, tokenHash string) error
-	// DeleteExpiredSessions deletes the sessions last seen at or before
-	// seenBy or created at or before createdBy, returning how many.
-	DeleteExpiredSessions(ctx context.Context, seenBy, createdBy time.Time) (int, error)
+	// EndSession succeeds when the session is already gone.
+	EndSession(ctx context.Context, tokenHash string) error
+	// EndExpiredSessions ends the sessions last seen at or before seenBy
+	// or created at or before createdBy, returning how many.
+	EndExpiredSessions(ctx context.Context, seenBy, createdBy time.Time) (int, error)
 }
 
 // PasswordHasher turns a password into a self-describing hash string and

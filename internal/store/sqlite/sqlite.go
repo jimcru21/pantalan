@@ -26,7 +26,8 @@ const FileName = "pantalan.db"
 //go:embed migrations/*.sql
 var embedded embed.FS
 
-// Store implements service.AppRepository and service.DeploymentRepository.
+// Store implements service.AppRepository, service.DeploymentRepository and
+// service.Credentials.
 type Store struct {
 	db *sql.DB
 }
@@ -76,7 +77,7 @@ func open(ctx context.Context, dataDir string, migrations fs.FS) (*Store, error)
 // leaves the file as it was. It reads a schema older than this binary's
 // as it is, and refuses a newer one as Open does. A missing or still empty
 // database is domain.ErrNotFound.
-func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
+func OpenReadOnly(ctx context.Context, dataDir string) (*ReadOnlyStore, error) {
 	migrations, err := fs.Sub(embedded, "migrations")
 	if err != nil {
 		return nil, err
@@ -110,8 +111,22 @@ func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &ReadOnlyStore{db: db}, nil
 }
+
+// ReadOnlyStore is the database opened by OpenReadOnly. It has no method
+// that writes, so what reads through it can't change the file.
+type ReadOnlyStore struct {
+	db *sql.DB
+}
+
+// GetAdmin returns domain.ErrNotFound when there is no Admin.
+func (s *ReadOnlyStore) GetAdmin(ctx context.Context) (domain.Admin, error) {
+	return getAdmin(ctx, s.db)
+}
+
+// Close closes the database.
+func (s *ReadOnlyStore) Close() error { return s.db.Close() }
 
 // How long, and how often, open retries a migration that met SQLITE_BUSY.
 const (

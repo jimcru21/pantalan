@@ -106,7 +106,10 @@ func (d *Dashboard) login(w http.ResponseWriter, r *http.Request) {
 	username, password := r.PostForm.Get("username"), r.PostForm.Get("password")
 	token, err := d.deps.Auth.SignIn(r.Context(), username, password)
 	data := d.loginData(r)
-	var throttled *service.ThrottledError
+	var later *service.RetryLaterError
+	if errors.As(err, &later) {
+		w.Header().Set("Retry-After", retryAfter(later.Wait))
+	}
 	switch {
 	case err == nil:
 		// A browser that signs in again leaves its old session behind.
@@ -121,13 +124,11 @@ func (d *Dashboard) login(w http.ResponseWriter, r *http.Request) {
 		data.Error = "Incorrect username or password."
 		data.Username = username
 		d.render(w, http.StatusUnauthorized, d.views.login, "base", data)
-	case errors.As(err, &throttled):
-		w.Header().Set("Retry-After", retryAfter(throttled.Wait))
-		data.Throttled = formatWait(throttled.Wait)
+	case later != nil && errors.Is(later.Reason, service.ErrThrottled):
+		data.Throttled = formatWait(later.Wait)
 		data.Username = username
 		d.render(w, http.StatusTooManyRequests, d.views.login, "base", data)
 	case errors.Is(err, service.ErrBusy):
-		w.Header().Set("Retry-After", retryAfter(service.HashSlotWait))
 		data.Error = "Too many sign-ins at once. Try again in a few seconds."
 		data.Username = username
 		d.render(w, http.StatusServiceUnavailable, d.views.login, "base", data)
