@@ -131,6 +131,23 @@ func TestAnAppWithNoLiveDeploymentSaysSoRatherThanAnEmptyLog(t *testing.T) {
 	}
 }
 
+func TestDeletingAnAppEndsItsAppLog(t *testing.T) {
+	s := newSeam(t)
+	app, ctr := s.liveApp("web")
+	s.runtime.print(ctr, "serving\n")
+	es := s.stream(appLogPath(app), withToken(adminToken))
+	textUntil(t, es, "serving\n")
+
+	if got := s.do(http.MethodDelete, "/api/v1/apps/"+app, "", withToken(adminToken)); got.status != http.StatusNoContent {
+		t.Fatalf("delete the App = %d %q, want 204", got.status, got.body)
+	}
+
+	if ev, ok := es.next(); !ok || ev.event != "done" || ev.data != "no-live-deployment" {
+		t.Fatalf("after the App was deleted: %+v (open: %v), want done: no-live-deployment", ev, ok)
+	}
+	es.ended()
+}
+
 func TestAnAppLogStreamClosesWithinAMinuteOfItsSessionEnding(t *testing.T) {
 	s := newSeam(t)
 	session := s.signedIn()
