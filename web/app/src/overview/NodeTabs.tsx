@@ -9,6 +9,7 @@ import {
   useNodeEvents,
   useNodeImages,
 } from "@/api/node";
+import { Alert, Facts, Panel, Table, Td } from "@/components/panel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   formatBytes,
@@ -18,7 +19,6 @@ import {
   formatUTCDate,
   formatUTCTime,
 } from "@/lib/format";
-import { cn } from "@/lib/utils";
 
 const tabs = [
   { value: "containers", label: "Containers", panel: ContainersTab },
@@ -194,14 +194,7 @@ function DockerTab() {
           </button>
         }
       >
-        <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 p-4">
-          {facts.map(([term, value]) => (
-            <div key={term} className="contents">
-              <dt className="text-muted-foreground">{term}</dt>
-              <dd className="m-0 [overflow-wrap:anywhere]">{value}</dd>
-            </div>
-          ))}
-        </dl>
+        <Facts facts={facts} />
       </Panel>
       <Panel
         title="Disk usage"
@@ -332,122 +325,5 @@ function LoadError({ error, onRetry }: { error: Error; onRetry?: () => void }) {
         </p>
       )}
     </div>
-  );
-}
-
-function Alert({ children }: { children: ReactNode }) {
-  return (
-    <p
-      role="alert"
-      className="mx-4 my-3 rounded-md bg-destructive-soft px-3 py-2.5 text-[13px] text-destructive"
-    >
-      {children}
-    </p>
-  );
-}
-
-function Panel({
-  title,
-  action,
-  children,
-}: {
-  title: string;
-  action?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section
-      aria-label={title}
-      className="min-w-0 overflow-x-auto rounded-lg border bg-card shadow-xs"
-    >
-      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
-        <h2 className="m-0 text-sm font-semibold">{title}</h2>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-type Column = string | { label: string; num: true };
-
-// A table in its own card, or `bare` inside one. `empty` is the one row a
-// table with no rows shows.
-function Table({
-  head,
-  empty,
-  bare,
-  children,
-}: {
-  head: Column[];
-  empty?: string | false;
-  bare?: boolean;
-  children: ReactNode;
-}) {
-  const table = (
-    <table className="w-full border-collapse text-[13px]">
-      <thead>
-        <tr>
-          {head.map((col) => {
-            const { label, num } = typeof col === "string" ? { label: col, num: false } : col;
-            return (
-              <th
-                key={label}
-                className={cn(
-                  "border-b bg-secondary px-4 py-2 text-left text-xs font-semibold whitespace-nowrap text-muted-foreground",
-                  num && "text-right",
-                )}
-              >
-                {label}
-              </th>
-            );
-          })}
-        </tr>
-      </thead>
-      <tbody className="[&>tr:last-child>td]:border-b-0">
-        {empty ? (
-          <tr>
-            <Td colSpan={head.length} muted>
-              {empty}
-            </Td>
-          </tr>
-        ) : (
-          children
-        )}
-      </tbody>
-    </table>
-  );
-  if (bare) return table;
-  return <div className="min-w-0 overflow-x-auto rounded-lg border bg-card shadow-xs">{table}</div>;
-}
-
-function Td({
-  num,
-  mono,
-  bad,
-  muted,
-  colSpan,
-  children,
-}: {
-  num?: boolean;
-  mono?: boolean;
-  bad?: boolean;
-  muted?: boolean;
-  colSpan?: number;
-  children?: ReactNode;
-}) {
-  return (
-    <td
-      colSpan={colSpan}
-      className={cn(
-        "border-b px-4 py-2 text-left align-top whitespace-nowrap",
-        num && "text-right tabular-nums",
-        mono && "font-mono text-[0.92em]",
-        bad && "text-destructive",
-        muted && "text-muted-foreground",
-      )}
-    >
-      {children}
-    </td>
   );
 }
