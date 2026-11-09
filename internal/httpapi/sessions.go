@@ -16,28 +16,30 @@ import (
 // routes take no credential, so they sit outside requireCredential; every
 // sign-in rule is AdminService's, and only the HTTP side is here.
 
-type loginInfo struct {
+// LoginInfo is GET /api/v1/login-info's body: which Node the sign-in screen
+// is on, and whether anyone can sign in yet.
+type LoginInfo struct {
 	Hostname    string `json:"hostname"`
 	Address     string `json:"address"` // ip:port the browser reached
 	AdminExists bool   `json:"admin_exists"`
 }
 
-// loginInfo tells the sign-in screen which Node it is on and whether
-// anyone can sign in yet.
+// loginInfo serves LoginInfo; it needs no credential.
 func (h *handler) loginInfo(w http.ResponseWriter, r *http.Request) {
 	exists, err := h.deps.Sessions.AdminExists(r.Context())
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
-	info := loginInfo{Hostname: h.deps.Hostname, AdminExists: exists}
+	info := LoginInfo{Hostname: h.deps.Hostname, AdminExists: exists}
 	if addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
 		info.Address = addr.String()
 	}
 	h.writeJSON(w, http.StatusOK, info)
 }
 
-type signInRequest struct {
+// SignInRequest is POST /api/v1/sessions' body.
+type SignInRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
@@ -46,7 +48,7 @@ type signInRequest struct {
 // 401 (any wrong credential, one message), 429 (throttled), 403 (no
 // Admin) or 503 (no hash slot). 429 and 503 carry Retry-After.
 func (h *handler) signIn(w http.ResponseWriter, r *http.Request) {
-	var req signInRequest
+	var req SignInRequest
 	if err := decodeJSON(w, r, &req); err != nil {
 		h.writeError(w, err)
 		return
