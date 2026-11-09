@@ -36,12 +36,33 @@ export interface CreateAppRequest {
 // source: app_types.go
 
 /**
+ * App is how every App response shows an App: its settings, and the names
+ * of its env vars, sorted. Values may be secrets, so they appear only in
+ * the env endpoint's answer (AppEnv), never here.
+ */
+export interface App extends domain.App {
+  env_names: string[];
+}
+/**
  * AppListItem is one row of GET /api/v1/apps: the App, and its newest
  * Deployment so the list can show each App's status without a request per
  * App. LatestDeployment is missing for an App never deployed.
  */
-export interface AppListItem extends domain.App {
+export interface AppListItem extends App {
   latest_deployment?: domain.Deployment;
+}
+
+//////////
+// source: env.go
+
+/**
+ * AppEnv is GET and PUT /api/v1/apps/{id}/env: an App's env vars as
+ * dotenv text, one KEY=value per line. A PUT may hold blank lines and "#"
+ * comments, which aren't kept; the text read back is the pairs alone,
+ * sorted by name. This is the only response that carries env values.
+ */
+export interface AppEnv {
+  env: string;
 }
 
 //////////

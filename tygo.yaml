@@ -20,6 +20,7 @@ packages:
     include_files:
       - app_settings.go
       - app_types.go
+      - env.go
       - node_types.go
       - respond.go
       - sessions.go

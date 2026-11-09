@@ -19,7 +19,7 @@ func (h *handler) listApps(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]AppListItem, len(apps))
 	for i, app := range apps {
-		items[i] = AppListItem{App: app}
+		items[i] = AppListItem{App: appOf(app)}
 		if dep, ok := latest[app.ID]; ok {
 			items[i].LatestDeployment = &dep
 		}
@@ -33,7 +33,7 @@ func (h *handler) getApp(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	h.writeJSON(w, http.StatusOK, app)
+	h.writeJSON(w, http.StatusOK, appOf(app))
 }
 
 func (h *handler) listDeployments(w http.ResponseWriter, r *http.Request) {

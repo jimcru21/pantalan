@@ -142,7 +142,17 @@ type fakeRuntime struct {
 	containers map[string]fakeContainer // by ID
 }
 
-type fakeContainer struct{ name, upstream string }
+type fakeContainer struct {
+	name, upstream string
+	env            map[string]string
+}
+
+// envOf is the env the container with ID id was started with.
+func (r *fakeRuntime) envOf(id string) map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.containers[id].env
+}
 
 func newFakeRuntime() *fakeRuntime { return &fakeRuntime{containers: map[string]fakeContainer{}} }
 
@@ -151,7 +161,7 @@ func (r *fakeRuntime) Start(_ context.Context, spec service.ContainerSpec) (serv
 	defer r.mu.Unlock()
 	r.started++
 	ctr := service.Container{ID: fmt.Sprintf("ctr-%d", r.started), Upstream: fmt.Sprintf("127.0.0.1:%d", 9000+r.started)}
-	r.containers[ctr.ID] = fakeContainer{name: spec.Name, upstream: ctr.Upstream}
+	r.containers[ctr.ID] = fakeContainer{name: spec.Name, upstream: ctr.Upstream, env: spec.Env}
 	return ctr, nil
 }
 

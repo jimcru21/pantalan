@@ -62,8 +62,7 @@ func TestAppsAndDeploymentsSurviveARestart(t *testing.T) {
 		t.Fatalf("create app = %d %s", code, body)
 	}
 	var app struct {
-		ID  string            `json:"id"`
-		Env map[string]string `json:"env"`
+		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(body, &app); err != nil {
 		t.Fatal(err)
@@ -86,15 +85,18 @@ func TestAppsAndDeploymentsSurviveARestart(t *testing.T) {
 		t.Fatalf("get app after restart = %d %s", code, body)
 	}
 	var got struct {
-		Name   string            `json:"name"`
-		Domain string            `json:"domain"`
-		Env    map[string]string `json:"env"`
+		Name   string `json:"name"`
+		Domain string `json:"domain"`
 	}
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Name != "web" || got.Domain != "web.example.test" || got.Env["GREETING"] != "hi" {
+	if got.Name != "web" || got.Domain != "web.example.test" {
 		t.Errorf("app after restart = %s, want the app as created", body)
+	}
+	code, body = apiCall(t, second, http.MethodGet, "/api/v1/apps/"+app.ID+"/env", "")
+	if code != http.StatusOK || string(body) != `{"env":"GREETING=hi\n"}`+"\n" {
+		t.Errorf("env after restart = %d %s, want GREETING=hi", code, body)
 	}
 
 	code, body = apiCall(t, second, http.MethodGet, "/api/v1/apps/"+app.ID+"/deployments", "")

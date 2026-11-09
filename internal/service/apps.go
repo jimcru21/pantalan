@@ -46,6 +46,18 @@ func (s *AppService) Update(ctx context.Context, id string, settings domain.App)
 	return s.apps.GetApp(ctx, id)
 }
 
+// SetEnv replaces the env vars of the App with ID id. Like an Update, it
+// starts no Deployment: the env vars take effect on the next one.
+func (s *AppService) SetEnv(ctx context.Context, id string, env map[string]string) error {
+	if err := domain.ValidateEnv(env); err != nil {
+		return err
+	}
+	if err := s.apps.SetAppEnv(ctx, id, env); err != nil {
+		return fmt.Errorf("set env of app: %w", err)
+	}
+	return nil
+}
+
 func withDefaults(app *domain.App) {
 	if app.Branch == "" {
 		app.Branch = "main"

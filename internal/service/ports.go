@@ -18,6 +18,9 @@ type AppRepository interface {
 	// creation time. It returns domain.ErrNotFound when there is no such
 	// App, and a domain.ErrConflict when another App has the domain.
 	UpdateApp(ctx context.Context, app domain.App) error
+	// SetAppEnv replaces the env vars of the App with ID id. It returns
+	// domain.ErrNotFound when there is no such App.
+	SetAppEnv(ctx context.Context, id string, env map[string]string) error
 	GetApp(ctx context.Context, id string) (domain.App, error)
 	ListApps(ctx context.Context) ([]domain.App, error)
 	FindAppsByRepo(ctx context.Context, repoURL, branch string) ([]domain.App, error)
