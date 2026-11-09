@@ -4,6 +4,7 @@ import type { App } from "@/api/generated/domain";
 import type { LoginInfo, SignInRequest } from "@/api/generated/httpapi";
 import { aLoginInfo, anApp } from "@/test/fixtures";
 import { json, status, type Api } from "@/test/network";
+import { overviewApi } from "@/test/node-fixtures";
 import { renderApp } from "@/test/render";
 
 // The sign-in API as a Node with one Admin answers it.
@@ -177,6 +178,7 @@ describe("signing out", () => {
   it("stays signed in, and says so, when the server can't end the session", async () => {
     const { user } = renderApp("/", {
       api: {
+        ...overviewApi(),
         "DELETE /api/v1/sessions/current": () => json({ error: "internal error" }, { status: 500 }),
       },
     });
@@ -206,7 +208,9 @@ describe("signing in", () => {
   });
 
   it("never follows a requested address off the Node", async () => {
-    const { user } = renderApp("/login?next=%2F%2Fevil.example%2F", { api: signInApi() });
+    const { user } = renderApp("/login?next=%2F%2Fevil.example%2F", {
+      api: { ...signInApi(), ...overviewApi() },
+    });
 
     await signInAs(user, "alice");
 

@@ -2,10 +2,11 @@ import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { App } from "@/api/generated/domain";
 import { json, type Api } from "@/test/network";
+import { overviewApi } from "@/test/node-fixtures";
 import { renderApp } from "@/test/render";
 
 // What the pages behind the shell fetch.
-const shellApi: Api = { "GET /api/v1/apps": () => json<App[]>([]) };
+const shellApi: Api = { ...overviewApi(), "GET /api/v1/apps": () => json<App[]>([]) };
 
 describe("the Dashboard shell", () => {
   it("shows the page the address bar names", async () => {
