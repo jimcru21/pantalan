@@ -5,6 +5,7 @@ import type { App, Deployment } from "@/api/generated/domain";
 import { appKeys, isInProgress, isNotFound, useApp, useDeployments } from "@/api/apps";
 import { useDeployment } from "@/api/deployments";
 import { DeploymentStatus } from "@/apps/DeploymentStatus";
+import { RedeployButton } from "@/apps/RedeployButton";
 import { Alert, Facts, Panel } from "@/components/panel";
 import { formatDuration, formatUTCDateTime } from "@/lib/format";
 import { NotFoundPage, Page } from "@/shell/Page";
@@ -63,7 +64,13 @@ export function DeploymentPage() {
   const live = deployments.data?.find((d) => d.status === "live");
   return (
     <Page title={title} up={up}>
-      <Panel title="Deployment">
+      <Panel
+        title="Deployment"
+        action={
+          // Only a resolved commit can be deployed again.
+          deployment.data.commit && <RedeployButton appID={appId} deploymentID={deploymentId} />
+        }
+      >
         <Facts facts={facts(deployment.data)} />
         {deployment.data.status === "failed" && live && app.data && (
           <StillServing live={live} app={app.data} />
