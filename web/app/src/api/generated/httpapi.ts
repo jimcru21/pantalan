@@ -435,3 +435,8 @@ export const AppLogReplaced: StreamEnd = "replaced";
  * Log has no container to follow.
  */
 export const AppLogNoLiveDeployment: StreamEnd = "no-live-deployment";
+/**
+ * DeploymentLogDeleted: the Deployment was deleted, with its App,
+ * while its Deployment Log streamed.
+ */
+export const DeploymentLogDeleted: StreamEnd = "deleted";

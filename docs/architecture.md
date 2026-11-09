@@ -209,7 +209,10 @@ plain text; `…/log/stream` streams it:
 - a first connect replays the last 1 MiB from a line start, after an
   `omitted` event (data and id: the bytes left out) when it skipped any;
 - it follows the file (polled every 250 ms) while the Deployment runs,
-  then sends `done` (data: the final status) and ends.
+  then sends `done` (data: the final status) and ends;
+- if the Deployment is deleted with its App while the stream follows it,
+  `done` says `deleted`: an event rather than a dropped connection, whose
+  reconnect would get a 404 that `EventSource` can't tell from a 401.
 
 ANSI escape codes are stripped and `\r` line ends become `\n` on the
 server, in both forms. The older `GET /api/v1/deployments/{id}/logs`,

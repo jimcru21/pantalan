@@ -217,7 +217,7 @@ All under `/api/v1`, with `Authorization: Bearer <Admin Token>`.
 | `GET` | `/apps/{id}/deployments/{deployment-id}` | One Deployment: its ref, commit, image, timing, status and error |
 | `POST` | `/apps/{id}/deployments/{deployment-id}/redeploy` | Roll back: a new Deployment of that Deployment's commit (`409` if it never resolved one) |
 | `GET` | `/apps/{id}/deployments/{deployment-id}/log` | A Deployment's whole Deployment Log, as plain text |
-| `GET` | `/apps/{id}/deployments/{deployment-id}/log/stream` | The Deployment Log as Server-Sent Events: the last 1 MiB, then live until the Deployment is live or failed (`done`). Each event's `id` is a byte offset; send it back as `Last-Event-ID` to resume |
+| `GET` | `/apps/{id}/deployments/{deployment-id}/log/stream` | The Deployment Log as Server-Sent Events: the last 1 MiB, then live until the Deployment is live or failed (`done`, data: the status; `deleted` if its App is deleted meanwhile). Each event's `id` is a byte offset; send it back as `Last-Event-ID` to resume |
 | `GET` | `/apps/{id}/log/stream` | The App Log (the live container's stdout and stderr) as Server-Sent Events: the last 200 lines, then live. Ends with `done`: `replaced` once a new Deployment replaces the container, or at once `no-live-deployment`. Send the last event's `id` back as `Last-Event-ID` to go on after it |
 | `GET` | `/deployments/{id}/logs` | The Deployment Log by the Deployment's ID alone (older address, kept for scripts): byte for byte as written, colour codes and `\r` included |
 

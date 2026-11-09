@@ -29,6 +29,9 @@ const (
 	// AppLogNoLiveDeployment: the App has no live Deployment, so its App
 	// Log has no container to follow.
 	AppLogNoLiveDeployment StreamEnd = "no-live-deployment"
+	// DeploymentLogDeleted: the Deployment was deleted, with its App,
+	// while its Deployment Log streamed.
+	DeploymentLogDeleted StreamEnd = "deleted"
 )
 
 // message is the unnamed event that carries a log's output.

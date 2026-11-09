@@ -106,7 +106,8 @@ func (h *handler) closeLog(f *os.File) {
 // connect replays the last logReplay bytes, preceded by an "omitted"
 // event (data: how many bytes it left out) when it skipped any. The
 // stream follows the log while the Deployment runs, then sends "done"
-// (data: the final status) and ends.
+// (data: the final status) and ends; if the Deployment is deleted on the
+// way, "done" says "deleted".
 func (h *handler) streamDeploymentLog(w http.ResponseWriter, r *http.Request) {
 	appID, depID := r.PathValue("id"), r.PathValue("deploymentID")
 	dep, err := h.deps.Deployer.Get(r.Context(), appID, depID)
@@ -156,7 +157,14 @@ func (h *handler) streamDeploymentLog(w http.ResponseWriter, r *http.Request) {
 		case <-poll.C:
 		}
 		if dep, err = h.deps.Deployer.Get(ctx, appID, depID); err != nil {
-			return // the App was deleted, or the client has gone
+			if errors.Is(err, domain.ErrNotFound) {
+				// The App was deleted. Say so: a dropped stream would
+				// reconnect to a 404, which the browser can't read.
+				_ = es.send(StreamDone, "", string(DeploymentLogDeleted))
+			} else if ctx.Err() == nil {
+				h.deps.Log.Warn("stream log", "deployment", depID, "err", err)
+			}
+			return
 		}
 	}
 }

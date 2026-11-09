@@ -48,6 +48,9 @@ type seam struct {
 	events    *fakeEvents
 	stopping  chan struct{} // close it to shut the service down
 	dataDir   string        // the Deployer's: Deployment Logs and build checkouts
+	// store is the services' own, for a scene no service can set up in
+	// one step (records gone behind a running Deployment's back).
+	store *sqlite.Store
 }
 
 // The built frontend the seam's Dashboard serves: what `vite build`
@@ -106,6 +109,7 @@ func newSeam(t *testing.T, opts ...seamOption) *seam {
 		host:      &fakeHost{},
 		events:    &fakeEvents{},
 		stopping:  make(chan struct{}),
+		store:     store,
 	}
 	s.builder = &fakeBuilder{docker: s.runtime}
 	s.docker = &fakeDocker{clock: s.clock}

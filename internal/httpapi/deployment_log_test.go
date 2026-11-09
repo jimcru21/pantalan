@@ -117,6 +117,34 @@ func TestARunningDeploymentsLogStreamsAsItIsWritten(t *testing.T) {
 	es.ended()
 }
 
+// A stream whose Deployment disappears under it says so and ends, rather
+// than dropping the connection: the browser would reconnect to a 404,
+// which an EventSource can't tell from a refused session.
+func TestADeploymentLogStreamWhoseDeploymentIsGoneEndsWithDoneDeleted(t *testing.T) {
+	s := newSeam(t)
+	app := s.createApp("web")
+	builds := s.builder.hold()
+	dep := s.deploy(app, "")
+	ran := s.runQueuedInBackground()
+	builds.started(t)
+	es := s.stream(logPath(app, dep)+"/stream", withToken(adminToken))
+	textUntil(t, es, "==> building")
+
+	// Deleting waits for a running Deployment, so go behind its back:
+	// the same as a delete just after the Deployment finished, between
+	// two of the stream's looks at it.
+	if err := s.store.DeleteApp(t.Context(), app); err != nil {
+		t.Fatalf("delete the App's records: %v", err)
+	}
+
+	if _, _, done := logText(t, es); done != "deleted" {
+		t.Errorf("done = %q, want deleted", done)
+	}
+	es.ended()
+	builds.finish()
+	<-ran
+}
+
 func TestAReconnectResumesTheDeploymentLogWithNoRepeatedOrMissingBytes(t *testing.T) {
 	s := newSeam(t)
 	app := s.createApp("web")
