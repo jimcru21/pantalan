@@ -67,9 +67,10 @@ func TestAnUpdateChangesTheSettingsAndKeepsTheIDCreationTimeAndEnv(t *testing.T)
 
 	want := `{"id":"` + id + `","name":"store","repo_url":"https://example.test/acme/store.git","branch":"release",` +
 		`"build_type":"nixpacks","domain":"store.example.test","port":8080,` +
-		`"env":{"DATABASE_URL":"postgres://db"},"created_at":` + asJSON(t, createdAt) + `}`
+		`"env_names":["DATABASE_URL"],"created_at":` + asJSON(t, createdAt) + `}`
 	assertJSON(t, "PUT /api/v1/apps/{id}", got, http.StatusOK, want)
 	assertJSON(t, "GET the updated App", s.get("/api/v1/apps/"+id, withSession(session)), http.StatusOK, want)
+	assertJSON(t, "GET the updated App's env", s.get("/api/v1/apps/"+id+"/env", withSession(session)), http.StatusOK, `{"env":"DATABASE_URL=postgres://db\n"}`)
 }
 
 func TestAnUpdateCanKeepTheAppsOwnDomain(t *testing.T) {

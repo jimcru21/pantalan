@@ -61,7 +61,7 @@ func (h *handler) createApp(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	h.writeJSON(w, http.StatusCreated, app)
+	h.writeJSON(w, http.StatusCreated, appOf(app))
 }
 
 // updateApp changes an App's settings. It never starts a Deployment.
@@ -76,5 +76,5 @@ func (h *handler) updateApp(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	h.writeJSON(w, http.StatusOK, app)
+	h.writeJSON(w, http.StatusOK, appOf(app))
 }

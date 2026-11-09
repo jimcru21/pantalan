@@ -1,7 +1,7 @@
 // API fixtures, typed by the types generated from the Go structs: a field
 // renamed in Go breaks these at the type check, not at runtime.
-import type { App, Deployment } from "@/api/generated/domain";
-import type { LoginInfo } from "@/api/generated/httpapi";
+import type { Deployment } from "@/api/generated/domain";
+import type { App, LoginInfo } from "@/api/generated/httpapi";
 
 export function aLoginInfo(fields: Partial<LoginInfo> = {}): LoginInfo {
   return {
@@ -21,6 +21,7 @@ export function anApp(fields: Partial<App> = {}): App {
     build_type: "dockerfile",
     domain: "hello.example.com",
     port: 8080,
+    env_names: [],
     created_at: "2026-11-01T09:00:00Z",
     ...fields,
   };

@@ -25,15 +25,12 @@ func parseTime(s string) (time.Time, error) { return time.Parse(time.RFC3339Nano
 const appColumns = `id, name, repo_url, branch, build_type, domain, port, env, created_at`
 
 func (s *Store) CreateApp(ctx context.Context, app domain.App) error {
-	env := []byte("{}") // json.Marshal writes null for a nil map
-	if len(app.Env) > 0 {
-		var err error
-		if env, err = json.Marshal(app.Env); err != nil {
-			return err
-		}
+	env, err := marshalEnv(app.Env)
+	if err != nil {
+		return err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO apps (`+appColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		app.ID, app.Name, app.RepoURL, app.Branch, string(app.BuildType), app.Domain, app.Port, string(env),
+	_, err = s.db.ExecContext(ctx, `INSERT INTO apps (`+appColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		app.ID, app.Name, app.RepoURL, app.Branch, string(app.BuildType), app.Domain, app.Port, env,
 		formatTime(app.CreatedAt))
 	if isUniqueViolation(err) {
 		return s.domainTaken(ctx, app.Domain)
@@ -59,6 +56,32 @@ func (s *Store) UpdateApp(ctx context.Context, app domain.App) error {
 		return fmt.Errorf("app %s: %w", app.ID, domain.ErrNotFound)
 	}
 	return nil
+}
+
+// SetAppEnv replaces the env vars of the App with ID id.
+func (s *Store) SetAppEnv(ctx context.Context, id string, env map[string]string) error {
+	data, err := marshalEnv(env)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE apps SET env = ? WHERE id = ?`, data, id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return fmt.Errorf("app %s: %w", id, domain.ErrNotFound)
+	}
+	return nil
+}
+
+func marshalEnv(env map[string]string) (string, error) {
+	if len(env) == 0 {
+		return "{}", nil // json.Marshal writes null for a nil map
+	}
+	data, err := json.Marshal(env)
+	return string(data), err
 }
 
 // domainTaken is the conflict for a domain another App already has.

@@ -158,7 +158,18 @@ curl -sk $API/apps \
 
 The response includes the app's `id`. Optional fields: `branch` (defaults to
 `main`) and `env`, an object of environment variables such as
-`{"DATABASE_URL": "..."}`.
+`{"DATABASE_URL": "..."}`. App responses list only the names of the env
+vars (`env_names`), never their values.
+
+To change env vars later, send them as the text of a `.env` file:
+`KEY=value` lines, with blank lines and `#` comment lines ignored. A bad
+line is refused with its line number. They take effect on the next
+Deployment:
+
+```sh
+jq -Rs '{env: .}' .env | curl -sk -X PUT $API/apps/<app-id>/env \
+  -H "Authorization: Bearer $TOKEN" -d @-
+```
 
 **4. Deploy it:**
 
@@ -197,6 +208,8 @@ All under `/api/v1`, with `Authorization: Bearer <Admin Token>`.
 | `POST` | `/apps` | Create an app |
 | `GET` | `/apps/{id}` | Get one app |
 | `PUT` | `/apps/{id}` | Change an app's settings (`name`, `repo_url`, `branch`, `build_type`, `domain`, `port`; env vars, ID and creation time stay). Takes effect on the next Deployment; it doesn't start one |
+| `GET` | `/apps/{id}/env` | An app's env vars, as dotenv text: `{"env": "KEY=value\n..."}`, sorted by name. The only response with env values |
+| `PUT` | `/apps/{id}/env` | Replace an app's env vars (`{"env": "<dotenv text>"}`; blank and `#` lines ignored, a bad line refused with its line number). Takes effect on the next Deployment; it doesn't start one |
 | `GET` | `/apps/{id}/deployments` | List an app's Deployments |
 | `POST` | `/apps/{id}/deployments` | Deploy (body optional: `{"ref": "..."}`) |
 | `GET` | `/apps/{id}/deployments/{deployment-id}` | One Deployment: its ref, commit, image, timing, status and error |

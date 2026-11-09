@@ -10,6 +10,7 @@ import { AppPage } from "@/pages/AppPage";
 import { AppsPage } from "@/pages/AppsPage";
 import { DeploymentPage } from "@/pages/DeploymentPage";
 import { EditAppPage } from "@/pages/EditAppPage";
+import { EnvPage } from "@/pages/EnvPage";
 import { NewAppPage } from "@/pages/NewAppPage";
 import { OverviewPage } from "@/pages/OverviewPage";
 import { SignInPage } from "@/pages/SignInPage";
@@ -28,6 +29,7 @@ const routes = [
       { path: "apps/:appId/deployments/:deploymentId", element: <DeploymentPage /> },
       { path: "apps/new", element: <NewAppPage /> },
       { path: "apps/:appId/edit", element: <EditAppPage /> },
+      { path: "apps/:appId/env", element: <EnvPage /> },
       {
         path: "*",
         element: (

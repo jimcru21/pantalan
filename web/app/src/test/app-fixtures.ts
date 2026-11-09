@@ -1,7 +1,7 @@
 // Fixtures and stubbed endpoints for the Apps pages, typed by the
 // generated API types.
-import type { App, Deployment } from "@/api/generated/domain";
-import type { AppListItem } from "@/api/generated/httpapi";
+import type { Deployment } from "@/api/generated/domain";
+import type { App, AppListItem } from "@/api/generated/httpapi";
 import { aDeployment, anApp } from "./fixtures";
 import { json, type Api } from "./network";
 

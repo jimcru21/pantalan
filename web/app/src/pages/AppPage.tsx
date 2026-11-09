@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Link, useParams } from "react-router";
-import type { App, Deployment } from "@/api/generated/domain";
+import type { Deployment } from "@/api/generated/domain";
+import type { App } from "@/api/generated/httpapi";
 import { isNotFound, useApp, useDeployments } from "@/api/apps";
 import { DeployButton } from "@/apps/DeployButton";
 import { DeploymentStatus } from "@/apps/DeploymentStatus";
@@ -49,6 +50,7 @@ export function AppPage() {
       >
         <Facts facts={settings(app.data)} />
       </Panel>
+      <EnvVars appID={appId} names={app.data.env_names} />
       {deployments.error ? (
         <ErrorCard error={deployments.error} />
       ) : (
@@ -81,6 +83,33 @@ function settings(app: App): [string, ReactNode][] {
     ["Port", <Mono>{app.port}</Mono>],
     ["Created", `${formatUTCDateTime(app.created_at)} UTC`],
   ];
+}
+
+// The names of the App's env vars. Their values may be secrets, so they
+// show only on the env editor.
+function EnvVars({ appID, names }: { appID: string; names: string[] }) {
+  return (
+    <Panel
+      title="Env vars"
+      action={
+        <Link to={`/apps/${encodeURIComponent(appID)}/env`} className={buttonClass.small}>
+          Edit env vars
+        </Link>
+      }
+    >
+      {names.length > 0 ? (
+        <ul className="m-0 flex list-none flex-wrap gap-2 px-4 py-3">
+          {names.map((name) => (
+            <li key={name} className="rounded-md bg-secondary px-2 py-0.5 font-mono text-[0.92em]">
+              {name}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="m-0 px-4 py-3 text-muted-foreground">No env vars.</p>
+      )}
+    </Panel>
+  );
 }
 
 // The Deployment serving the App's domain now, if any.
