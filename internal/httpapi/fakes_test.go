@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/pantalan/pantalan/internal/domain"
 	"github.com/pantalan/pantalan/internal/service"
 )
 
@@ -172,14 +175,15 @@ func (fakeSource) Fetch(_ context.Context, _, ref, _ string) (string, error) {
 	return "commit-of-" + ref, nil
 }
 
-// fakeBuilder builds every image at once: successfully, until a test
-// calls fail. Each build writes its output (see writes) to the
+// fakeBuilder builds every image at once, into docker's images:
+// successfully, until a test calls fail. Each build writes its output (see writes) to the
 // Deployment Log, and while a test holds builds, waits for it mid-build.
 type fakeBuilder struct {
 	mu     sync.Mutex
 	reason string // non-empty: every build fails with it
 	output string // what every build writes to its log
 	held   *heldBuilds
+	docker *fakeRuntime
 }
 
 func (b *fakeBuilder) Build(ctx context.Context, req service.BuildRequest) error {
@@ -200,6 +204,7 @@ func (b *fakeBuilder) Build(ctx context.Context, req service.BuildRequest) error
 	if reason != "" {
 		return errors.New(reason)
 	}
+	b.docker.addImage(req.Image)
 	return nil
 }
 
@@ -249,17 +254,70 @@ func (b *fakeBuilder) fail(reason string) {
 	b.reason = reason
 }
 
-// fakeRuntime stands in for Docker: it remembers the containers it runs.
+// fakeRuntime stands in for Docker: it remembers the containers it runs
+// and the images fakeBuilder builds.
 type fakeRuntime struct {
 	mu         sync.Mutex
 	started    int
 	containers map[string]fakeContainer // by ID
+	imageSet   map[string]bool          // by "repository:tag"
 	output     fakeOutput               // what they write (app_log_fakes_test.go)
 }
 
 type fakeContainer struct {
 	name, upstream string
 	env            map[string]string
+	labels         map[string]string
+}
+
+func (r *fakeRuntime) addImage(image string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.imageSet[image] = true
+}
+
+// images lists the images Docker has, sorted.
+func (r *fakeRuntime) images() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Sorted(maps.Keys(r.imageSet))
+}
+
+// containersOf lists the IDs of the containers labelled with the App.
+func (r *fakeRuntime) containersOf(appID string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var ids []string
+	for id, c := range r.containers {
+		if c.labels[domain.AppLabel] == appID {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+func (r *fakeRuntime) RemoveLabelled(_ context.Context, key, value string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, c := range r.containers {
+		if v, ok := c.labels[key]; ok && v == value {
+			delete(r.containers, id)
+		}
+	}
+	r.output.changed()
+	return nil
+}
+
+func (r *fakeRuntime) RemoveImages(_ context.Context, repository string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for image := range r.imageSet {
+		if strings.HasPrefix(image, repository+":") {
+			delete(r.imageSet, image)
+		}
+	}
+	return nil
 }
 
 // envOf is the env the container with ID id was started with.
@@ -269,14 +327,16 @@ func (r *fakeRuntime) envOf(id string) map[string]string {
 	return r.containers[id].env
 }
 
-func newFakeRuntime() *fakeRuntime { return &fakeRuntime{containers: map[string]fakeContainer{}} }
+func newFakeRuntime() *fakeRuntime {
+	return &fakeRuntime{containers: map[string]fakeContainer{}, imageSet: map[string]bool{}}
+}
 
 func (r *fakeRuntime) Start(_ context.Context, spec service.ContainerSpec) (service.Container, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.started++
 	ctr := service.Container{ID: fmt.Sprintf("ctr-%d", r.started), Upstream: fmt.Sprintf("127.0.0.1:%d", 9000+r.started)}
-	r.containers[ctr.ID] = fakeContainer{name: spec.Name, upstream: ctr.Upstream, env: spec.Env}
+	r.containers[ctr.ID] = fakeContainer{name: spec.Name, upstream: ctr.Upstream, env: spec.Env, labels: spec.Labels}
 	return ctr, nil
 }
 
@@ -327,6 +387,23 @@ func (r *fakeRouter) RemoveRoute(host string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.routes, host)
+}
+
+func (r *fakeRouter) RemoveRoutesTo(upstream string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for host, u := range r.routes {
+		if u == upstream {
+			delete(r.routes, host)
+		}
+	}
+}
+
+// table is a copy of the routes, host to upstream.
+func (r *fakeRouter) table() map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return maps.Clone(r.routes)
 }
 
 // fakeScheduler queues Deployments without running them; a test runs one

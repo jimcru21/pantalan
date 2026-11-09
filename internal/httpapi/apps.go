@@ -36,6 +36,16 @@ func (h *handler) getApp(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, appOf(app))
 }
 
+// deleteApp removes the App, what it left on the Node and its
+// Deployments. It is refused with a 409 while a Deployment of it runs.
+func (h *handler) deleteApp(w http.ResponseWriter, r *http.Request) {
+	if err := h.deps.Deployer.DeleteApp(r.Context(), r.PathValue("id")); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *handler) listDeployments(w http.ResponseWriter, r *http.Request) {
 	deps, err := h.deps.Deployer.List(r.Context(), r.PathValue("id"))
 	if err != nil {

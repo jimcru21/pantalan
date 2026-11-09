@@ -21,6 +21,9 @@ type AppRepository interface {
 	// SetAppEnv replaces the env vars of the App with ID id. It returns
 	// domain.ErrNotFound when there is no such App.
 	SetAppEnv(ctx context.Context, id string, env map[string]string) error
+	// DeleteApp deletes the App with ID id and its Deployments, all at
+	// once. It returns domain.ErrNotFound when there is no such App.
+	DeleteApp(ctx context.Context, id string) error
 	GetApp(ctx context.Context, id string) (domain.App, error)
 	ListApps(ctx context.Context) ([]domain.App, error)
 	FindAppsByRepo(ctx context.Context, repoURL, branch string) ([]domain.App, error)
@@ -73,6 +76,12 @@ type Runtime interface {
 	// Upstream returns the host:port the container's port is published on
 	// now. It changes when Docker restarts the container.
 	Upstream(ctx context.Context, containerID string, port int) (string, error)
+	// RemoveLabelled force-removes every container labelled key=value. It
+	// succeeds when there is none.
+	RemoveLabelled(ctx context.Context, key, value string) error
+	// RemoveImages removes every tag of repository, and so each image
+	// that has no other tag. It succeeds when there is none.
+	RemoveImages(ctx context.Context, repository string) error
 }
 
 // LogLine is one piece of what a container wrote: normally a whole line,
@@ -110,6 +119,8 @@ type HealthChecker interface {
 type Router interface {
 	SetRoute(host, upstream string)
 	RemoveRoute(host string)
+	// RemoveRoutesTo removes every route to upstream, whatever its host.
+	RemoveRoutesTo(upstream string)
 }
 
 // Scheduler hands a queued deployment to whatever runs it.

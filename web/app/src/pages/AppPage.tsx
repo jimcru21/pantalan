@@ -4,6 +4,7 @@ import type { Deployment } from "@/api/generated/domain";
 import type { App } from "@/api/generated/httpapi";
 import { isNotFound, useApp, useDeployments } from "@/api/apps";
 import { AppLog } from "@/apps/AppLog";
+import { DeleteAppButton } from "@/apps/DeleteAppButton";
 import { DeployButton } from "@/apps/DeployButton";
 import { DeploymentStatus } from "@/apps/DeploymentStatus";
 import { DeploymentLink, Queue } from "@/apps/Queue";
@@ -44,9 +45,12 @@ export function AppPage() {
       <Panel
         title="Settings"
         action={
-          <Link to={`/apps/${encodeURIComponent(appId)}/edit`} className={buttonClass.small}>
-            Edit
-          </Link>
+          <span className="flex items-center gap-2">
+            <Link to={`/apps/${encodeURIComponent(appId)}/edit`} className={buttonClass.small}>
+              Edit
+            </Link>
+            <DeleteAppButton app={app.data} deployments={deployments.data?.length} />
+          </span>
         }
       >
         <Facts facts={settings(app.data)} />
