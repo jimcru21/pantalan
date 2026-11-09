@@ -27,18 +27,24 @@ export function useDeployment(appID: string, id: string) {
 }
 
 /**
- * Deploys an App's branch (its latest commit). Each call queues its own
- * Deployment: two quick clicks are two Deployments, run in turn by the
- * server. The answer goes into the App's Deployments at once, so neither
- * click's Deployment waits for (or is lost to) the other's refetch.
+ * Deploys an App. `mutate({})` deploys the App's branch (its latest
+ * commit); `mutate({ redeployOf: id })` deploys the exact commit an earlier
+ * Deployment resolved instead, which is how an App rolls back (the earlier
+ * Deployment stays as it was). Each call queues its own Deployment: two
+ * quick clicks are two Deployments, run in turn by the server. The answer
+ * goes into the App's Deployments at once, so neither click's Deployment
+ * waits for (or is lost to) the other's refetch.
  */
 export function useDeploy(appID: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () =>
-      request<Deployment>(`/api/v1/apps/${encodeURIComponent(appID)}/deployments`, {
-        method: "POST",
-      }),
+    mutationFn: ({ redeployOf }: { redeployOf?: string }) => {
+      const deployments = `/api/v1/apps/${encodeURIComponent(appID)}/deployments`;
+      return request<Deployment>(
+        redeployOf ? `${deployments}/${encodeURIComponent(redeployOf)}/redeploy` : deployments,
+        { method: "POST" },
+      );
+    },
     onSuccess: (dep) => {
       client.setQueryData<Deployment[]>(appKeys.deployments(appID), (old = []) =>
         newestFirst([dep, ...old.filter((d) => d.id !== dep.id)]),

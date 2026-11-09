@@ -190,6 +190,22 @@ func (d *Deployer) Get(ctx context.Context, appID, deploymentID string) (domain.
 	return dep, nil
 }
 
+// Redeploy starts a new Deployment of the exact commit an earlier
+// Deployment of the App resolved, which is how an App rolls back. The
+// earlier Deployment is left as it is, so the history shows the rollback.
+// A Deployment that never got as far as resolving a commit can't be
+// redeployed.
+func (d *Deployer) Redeploy(ctx context.Context, appID, deploymentID string) (domain.Deployment, error) {
+	earlier, err := d.Get(ctx, appID, deploymentID)
+	if err != nil {
+		return domain.Deployment{}, err
+	}
+	if earlier.Commit == "" {
+		return domain.Deployment{}, fmt.Errorf("%w: Deployment %s never resolved a commit, so there is no commit to redeploy", domain.ErrConflict, earlier.ID)
+	}
+	return d.Start(ctx, appID, earlier.Commit)
+}
+
 // Latest returns every App's newest Deployment, by App ID. An App with no
 // Deployments has no entry.
 func (d *Deployer) Latest(ctx context.Context) (map[string]domain.Deployment, error) {
